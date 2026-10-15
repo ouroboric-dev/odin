@@ -87,8 +87,15 @@ func TestRunStopsAndApproveContinues(t *testing.T) {
 	}
 	id := runID(t, dir)
 	code, out, _ = ygg(t, "status", id, "--project", dir)
-	if code != ExitDone || !strings.Contains(out, "waiting:  design-gate") {
+	if code != ExitDone || !strings.Contains(out, "waiting:  design-gate (design)") || !strings.Contains(out, "leaf:     repos/app on ygg/"+id+" at ") {
 		t.Errorf("status: exit %d:\n%s", code, out)
+	}
+	// Each decision takes only its own flag.
+	if code, _, _ := ygg(t, "approve", id, "design-gate", "--project", dir, "--reason", "x"); code != ExitRefused {
+		t.Errorf("approve --reason: exit %d, want %d", code, ExitRefused)
+	}
+	if code, _, _ := ygg(t, "reject", id, "design-gate", "--project", dir, "--note", "x"); code != ExitRefused {
+		t.Errorf("reject --note: exit %d, want %d", code, ExitRefused)
 	}
 	// Flags may follow the positional arguments.
 	if code, out, errOut := ygg(t, "approve", id, "design-gate", "--project", dir, "--note", "fine"); code != ExitDone {

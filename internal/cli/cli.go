@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
+	"slices"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/engine"
@@ -28,7 +30,7 @@ const usage = `usage:
   ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
   ygg status  <run-id> [--project <dir>]
-  ygg doctor  [--project <dir>] [--config <factory.yaml>]
+  ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point
 `
 
@@ -58,7 +60,8 @@ type command struct {
 
 // flags holds every flag; each command reads the ones it defines.
 type flags struct {
-	project, config, realm, brief, mode, note, reason string
+	project, config, realm, brief, mode, note, reason, root string
+	set                                                     map[string]bool // the flags given
 }
 
 // parse parses flags that may come before, between or after the positional arguments, and
@@ -85,6 +88,8 @@ func (c *command) parse(name string, args []string, want int, define func(*flag.
 		fmt.Fprintf(c.err, "ygg %s: want %d argument(s), got %d\n%s", name, want, len(pos), usage)
 		return nil, nil, false
 	}
+	f.set = map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { f.set[fl.Name] = true })
 	return f, pos, true
 }
 
@@ -171,8 +176,11 @@ func (c *command) resume(args []string) int {
 
 func (c *command) decide(name string, args []string) int {
 	f, pos, ok := c.parse(name, args, 2, func(fs *flag.FlagSet, f *flags) {
-		fs.StringVar(&f.note, "note", "", "a note on the approval")
-		fs.StringVar(&f.reason, "reason", "", "why the work goes back")
+		if name == "approve" {
+			fs.StringVar(&f.note, "note", "", "a note on the approval")
+		} else {
+			fs.StringVar(&f.reason, "reason", "", "why the work goes back")
+		}
 	})
 	if !ok {
 		return ExitRefused
@@ -244,7 +252,10 @@ func (c *command) status(args []string) int {
 	fmt.Fprintf(c.out, "run:      %s\nstatus:   %s\nmode:     %s\nrealm:    %s %s (graph %s)\nposition: %d\n",
 		s.ID, status, s.Mode, s.Realm, s.RealmVersion, s.GraphVersion, s.Position)
 	if s.Pending != "" {
-		fmt.Fprintf(c.out, "waiting:  %s\n", s.Pending)
+		fmt.Fprintf(c.out, "waiting:  %s (%s)\n", s.Pending, s.PendingGate)
+	}
+	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
+		fmt.Fprintf(c.out, "leaf:     %s on %s at %.12s\n", p, s.Leaves[p].Branch, s.Leaves[p].Checkpoint)
 	}
 	if s.Error != "" {
 		fmt.Fprintf(c.out, "error:    %s\n", s.Error)

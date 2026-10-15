@@ -21,13 +21,19 @@ ygg resume  <run-id> [--project <dir>] [--mode <mode>]
 ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
 ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
 ygg status  <run-id> [--project <dir>]
-ygg doctor  [--project <dir>] [--config <factory.yaml>]
+ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ```
 
 Exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point.
 
 `factory.yaml` must set both budget caps, `per_run` and `per_day`, each with `tokens` and `turns`.
 The factory ships no defaults, so a config without them runs nothing.
+
+`--project` names a project umbrella. A project is usually its own tree, its `umbrella.yaml` setting
+`root: true`; inside a company umbrella, every umbrella above it lists the one below, up to the one
+that sets `root: true`. A run works on its
+own branch, `ygg/<run-id>`, in each leaf its graph names, and commits a checkpoint after every node.
+The realm creates a leaf the project lacks. `ygg doctor --root <dir>` checks a tree without a project.
 
 ## Docs
 
