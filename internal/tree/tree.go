@@ -105,6 +105,35 @@ func Resolve(ctx context.Context, root, rel string) ([]Node, error) {
 	return nodes, nil
 }
 
+// Walk calls fn for every node of the tree, depth first, children in path order. It checks out
+// nothing: a child that isn't checked out is visited with Present false, and not entered.
+func Walk(ctx context.Context, root string, fn func(Node) error) error {
+	top, err := rootNode(ctx, root)
+	if err != nil {
+		return err
+	}
+	return walk(ctx, top, fn)
+}
+
+func walk(ctx context.Context, n Node, fn func(Node) error) error {
+	if err := fn(n); err != nil {
+		return err
+	}
+	if n.Umbrella == nil {
+		return nil
+	}
+	for _, p := range n.Umbrella.Paths() {
+		c, err := child(ctx, n, p, false)
+		if err != nil {
+			return err
+		}
+		if err := walk(ctx, c, fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func rootNode(ctx context.Context, root string) (Node, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {

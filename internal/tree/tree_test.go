@@ -56,6 +56,24 @@ func TestResolveChecksOutOnlyThePath(t *testing.T) {
 	}
 }
 
+func TestResolveWalksADeeperTree(t *testing.T) {
+	root := treetest.Build(t, treetest.Deep())
+	nodes, err := Resolve(ctx, root, "projects/gallery/services/backend/repos/api")
+	if err != nil {
+		t.Fatalf("Resolve() = %v", err)
+	}
+	kinds := []schema.ChildKind{}
+	for _, n := range nodes {
+		kinds = append(kinds, n.Kind)
+	}
+	if !slices.Equal(kinds, []schema.ChildKind{schema.ChildUmbrella, schema.ChildUmbrella, schema.ChildUmbrella, schema.ChildLeaf}) {
+		t.Errorf("kinds = %v, want three umbrellas and a leaf", kinds)
+	}
+	if got, rel, err := FindRoot(ctx, nodes[3].Dir); err != nil || got != root || rel != "projects/gallery/services/backend/repos/api" {
+		t.Errorf("FindRoot(leaf) = %q, %q, %v", got, rel, err)
+	}
+}
+
 func TestFindRoot(t *testing.T) {
 	root := treetest.Build(t, treetest.Standard())
 	if _, err := Resolve(ctx, root, "projects/gallery"); err != nil {
@@ -112,5 +130,56 @@ func TestResolveRefusesAMaliciousSubmoduleURL(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("the URL's command ran")
+	}
+}
+
+func TestResolveRefusesAChildMissingFromGitmodules(t *testing.T) {
+	root := treetest.Build(t, treetest.Standard())
+	u, err := schema.LoadUmbrella(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Children["projects/blog"] = schema.Child{Kind: schema.ChildUmbrella, Owner: "o", Visibility: "private"}
+	if err := u.Save(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(ctx, root, "projects/blog"); err == nil || !strings.Contains(err.Error(), "no submodule") {
+		t.Errorf("Resolve() = %v, want no submodule at projects/blog", err)
+	}
+}
+
+func TestWalkVisitsInitialisedNodesAndReportsLeaks(t *testing.T) {
+	root := treetest.Build(t, treetest.Standard())
+	if _, err := Resolve(ctx, root, "projects/site/repos/www"); err != nil {
+		t.Fatal(err)
+	}
+	var visited, absent, leaks []string
+	err := Walk(ctx, root, func(n Node) error {
+		if !n.Present {
+			absent = append(absent, n.Path)
+			return nil
+		}
+		visited = append(visited, n.Path)
+		if n.Umbrella != nil {
+			for _, l := range n.Umbrella.Leaks() {
+				leaks = append(leaks, filepath.Join(n.Path, l))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(visited, []string{"", "projects/site", "projects/site/repos/www"}) {
+		t.Errorf("visited %q", visited)
+	}
+	if !slices.Equal(absent, []string{"projects/gallery"}) {
+		t.Errorf("not checked out: %q, want projects/gallery (Walk initialises nothing)", absent)
+	}
+	if !slices.Equal(leaks, []string{"projects/site/repos/www"}) {
+		t.Errorf("leaks = %q, want the private leaf of the public project", leaks)
+	}
+	if initialised(t, root, "projects/gallery") {
+		t.Error("Walk initialised a submodule")
 	}
 }

@@ -38,6 +38,15 @@ func Standard() Node {
 		}}
 }
 
+// Deep has an extra umbrella level: company → projects/gallery → services/backend → repos/api
+// (spec §3.1).
+func Deep() Node {
+	return Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Children: map[string]Node{
+		"projects/gallery": {Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Children: map[string]Node{
+			"services/backend": {Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Children: map[string]Node{
+				"repos/api": {Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Leaf: true}}}}}}}
+}
+
 // Build makes the tree's repos and returns the path of a fresh clone of the root, with no
 // submodule initialised.
 func Build(t *testing.T, root Node) string {
