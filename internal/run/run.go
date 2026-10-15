@@ -117,19 +117,40 @@ type Run struct {
 	Setup   *Setup
 	Ledger  *ledger.Ledger
 	unlock  func()
+	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
 }
 
 // Workspace is the directory agents and exec nodes work in. Phase 2 replaces it with the leaf.
 func (r *Run) Workspace() string { return filepath.Join(r.Project, "workspace") }
 
-// Log appends e to the ledger, with the run's id.
+// Log appends e to the ledger, with the run's id. A switch Open found is logged first.
 func (r *Run) Log(e gungnir.Event) error {
+	if err := r.logChanges(); err != nil {
+		return err
+	}
 	e.Run = r.State.ID
 	return r.Ledger.Append(e)
 }
 
-// Save records the ledger's head in run.json and writes it.
+// logChanges logs the switches Open found. They wait until the command writes something, so a
+// command that is refused leaves run.json and the ledger as they were (exit 2: nothing ran).
+func (r *Run) logChanges() error {
+	for len(r.changes) > 0 {
+		e := r.changes[0]
+		e.Run = r.State.ID
+		if err := r.Ledger.Append(e); err != nil {
+			return err
+		}
+		r.changes = r.changes[1:]
+	}
+	return nil
+}
+
+// Save records the ledger's head in run.json and writes it, after logging any switch Open found.
 func (r *Run) Save() error {
+	if err := r.logChanges(); err != nil {
+		return err
+	}
 	r.State.Ledger = r.Ledger.Head()
 	r.State.Updated = time.Now().UTC()
 	return r.State.Save(r.Dir)
@@ -245,22 +266,17 @@ func open(project, dir string, mode gungnir.Mode) (*Run, error) {
 		return nil, err
 	}
 	r := &Run{Project: project, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
+	// The switches apply in memory now, and reach the ledger and run.json with the command's first
+	// write (Log or Save). A refused command writes nothing, so it switches nothing.
 	if setup.ConfigSHA256 != s.ConfigSHA256 {
 		s.ConfigSHA256 = setup.ConfigSHA256
-		if err := r.Log(gungnir.Event{Name: gungnir.EventConfigChanged, ConfigHash: setup.ConfigSHA256}); err != nil {
-			l.Close()
-			return nil, err
-		}
+		r.changes = append(r.changes, gungnir.Event{Name: gungnir.EventConfigChanged, ConfigHash: setup.ConfigSHA256})
 	}
 	if mode != s.Mode {
-		looser := mode.Looser(s.Mode)
+		r.changes = append(r.changes, gungnir.Event{Name: gungnir.EventModeChanged, Mode: mode, Looser: mode.Looser(s.Mode)})
 		s.Mode = mode
-		if err := r.Log(gungnir.Event{Name: gungnir.EventModeChanged, Mode: mode, Looser: looser}); err != nil {
-			l.Close()
-			return nil, err
-		}
 	}
-	return r, r.Save()
+	return r, nil
 }
 
 func sum(b []byte) string {

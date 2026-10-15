@@ -96,3 +96,47 @@ func TestRunStopsAndApproveContinues(t *testing.T) {
 		t.Errorf("resume of a done run: exit %d, %q", code, errOut)
 	}
 }
+
+// A refused command exits 2 and changes nothing, even when it asks for another mode and the config
+// changed since the last command (decision 10).
+func TestARefusedCommandChangesNothing(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	id := runID(t, dir)
+	runDir := filepath.Join(dir, ".factory", "runs", id)
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join(runDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	cfg, _ := os.ReadFile(config)
+	os.WriteFile(config, append(cfg, "privacy: strict\n"...), 0o644)
+	state, ledger := read("run.json"), read("ledger.jsonl")
+	for _, args := range [][]string{
+		{"approve", id, "design-gat", "--mode", "unattended"},
+		{"reject", id, "design-gate", "--reason", " ", "--mode", "unattended"},
+	} {
+		if code, _, _ := ygg(t, append(args, "--project", dir)...); code != ExitRefused {
+			t.Errorf("%s: exit %d, want %d", args[0], code, ExitRefused)
+		}
+		if read("run.json") != state || read("ledger.jsonl") != ledger {
+			t.Errorf("a refused %s changed run.json or the ledger", args[0])
+		}
+	}
+	if code, _, _ := ygg(t, "resume", id, "--project", dir, "--mode", "unattended"); code != ExitStopped {
+		t.Fatalf("resume of a stopped run: exit %d, want %d", code, ExitStopped)
+	}
+	if l := read("ledger.jsonl"); !strings.Contains(l, `"event":"config_changed"`) || !strings.Contains(l, `"event":"mode_changed"`) {
+		t.Errorf("resume at a pause didn't record the switch:\n%s", l)
+	}
+	ygg(t, "approve", id, "design-gate", "--project", dir)
+	state, ledger = read("run.json"), read("ledger.jsonl")
+	if code, _, _ := ygg(t, "resume", id, "--project", dir, "--mode", "step-by-step"); code != ExitRefused {
+		t.Errorf("resume of a done run: exit %d, want %d", code, ExitRefused)
+	}
+	if read("run.json") != state || read("ledger.jsonl") != ledger {
+		t.Error("a refused resume of a done run changed run.json or the ledger")
+	}
+}

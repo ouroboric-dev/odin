@@ -62,6 +62,10 @@ func TestOpenRefusesWhatWouldMisleadARun(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The switch is logged with the command's first write, so a refused command switches nothing.
+		if err := r.Save(); err != nil {
+			t.Fatal(err)
+		}
 		r.Close()
 		b, _ := os.ReadFile(filepath.Join(Dir(project, id), "ledger.jsonl"))
 		if !strings.Contains(string(b), `"event":"mode_changed"`) || !strings.Contains(string(b), `"ygg.mode.looser":true`) {

@@ -157,7 +157,11 @@ func (c *command) resume(args []string) int {
 	case run.StatusDone:
 		return c.refuse(fmt.Errorf("run %s is done; there is nothing to resume", r.State.ID))
 	case run.StatusStopped:
-		return c.advance(r) // reports the gate it waits at
+		// Save keeps a --mode switch made at this pause; advance then reports the gate it waits at.
+		if err := r.Save(); err != nil {
+			return c.refuse(err)
+		}
+		return c.advance(r)
 	}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventRunResumed, Mode: r.State.Mode}); err != nil {
 		return c.refuse(err)
