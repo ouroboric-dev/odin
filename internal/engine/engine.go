@@ -194,7 +194,19 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 5 * time.Second
 	began := time.Now()
-	runErr := cmd.Run()
+	runErr := cmd.Start()
+	if runErr == nil {
+		// Record the group before waiting, so if this ygg dies the next one can stop it (run.Open).
+		pid := cmd.Process.Pid
+		r.State.Exec = &run.ExecProcess{Node: n.ID, PGID: pid, Start: run.ProcStart(pid)}
+		if err := r.Save(); err != nil {
+			syscall.Kill(-pid, syscall.SIGKILL)
+			cmd.Wait()
+			return err
+		}
+		runErr = cmd.Wait()
+		r.State.Exec = nil
+	}
 	result := "exit 0"
 	if runErr != nil {
 		result = runErr.Error()

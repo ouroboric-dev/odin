@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -63,6 +65,7 @@ type State struct {
 	Usage        gungnir.Usage         `json:"usage"`
 	Ledger       ledger.Anchor         `json:"ledger"`
 	Error        string                `json:"error,omitempty"`
+	Exec         *ExecProcess          `json:"exec,omitempty"` // the exec node running now, if any
 	Created      time.Time             `json:"created"`
 	Updated      time.Time             `json:"updated"`
 }
@@ -149,6 +152,37 @@ func LoadState(dir string) (*State, error) {
 	}
 	return &s, nil
 }
+
+// ExecProcess is an exec node's running command: its process group, and its leader's start time,
+// so a later ygg can tell the group is still this node's after its own process died.
+type ExecProcess struct {
+	Node  string `json:"node"`
+	PGID  int    `json:"pgid"`
+	Start uint64 `json:"start"` // the leader's start time, in clock ticks since boot; 0 if unknown
+}
+
+// procStart returns when process pid started, in clock ticks since boot (field 22 of
+// /proc/<pid>/stat), or 0 if the process doesn't exist.
+func procStart(pid int) uint64 {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0
+	}
+	// The command name (field 2) is in parentheses and may hold spaces; fields from 3 follow it.
+	i := bytes.LastIndexByte(b, ')')
+	if i < 0 {
+		return 0
+	}
+	fields := strings.Fields(string(b[i+1:]))
+	if len(fields) < 20 {
+		return 0
+	}
+	n, _ := strconv.ParseUint(fields[19], 10, 64)
+	return n
+}
+
+// ProcStart returns when process pid started, for ExecProcess.Start.
+func ProcStart(pid int) uint64 { return procStart(pid) }
 
 // ErrInUse means another ygg process holds the run's lock.
 var ErrInUse = errors.New("another ygg process is using this run")

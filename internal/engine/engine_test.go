@@ -153,3 +153,22 @@ func TestAnInterruptedAgentCountsItsAttempt(t *testing.T) {
 		t.Error("the ledger doesn't record why attempt 1 failed")
 	}
 }
+
+func TestRunJSONRecordsTheRunningExecProcess(t *testing.T) {
+	// The node waits up to 5s for the record, since the engine saves it just after the node starts.
+	peek := `for i in $(seq 50); do grep -q pgid ../.factory/runs/*/run.json && break; sleep 0.1; done; cat ../.factory/runs/*/run.json > seen.json`
+	r := start(t, "key-points", "", "  - { id: peek, kind: exec, run: [sh, -c, '"+peek+"'] }\n", "steps: {}\n")
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	seen, err := os.ReadFile(filepath.Join(r.Workspace(), "seen.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(seen), `"node": "peek"`) || !strings.Contains(string(seen), `"pgid":`) {
+		t.Errorf("run.json didn't record the exec node's process group while it ran:\n%s", seen)
+	}
+	if s, _ := run.LoadState(r.Dir); s.Exec != nil {
+		t.Errorf("run.json still records an exec process after the node ended: %+v", s.Exec)
+	}
+}

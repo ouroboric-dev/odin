@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
@@ -265,6 +266,13 @@ func open(project, dir string, mode gungnir.Mode) (*Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	if s.Exec != nil {
+		if err := stopLeftover(s.Exec); err != nil {
+			l.Close()
+			return nil, err
+		}
+		s.Exec = nil
+	}
 	r := &Run{Project: project, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
 	// The switches apply in memory now, and reach the ledger and run.json with the command's first
 	// write (Log or Save). A refused command writes nothing, so it switches nothing.
@@ -277,6 +285,30 @@ func open(project, dir string, mode gungnir.Mode) (*Run, error) {
 		s.Mode = mode
 	}
 	return r, nil
+}
+
+// stopLeftover stops the process group of an exec node that outlived its ygg process (killed, or
+// its terminal closed), so the node never runs again beside its old copy. It kills the group only
+// when the group's leader is the process run.json recorded. A group it can't tell is the run's is
+// left alone, and the run waits for the operator.
+func stopLeftover(p *ExecProcess) error {
+	switch {
+	case p.Start != 0 && procStart(p.PGID) == p.Start:
+		if err := syscall.Kill(-p.PGID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return fmt.Errorf("stopping node %s's leftover processes (group %d): %w", p.Node, p.PGID, err)
+		}
+	case syscall.Kill(-p.PGID, 0) == nil:
+		return fmt.Errorf("node %s's process group %d may still be running from an earlier ygg; "+
+			"check it with 'ps -g %d', stop it, then try again", p.Node, p.PGID, p.PGID)
+	default:
+		return nil // the group is gone
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if errors.Is(syscall.Kill(-p.PGID, 0), syscall.ESRCH) {
+			return nil
+		}
+	}
+	return fmt.Errorf("node %s's leftover process group %d didn't stop within 5s", p.Node, p.PGID)
 }
 
 func sum(b []byte) string {
