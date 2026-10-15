@@ -28,6 +28,7 @@ const usage = `usage:
   ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
   ygg status  <run-id> [--project <dir>]
+  ygg doctor  [--project <dir>] [--config <factory.yaml>]
 exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point
 `
 
@@ -40,7 +41,7 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	c := &command{ctx: ctx, out: stdout, err: stderr}
 	cmds := map[string]func([]string) int{
 		"run": c.run, "resume": c.resume, "approve": c.approve, "reject": c.reject,
-		"status": c.status,
+		"status": c.status, "doctor": c.doctor,
 	}
 	f, ok := cmds[args[0]]
 	if !ok {

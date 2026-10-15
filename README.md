@@ -21,6 +21,7 @@ ygg resume  <run-id> [--project <dir>] [--mode <mode>]
 ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
 ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
 ygg status  <run-id> [--project <dir>]
+ygg doctor  [--project <dir>] [--config <factory.yaml>]
 ```
 
 Exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point.
