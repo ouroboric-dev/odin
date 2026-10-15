@@ -195,6 +195,40 @@ func TestOpenPutsLeavesBackAtTheirCheckpoints(t *testing.T) {
 	}
 }
 
+func TestAStricterModeSwitchIsAllowed(t *testing.T) {
+	r := startToyRun(t, "mode: unattended\ngates: { design: auto }\n"+scriptedRoles+fullCaps)
+	id, project := r.State.ID, r.Project
+	r.Close()
+	r, err := Open(ctx, project, id, gungnir.ModeStepByStep)
+	if err != nil {
+		t.Fatalf("Open() with a stricter mode = %v, want it allowed: design: auto applies only in unattended mode", err)
+	}
+	defer r.Close()
+	if r.State.Mode != gungnir.ModeStepByStep {
+		t.Errorf("mode = %s", r.State.Mode)
+	}
+}
+
+func TestRolesFollowAConfigChange(t *testing.T) {
+	cfgDir := t.TempDir()
+	project := treetest.Project(t)
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, cfgDir, scriptedRoles+fullCaps), Realm: toy(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := r.State.ID
+	r.Close()
+	writeConfig(t, cfgDir, strings.ReplaceAll(scriptedRoles, "model: none", "model: other")+fullCaps)
+	r, err = Open(ctx, project, id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if got := r.State.Roles["planner"].Model; got != "other" {
+		t.Errorf("run.json records the planner's model as %q after the config changed, want other", got)
+	}
+}
+
 // A project MAY hold sub-projects (change project-is-its-own-tree): a run in one finds the root
 // above it, and works in the sub-project's own leaves.
 func TestARunWorksInASubProject(t *testing.T) {

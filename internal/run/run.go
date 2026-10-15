@@ -73,12 +73,11 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		return nil, err
 	}
 	s.ConfigSHA256 = sum(cfgData)
+	// ParseFactory checked the gate overrides against the file's own mode. A --mode switch needs no
+	// second check: design: auto, the one loosening, applies only in unattended mode (gate.Decide).
 	s.Mode = s.Config.Mode
 	if o.Mode != "" {
 		s.Mode = o.Mode
-	}
-	if err := s.Config.CheckGates(s.Mode); err != nil {
-		return nil, fmt.Errorf("%s: %w", s.ConfigPath, err)
 	}
 	if s.RealmDir, err = filepath.Abs(o.Realm); err != nil {
 		return nil, err
@@ -506,6 +505,7 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 	// write (Log or Save). A refused command writes nothing, so it switches nothing.
 	if setup.ConfigSHA256 != s.ConfigSHA256 {
 		s.ConfigSHA256 = setup.ConfigSHA256
+		s.Roles = roles(setup)
 		r.changes = append(r.changes, gungnir.Event{Name: gungnir.EventConfigChanged, ConfigHash: setup.ConfigSHA256})
 	}
 	if mode != s.Mode {
