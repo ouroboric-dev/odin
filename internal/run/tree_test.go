@@ -74,7 +74,7 @@ func TestPrepareRefusesAGraphTheProjectCantRun(t *testing.T) {
 	cases := map[string]struct{ nodes, want string }{
 		"a node with no repo":       {"  - { id: a, kind: exec, run: [echo] }\n", "names no repo"},
 		"an agent in the umbrella":  {"  - { id: a, kind: agent, role: planner, prompt: p.md, repo: . }\n", "is an umbrella"},
-		"a repo the project lacks":  {"  - { id: a, kind: exec, run: [echo], repo: repos/other }\n", "the project lacks"},
+		"a repo nobody creates":     {"  - { id: a, kind: exec, run: [echo], repo: repos/other }\n", "the realm doesn't create"},
 		"a check the pack lacks":    {"  - { id: m, kind: merge, repo: repos/app, checks: [lint] }\n", "doesn't define"},
 		"a pointer for an umbrella": {"  - { id: p, kind: pointer, repo: repos/app }\n  - { id: q, kind: pointer, repo: sub }\n", "the project lacks"},
 	}
@@ -116,6 +116,38 @@ func TestAFailureAfterTheRunStartedIsRecorded(t *testing.T) {
 	s, err := LoadState(Dir(project, f.ID))
 	if err != nil || s.Status != StatusFailed || !strings.Contains(s.Error, "uncommitted") {
 		t.Errorf("run.json = %+v, %v; want the run recorded as failed, with why", s, err)
+	}
+}
+
+func TestTheRealmCreatesTheLeavesAProjectLacks(t *testing.T) {
+	project := treetest.Project(t) // no leaves yet
+	commits, _ := git.Run(ctx, project, "rev-list", "--count", "HEAD")
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	if err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	r.Close()
+	nodes, err := tree.Resolve(ctx, project, "repos/app")
+	if err != nil {
+		t.Fatalf("the toy realm's leaf isn't in the tree: %v", err)
+	}
+	app := git.Repo{GitDir: nodes[1].GitDir, WorkTree: nodes[1].Dir}
+	if files, _ := app.Run(ctx, "ls-tree", "-r", "--name-only", r.State.Leaves["repos/app"].Base); files != "LICENSE" {
+		t.Errorf("the leaf's first commit holds %q, want the template's LICENSE only", files)
+	}
+	if after, _ := git.Run(ctx, project, "rev-list", "--count", "HEAD"); after == commits {
+		t.Error("the project has no commit recording the new leaf")
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.Dir, "ledger.jsonl")); !strings.Contains(string(b), `"event":"repo_created"`) {
+		t.Error("the ledger doesn't record the created leaf")
+	}
+	second, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	if err != nil {
+		t.Fatalf("a second run in the project = %v", err)
+	}
+	second.Close()
+	if b, _ := os.ReadFile(filepath.Join(second.Dir, "ledger.jsonl")); strings.Contains(string(b), "repo_created") {
+		t.Error("the second run created the leaf again")
 	}
 }
 

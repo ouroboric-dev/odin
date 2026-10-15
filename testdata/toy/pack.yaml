@@ -1,3 +1,5 @@
 name: toy
 version: 0.2.0
 graph: graph.yaml
+leaves:
+  repos/app: { description: the toy app, template: templates/app, first_commit: [LICENSE] }

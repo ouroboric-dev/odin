@@ -1,5 +1,5 @@
 # The toy graph: every node kind and four approval points, with a scripted agent (spec §13). Its
-# nodes work in one leaf of the project, repos/app.
+# nodes work in one leaf, repos/app, which the realm creates when a project lacks it.
 name: toy
 version: 2.0.0
 nodes:

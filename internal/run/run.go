@@ -17,6 +17,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/agents"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
+	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/tree"
 )
 
@@ -48,6 +49,7 @@ type Setup struct {
 	ProjectPath string               // the project's path from the root
 	Project     tree.Node            // the project umbrella
 	Repos       map[string]tree.Node // every repo the graph names, by path from the project; "." is the project
+	Create      []string             // leaves the project lacks, which Start creates from the realm's templates
 }
 
 // Prepare loads and checks the config, the realm, the brief and the project's place in the
@@ -138,14 +140,18 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 	if n.Repo == "" {
 		return fmt.Errorf("%s: node %s names no repo; every node that does work runs in a repo of the project", graphPath, n.ID)
 	}
-	if _, ok := s.Repos[n.Repo]; !ok {
+	if _, ok := s.Repos[n.Repo]; !ok && !slices.Contains(s.Create, n.Repo) {
 		nodes, err := tree.Resolve(ctx, s.Root, filepath.Join(s.ProjectPath, n.Repo))
-		if err != nil {
-			return fmt.Errorf("%s: node %s works in %s, which the project lacks: %w", graphPath, n.ID, n.Repo, err)
+		switch _, creatable := s.Pack.Leaves[n.Repo]; {
+		case err == nil:
+			s.Repos[n.Repo] = nodes[len(nodes)-1]
+		case creatable:
+			s.Create = append(s.Create, n.Repo)
+		default:
+			return fmt.Errorf("%s: node %s works in %s, which the project lacks and the realm doesn't create: %w", graphPath, n.ID, n.Repo, err)
 		}
-		s.Repos[n.Repo] = nodes[len(nodes)-1]
 	}
-	if n.Kind != schema.KindExec && s.Repos[n.Repo].Kind != schema.ChildLeaf {
+	if n.Kind != schema.KindExec && !s.isLeaf(n.Repo) {
 		return fmt.Errorf("%s: node %s works in %s, which is an umbrella; agents, merges and pointer moves work in a leaf (spec §3.3)", graphPath, n.ID, n.Repo)
 	}
 	for _, c := range slices.Concat(n.Checks, n.Acceptance) {
@@ -171,6 +177,14 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 		return fmt.Errorf("role %s: %w", n.Role, err)
 	}
 	return nil
+}
+
+// isLeaf reports whether repo is a leaf: one the tree records as a leaf, or one Start creates.
+func (s *Setup) isLeaf(repo string) bool {
+	if n, ok := s.Repos[repo]; ok {
+		return n.Kind == schema.ChildLeaf
+	}
+	return slices.Contains(s.Create, repo)
 }
 
 // Leaves returns the paths of the leaves the graph works in, sorted.
@@ -258,9 +272,9 @@ type Failed struct {
 func (f *Failed) Error() string { return fmt.Sprintf("run %s failed: %v", f.ID, f.Err) }
 func (f *Failed) Unwrap() error { return f.Err }
 
-// Start prepares a new run, then creates its directory, run.json and first ledger line, and starts
-// the run's branch in every leaf. If Prepare refuses, or the run can't be recorded, nothing is left
-// behind. A failure after that is a *Failed.
+// Start prepares a new run, then creates its directory, run.json and first ledger line, creates
+// the leaves the project lacks, and starts the run's branch in every leaf. If Prepare refuses, or
+// the run can't be recorded, nothing is left behind. A failure after that is a *Failed.
 func Start(ctx context.Context, o Options) (*Run, error) {
 	setup, err := Prepare(ctx, o)
 	if err != nil {
@@ -331,9 +345,15 @@ func roles(setup *Setup) map[string]RoleRecord {
 	return roles
 }
 
-// begin starts the run's branch in every leaf.
+// begin creates the leaves the project lacks and starts the run's branch in every leaf.
 func (r *Run) begin(ctx context.Context) error {
-	for _, p := range r.Setup.Leaves() {
+	s := r.Setup
+	for _, p := range s.Create {
+		if err := r.createLeaf(ctx, p); err != nil {
+			return err
+		}
+	}
+	for _, p := range s.Leaves() {
 		l, err := r.Leaf(p)
 		if err != nil {
 			return err
@@ -345,6 +365,34 @@ func (r *Run) begin(ctx context.Context) error {
 		r.State.Leaves[p] = LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head}
 	}
 	return nil
+}
+
+// createLeaf creates leaf p in the project through the remote, from the realm's template (spec
+// §4.1; change remote-creates-repos).
+func (r *Run) createLeaf(ctx context.Context, p string) error {
+	s := r.Setup
+	pl := s.Pack.Leaves[p]
+	files := map[string][]byte{}
+	for _, f := range pl.FirstCommit {
+		b, err := os.ReadFile(filepath.Join(s.RealmDir, pl.Template, f))
+		if err != nil {
+			return err
+		}
+		files[f] = b
+	}
+	repo := gungnir.Repo{Owner: s.Project.Owner, Name: filepath.Base(p), Visibility: s.Project.Visibility,
+		Description: pl.Description, Path: p, Files: files}
+	rem := remote.NewLocal(s.Project)
+	if err := rem.Create(ctx, repo); err != nil {
+		return err
+	}
+	nodes, err := tree.Resolve(ctx, s.Root, filepath.Join(s.ProjectPath, p))
+	if err != nil {
+		return err
+	}
+	s.Repos[p] = nodes[len(nodes)-1]
+	s.Create = slices.DeleteFunc(s.Create, func(c string) bool { return c == p })
+	return r.Log(gungnir.Event{Name: gungnir.EventRepoCreated, Note: fmt.Sprintf("%s (%s remote)", p, rem.Name())})
 }
 
 // Open locks and loads run id for resume, approve or reject, and checks that it may continue: the
