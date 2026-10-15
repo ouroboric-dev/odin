@@ -1,7 +1,8 @@
-# The toy graph: every node kind and four approval points, with a scripted agent (spec §13). Its
-# nodes work in one leaf, repos/app, which the realm creates when a project lacks it.
+# The toy graph: every node kind and six approval points, with a scripted agent (spec §13). Its
+# nodes work in one leaf, repos/app, which the realm creates when a project lacks it. The work lands
+# on the leaf's main through the merge gate, and the project's pointer moves to it.
 name: toy
-version: 2.0.0
+version: 3.0.0
 nodes:
   - { id: design, kind: agent, role: planner, prompt: prompts/design.md, repo: repos/app }
   - { id: design-gate, kind: gate, gate: design }
@@ -13,3 +14,7 @@ nodes:
   - { id: build, kind: agent, role: implementer, prompt: prompts/build.md, repo: repos/app }
   - { id: check, kind: exec, run: [grep, -q, done, build.txt], repo: repos/app }
   - { id: feature-gate, kind: gate, gate: feature }
+  - { id: merge-gate, kind: gate, gate: merge }
+  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }
+  - { id: pointer-gate, kind: gate, gate: pointer }
+  - { id: pointer, kind: pointer, repo: repos/app, checks: [unit], acceptance: [e2e] }

@@ -27,7 +27,7 @@ func project(t *testing.T, script, extra string) (dir, config string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir = treetest.Project(t, "repos/app")
+	dir = treetest.Project(t) // the toy realm creates its leaf, repos/app
 	config = filepath.Join(t.TempDir(), "factory.yaml")
 	s := filepath.Join(toy, script)
 	body := extra + "roles:\n  planner: { agent: scripted, model: none, script: " + s + " }\n" +
