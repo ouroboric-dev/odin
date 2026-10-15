@@ -223,19 +223,3 @@ func TestEveryNodeInALeafEndsWithACheckpoint(t *testing.T) {
 		t.Error("node a's node_finished line doesn't carry its checkpoint commit")
 	}
 }
-
-func TestAPlantedRepositoryFailsTheNodeAndNothingIsCommitted(t *testing.T) {
-	script := "steps:\n  a:\n    - actions:\n        - write: { path: vendor/x/.git/HEAD, content: \"ref: refs/heads/main\\n\" }\n" +
-		"        - write: { path: vendor/x/.git/objects/.keep, content: \"\" }\n        - write: { path: vendor/x/.git/refs/heads/.keep, content: \"\" }\n" +
-		"      result: { status: ok, summary: planted a repo }\n"
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n", script)
-	base := r.State.Leaves["repos/app"].Checkpoint
-	out, err := Advance(context.Background(), r)
-	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "policy violation") {
-		t.Fatalf("Advance() = %+v, %v; want the node failed for a policy violation", out, err)
-	}
-	l, _ := r.Leaf("repos/app")
-	if head, _ := l.Head(context.Background()); head != base {
-		t.Error("Odin committed the planted repository")
-	}
-}

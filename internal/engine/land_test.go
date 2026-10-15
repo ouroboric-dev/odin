@@ -2,9 +2,12 @@ package engine
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -65,4 +68,75 @@ func TestAPointerNodeMovesTheProjectsPointer(t *testing.T) {
 	if !strings.Contains(ledgerText(t, r), `"event":"pointer_moved"`) {
 		t.Error("the ledger doesn't record the pointer move")
 	}
+}
+
+func TestAShrunkGeneratedFileStopsAtTheShrinkGuard(t *testing.T) {
+	nodes := build + "  - { id: index, kind: exec, run: [sh, -c, \"echo '| one |' > REPOS.md\"], repo: . }\n" +
+		"  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +
+		"  - { id: move, kind: pointer, repo: repos/app, generated: [REPOS.md] }\n"
+	r := startPack(t, "unattended", "", checks, nodes, okScript)
+	if err := os.WriteFile(filepath.Join(r.Project, "REPOS.md"), []byte(strings.Repeat("| row |\n", 10)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "REPOS.md"}, {"commit", "-q", "-m", "REPOS.md"}} {
+		if _, err := git.Run(bg, r.Project, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusStopped || out.Gate != "move" || r.State.PendingGate != gungnir.GateShrinkGuard {
+		t.Fatalf("Advance() = %+v, %v (pending %s); want a stop at shrink-guard, even in unattended mode", out, err, r.State.PendingGate)
+	}
+	if b, err := os.ReadFile(filepath.Join(r.Dir, "gates", "move-1.md")); err != nil || !strings.Contains(string(b), "keeps 1 of its 10 rows") {
+		t.Errorf("gate file = %q, %v", b, err)
+	}
+	if err := Reject(bg, r, "move", "no"); err == nil {
+		t.Error("Reject() of a hard stop succeeded; a hard stop takes approve, or a new run")
+	}
+	if err := Approve(bg, r, "move", "the index shrank on purpose"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() after approval = %+v, %v", out, err)
+	}
+	if files, _ := git.Run(bg, r.Project, "show", "--name-only", "--format=", "HEAD"); files != "REPOS.md\nrepos/app" {
+		t.Errorf("the approved move commits %q, want the shrunk REPOS.md with the pointer", files)
+	}
+}
+
+func TestAPlantedRepositoryStopsAtPolicyViolation(t *testing.T) {
+	script := "steps:\n  a:\n    - actions:\n        - write: { path: vendor/x/.git/HEAD, content: \"ref: refs/heads/main\\n\" }\n" +
+		"        - write: { path: vendor/x/.git/objects/.keep, content: \"\" }\n        - write: { path: vendor/x/.git/refs/heads/.keep, content: \"\" }\n" +
+		"      result: { status: ok, summary: planted a repo }\n" +
+		"    - actions: [ { write: { path: out.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: clean }\n"
+	r := startPack(t, "unattended", "", "", build, script)
+	base := r.State.Leaves["repos/app"].Checkpoint
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
+		t.Fatalf("Advance() = %+v, %v; want a stop at policy-violation, even in unattended mode", out, err)
+	}
+	l, _ := r.Leaf("repos/app")
+	if head, _ := l.Head(bg); head != base {
+		t.Error("Odin committed the planted repository")
+	}
+	planted := filepath.Join(r.RepoDir("repos/app"), "vendor", "x", ".git", "HEAD")
+	id, project := r.State.ID, r.Project
+	r.Close()
+	reopened, err := run.Open(bg, project, id, "")
+	if err != nil {
+		t.Fatalf("Open() of a quarantined run = %v", err)
+	}
+	if _, err := os.Stat(planted); err != nil {
+		t.Error("Open() cleaned the quarantined leaf before anyone decided; the evidence is gone")
+	}
+	if err := Approve(bg, reopened, "a", "investigated"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(planted); err == nil {
+		t.Error("approving the stop didn't put the leaf back to its checkpoint")
+	}
+	if out, err := Advance(bg, reopened); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() after approval = %+v, %v; want the node re-run from its checkpoint", out, err)
+	}
+	reopened.Close()
 }

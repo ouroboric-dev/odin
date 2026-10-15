@@ -63,6 +63,10 @@ func Advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		if errors.As(err, &nf) {
 			return fail(r, n, nf.err)
 		}
+		var hs *hardStop
+		if errors.As(err, &hs) {
+			return stopHard(r, n, hs)
+		}
 		if err != nil {
 			return Outcome{}, err
 		}
@@ -290,7 +294,8 @@ func checkpoint(ctx context.Context, r *run.Run, n schema.Node, attempt int) (st
 }
 
 // failCheckpoint logs a node whose work Odin refused to commit, such as a leaf with a planted git
-// repository, and fails it. A failure of Odin itself stays an error.
+// repository, and stops the run at the hard approval point policy-violation. A failure of Odin
+// itself stays an error.
 func failCheckpoint(r *run.Run, ev gungnir.Event, err error) error {
 	if !leaf.IsPolicy(err) {
 		return err
@@ -299,5 +304,5 @@ func failCheckpoint(r *run.Run, ev gungnir.Event, err error) error {
 	if lerr := r.Log(ev); lerr != nil {
 		return lerr
 	}
-	return &nodeFailure{err}
+	return &hardStop{gate: gungnir.GatePolicyViolation, err: err}
 }

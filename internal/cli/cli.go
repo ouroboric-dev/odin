@@ -184,9 +184,9 @@ func (c *command) decide(name string, args []string) int {
 	defer r.Close()
 	var err error
 	if name == "approve" {
-		err = engine.Approve(r, pos[1], f.note)
+		err = engine.Approve(c.ctx, r, pos[1], f.note)
 	} else {
-		err = engine.Reject(r, pos[1], f.reason)
+		err = engine.Reject(c.ctx, r, pos[1], f.reason)
 	}
 	if err != nil {
 		return c.refuse(err)

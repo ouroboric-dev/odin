@@ -365,7 +365,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup),
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
-		Created: now, Updated: now,
+		Waived: map[string]bool{}, Created: now, Updated: now,
 	}}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256}); err != nil {
 		r.Close()
@@ -520,15 +520,16 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 	return r, nil
 }
 
-// restoreLeaves puts every leaf back to its checkpoint when the run's node restarts (interrupted,
-// failed, or stopped for a policy violation), and otherwise refuses a leaf that changed while the
-// run waited: Odin never discards work it didn't make.
+// restoreLeaves puts every leaf back to its checkpoint when the run's node restarts (interrupted
+// or failed), and otherwise refuses a leaf that changed while the run waited: Odin never discards
+// work it didn't make. A run stopped at policy-violation is quarantined: its leaves stay as they
+// are for investigation, and only approving the stop resets them (spec §12).
 func (r *Run) restoreLeaves(ctx context.Context) error {
 	s := r.State
-	if s.Status == StatusDone {
+	if s.Status == StatusDone || s.PendingGate == gungnir.GatePolicyViolation {
 		return nil
 	}
-	restart := s.Status == StatusRunning || s.Status == StatusFailed || s.PendingGate == gungnir.GatePolicyViolation
+	restart := s.Status == StatusRunning || s.Status == StatusFailed
 	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
 		rec := s.Leaves[p]
 		l, err := r.Leaf(p)

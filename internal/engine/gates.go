@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -93,31 +94,52 @@ func pending(r *run.Run, gateID string) error {
 	return nil
 }
 
-// Approve records the decision on the pending gate and moves the run past it. Advance continues.
-func Approve(r *run.Run, gateID, note string) error {
+// Approve records the decision on the pending approval point, and Advance continues: past a gate
+// node; or, at a hard stop a node raised, with that node again. At policy-violation the leaf goes
+// back to its checkpoint first; at shrink-guard the move lands once without the guard.
+func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 	if err := pending(r, gateID); err != nil {
 		return err
 	}
 	s := r.State
+	n := r.Setup.Graph.Nodes[s.Position]
 	if err := r.Log(gungnir.Event{Name: gungnir.EventGateApproved, Node: gateID, Gate: gateID, Note: note}); err != nil {
 		return err
 	}
+	switch {
+	case n.Kind == schema.KindGate:
+		s.Position++
+	case s.PendingGate == gungnir.GatePolicyViolation:
+		rec := s.Leaves[n.Repo]
+		l, err := r.Leaf(n.Repo)
+		if err != nil {
+			return err
+		}
+		if err := l.Reset(ctx, rec.Branch, rec.Checkpoint); err != nil {
+			return err
+		}
+	case s.PendingGate == gungnir.GateShrinkGuard:
+		s.Waived[n.ID] = true
+	}
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
-	s.Position++
 	return r.Save()
 }
 
 // Reject sends reason back into the node the gate re-runs (spec §7.2). Advance re-runs it with
-// the reason in its prompt, then reaches the gate again.
-func Reject(r *run.Run, gateID, reason string) error {
+// the reason in its prompt, then reaches the gate again. A hard stop a node raised takes no
+// rejection: approve it, or start a new run to drop the work.
+func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 	if err := pending(r, gateID); err != nil {
 		return err
+	}
+	s := r.State
+	g := r.Setup.Graph
+	if n := g.Nodes[s.Position]; n.Kind != schema.KindGate {
+		return fmt.Errorf("%s stopped at the hard approval point %s, which takes approve; to drop the work, start a new run", gateID, s.PendingGate)
 	}
 	if strings.TrimSpace(reason) == "" {
 		return errors.New("a rejection needs a reason; it goes back to the node as input")
 	}
-	s := r.State
-	g := r.Setup.Graph
 	target := g.Nodes[g.Index(gateID)].Reruns
 	if err := r.Log(gungnir.Event{Name: gungnir.EventGateRejected, Node: gateID, Gate: gateID, Note: reason}); err != nil {
 		return err
@@ -126,4 +148,46 @@ func Reject(r *run.Run, gateID, reason string) error {
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
 	s.Position = g.Index(target)
 	return r.Save()
+}
+
+// hardStop is a node that stops the run at a hard approval point itself: work it left breaks a
+// sandbox rule (policy-violation), or a generated file shrank (shrink-guard). Hard approval points
+// stop in every mode.
+type hardStop struct {
+	gate gungnir.Gate
+	err  error
+}
+
+func (h *hardStop) Error() string { return h.err.Error() }
+
+// stopHard stops the run at node n for the hard approval point h, as a gate node stops: a gate file,
+// gate_pending, and the run saved as stopped.
+func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
+	s := r.State
+	attempt := s.Attempts[n.ID]
+	rel := filepath.Join("gates", fmt.Sprintf("%s-%d.md", n.ID, attempt))
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Hard stop at node %s (%s)\n\n", n.ID, h.gate)
+	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Time: %s\n\n## Why\n\n%v\n\n", s.ID, s.Mode,
+		time.Now().UTC().Format(time.RFC3339), h.err)
+	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
+	if h.gate == gungnir.GatePolicyViolation {
+		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again.\n", n.Repo, n.ID)
+	} else {
+		b.WriteString("Approving lands this move with the generated files as they are.\n")
+	}
+	b.WriteString("A hard stop takes no rejection: to drop the work, start a new run.\n")
+	if err := os.MkdirAll(filepath.Join(r.Dir, "gates"), 0o755); err != nil {
+		return Outcome{}, err
+	}
+	if err := os.WriteFile(filepath.Join(r.Dir, rel), []byte(b.String()), 0o644); err != nil {
+		return Outcome{}, err
+	}
+	ev := gungnir.Event{Name: gungnir.EventGatePending, Node: n.ID, Attempt: attempt, Gate: n.ID, GateFile: rel,
+		Note: fmt.Sprintf("%s: %v", h.gate, h.err)}
+	if err := r.Log(ev); err != nil {
+		return Outcome{}, err
+	}
+	s.Status, s.Pending, s.PendingGate = run.StatusStopped, n.ID, h.gate
+	return Outcome{Status: run.StatusStopped, Gate: n.ID}, r.Save()
 }

@@ -67,6 +67,7 @@ type State struct {
 	PendingGate  gungnir.Gate          `json:"pending_gate,omitempty"` // the approval point it waits at
 	Reasons      map[string]string     `json:"reasons,omitempty"`      // node id: rejection reason for its next attempt
 	Summaries    map[string]string     `json:"summaries,omitempty"`    // node id: its last result
+	Waived       map[string]bool       `json:"waived,omitempty"`       // pointer node id: shrink-guard approved for its next move
 	Usage        gungnir.Usage         `json:"usage"`
 	Ledger       ledger.Anchor         `json:"ledger"`
 	Error        string                `json:"error,omitempty"`
@@ -161,6 +162,9 @@ func LoadState(dir string) (*State, error) {
 	}
 	if s.Summaries == nil {
 		s.Summaries = map[string]string{}
+	}
+	if s.Waived == nil {
+		s.Waived = map[string]bool{}
 	}
 	if s.Leaves == nil {
 		s.Leaves = map[string]LeafRecord{}
