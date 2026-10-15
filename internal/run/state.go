@@ -1,0 +1,215 @@
+// Package run holds a run's directory, its run.json, its lock, and the checks that a run may start
+// or continue (spec §4.1, §4.3, §12).
+package run
+
+import (
+	"bytes"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/odin/internal/ledger"
+)
+
+// StateSchema names the run.json format.
+const StateSchema = "ygg.run/v1"
+
+// Status is where a run stands.
+type Status string
+
+const (
+	StatusRunning Status = "running" // a process is walking the graph, or died while it was
+	StatusStopped Status = "stopped" // waiting at an approval point
+	StatusFailed  Status = "failed"  // a node failed; resume re-runs it
+	StatusDone    Status = "done"
+)
+
+// RoleRecord is the agent and model a role used.
+type RoleRecord struct {
+	Agent string `json:"agent"`
+	Model string `json:"model"`
+}
+
+// State is run.json. Odin is its only writer.
+type State struct {
+	Schema       string                `json:"schema"`
+	ID           string                `json:"id"`
+	Status       Status                `json:"status"`
+	Mode         gungnir.Mode          `json:"mode"`
+	Realm        string                `json:"realm"`
+	RealmVersion string                `json:"realm_version"`
+	RealmDir     string                `json:"realm_dir"`
+	GraphVersion string                `json:"graph_version"`
+	GraphSHA256  string                `json:"graph_sha256"`
+	ConfigPath   string                `json:"config_path"`
+	ConfigSHA256 string                `json:"config_sha256"`
+	Brief        string                `json:"brief,omitempty"`
+	BriefSHA256  string                `json:"brief_sha256,omitempty"`
+	Roles        map[string]RoleRecord `json:"roles"`
+	Position     int                   `json:"position"`            // index of the next node to run
+	Attempts     map[string]int        `json:"attempts"`            // node id: attempts started
+	Pending      string                `json:"pending,omitempty"`   // the gate node waiting for a decision
+	Reasons      map[string]string     `json:"reasons,omitempty"`   // node id: rejection reason for its next attempt
+	Summaries    map[string]string     `json:"summaries,omitempty"` // node id: its last result
+	Usage        gungnir.Usage         `json:"usage"`
+	Ledger       ledger.Anchor         `json:"ledger"`
+	Error        string                `json:"error,omitempty"`
+	Exec         *ExecProcess          `json:"exec,omitempty"` // the exec node running now, if any
+	Created      time.Time             `json:"created"`
+	Updated      time.Time             `json:"updated"`
+}
+
+var idPattern = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$`)
+
+// NewID returns a run id: the UTC time and six random hex digits, such as 20261015-142233-a1b2c3.
+func NewID(now time.Time, random io.Reader) (string, error) {
+	b := make([]byte, 3)
+	if _, err := io.ReadFull(random, b); err != nil {
+		return "", err
+	}
+	return now.UTC().Format("20060102-150405") + "-" + hex.EncodeToString(b), nil
+}
+
+// NewIDNow returns a run id for the current time.
+func NewIDNow() (string, error) { return NewID(time.Now(), rand.Reader) }
+
+// ValidID reports whether id is a run id, so it can't name a path outside the runs directory.
+func ValidID(id string) bool { return idPattern.MatchString(id) }
+
+// Dir returns the run directory of id under project.
+func Dir(project, id string) string { return filepath.Join(project, ".factory", "runs", id) }
+
+// Save writes run.json atomically: a temporary file in the same directory, synced, then renamed
+// over the old one, then the directory synced (spec §12).
+func (s *State) Save(dir string) error {
+	s.Schema = StateSchema
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, "run.json.tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), filepath.Join(dir, "run.json")); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// LoadState reads dir/run.json and refuses unknown fields or another schema.
+func LoadState(dir string) (*State, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "run.json"))
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var s State
+	if err := dec.Decode(&s); err != nil {
+		return nil, fmt.Errorf("%s/run.json: %w", dir, err)
+	}
+	if s.Schema != StateSchema {
+		return nil, fmt.Errorf("%s/run.json: schema %q, want %q", dir, s.Schema, StateSchema)
+	}
+	// Empty maps aren't written (omitempty), so make them again: the engine writes to all three.
+	if s.Attempts == nil {
+		s.Attempts = map[string]int{}
+	}
+	if s.Reasons == nil {
+		s.Reasons = map[string]string{}
+	}
+	if s.Summaries == nil {
+		s.Summaries = map[string]string{}
+	}
+	return &s, nil
+}
+
+// ExecProcess is an exec node's running command: its process group, and its leader's start time,
+// so a later ygg can tell the group is still this node's after its own process died.
+type ExecProcess struct {
+	Node  string `json:"node"`
+	PGID  int    `json:"pgid"`
+	Start uint64 `json:"start"` // the leader's start time, in clock ticks since boot; 0 if unknown
+}
+
+// procStart returns when process pid started, in clock ticks since boot (field 22 of
+// /proc/<pid>/stat), or 0 if the process doesn't exist.
+func procStart(pid int) uint64 {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0
+	}
+	// The command name (field 2) is in parentheses and may hold spaces; fields from 3 follow it.
+	i := bytes.LastIndexByte(b, ')')
+	if i < 0 {
+		return 0
+	}
+	fields := strings.Fields(string(b[i+1:]))
+	if len(fields) < 20 {
+		return 0
+	}
+	n, _ := strconv.ParseUint(fields[19], 10, 64)
+	return n
+}
+
+// ProcStart returns when process pid started, for ExecProcess.Start.
+func ProcStart(pid int) uint64 { return procStart(pid) }
+
+// ErrInUse means another ygg process holds the run's lock.
+var ErrInUse = errors.New("another ygg process is using this run")
+
+// Lock takes dir/lock for this process. The kernel drops the lock when the process ends, so a
+// killed run never stays locked.
+func Lock(dir string) (unlock func(), err error) {
+	f, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrInUse
+		}
+		return nil, err
+	}
+	return func() { f.Close() }, nil
+}
+
+// Locked reports whether another process holds dir/lock.
+func Locked(dir string) bool {
+	unlock, err := Lock(dir)
+	if err != nil {
+		return errors.Is(err, ErrInUse)
+	}
+	unlock()
+	return false
+}

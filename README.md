@@ -13,6 +13,22 @@ go test ./...
 go vet ./...
 ```
 
+## Usage
+
+```text
+ygg run     --realm <dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
+ygg resume  <run-id> [--project <dir>] [--mode <mode>]
+ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
+ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
+ygg status  <run-id> [--project <dir>]
+ygg doctor  [--project <dir>] [--config <factory.yaml>]
+```
+
+Exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point.
+
+`factory.yaml` must set both budget caps, `per_run` and `per_day`, each with `tokens` and `turns`.
+The factory ships no defaults, so a config without them runs nothing.
+
 ## Docs
 
 - Architecture: [docs/architecture.md](docs/architecture.md)
