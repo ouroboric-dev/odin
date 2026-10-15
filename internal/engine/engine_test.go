@@ -129,10 +129,28 @@ func TestAnExecTimeoutKillsTheProcessGroup(t *testing.T) {
 	if time.Since(began) > 10*time.Second {
 		t.Errorf("Advance() took %v; the timeout didn't stop it", time.Since(began))
 	}
-	pid, _ := os.ReadFile(filepath.Join(r.Workspace(), "child.pid"))
-	if _, err := os.Stat("/proc/" + strings.TrimSpace(string(pid))); err == nil {
-		t.Errorf("the child %s outlived the timeout", strings.TrimSpace(string(pid)))
+	pid := strings.TrimSpace(string(must(os.ReadFile(filepath.Join(r.Workspace(), "child.pid")))))
+	// A killed child is dead once it is gone or a zombie: in a container whose PID 1 doesn't
+	// reap orphans, such as CI's, it stays a zombie.
+	for deadline := time.Now().Add(2 * time.Second); running(pid); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Errorf("the child %s outlived the timeout", pid)
+			break
+		}
 	}
+}
+
+// running reports whether process pid exists and isn't a zombie.
+func running(pid string) bool {
+	b, err := os.ReadFile("/proc/" + pid + "/stat")
+	return err == nil && !strings.Contains(string(b), ") Z ")
+}
+
+func must(b []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 func TestAnInterruptedAgentCountsItsAttempt(t *testing.T) {
