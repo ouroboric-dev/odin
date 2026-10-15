@@ -192,3 +192,44 @@ func TestRunJSONRecordsTheRunningExecProcess(t *testing.T) {
 		t.Errorf("run.json still records an exec process after the node ended: %+v", s.Exec)
 	}
 }
+
+func TestEveryNodeInALeafEndsWithACheckpoint(t *testing.T) {
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: check, kind: exec, run: [grep, -q, done, out.txt], repo: repos/app }\n", okScript)
+	base := r.State.Leaves["repos/app"].Base
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	l, err := r.Leaf("repos/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _ := l.Head(context.Background())
+	if cp := r.State.Leaves["repos/app"].Checkpoint; cp != head || cp == base {
+		t.Errorf("checkpoint = %s, head %s, base %s; want the agent's commit recorded", cp, head, base)
+	}
+	if files, _ := l.Git(context.Background(), "show", "--name-only", "--format=%s", head); files != "ygg: run "+r.State.ID+", node a, attempt 1\n\nout.txt" {
+		t.Errorf("the checkpoint commit is %q, want the agent's out.txt under a message naming the node", files)
+	}
+	if st, _ := l.Git(context.Background(), "status", "--porcelain"); st != "" {
+		t.Errorf("the leaf has uncommitted work after the run: %q", st)
+	}
+	if !strings.Contains(ledgerText(t, r), `"ygg.node.id":"a","event":"node_finished"`) || !strings.Contains(ledgerText(t, r), `"ygg.ref.commit":"`+head+`"`) {
+		t.Error("node a's node_finished line doesn't carry its checkpoint commit")
+	}
+}
+
+func TestAPlantedRepositoryFailsTheNodeAndNothingIsCommitted(t *testing.T) {
+	script := "steps:\n  a:\n    - actions:\n        - write: { path: vendor/x/.git/HEAD, content: \"ref: refs/heads/main\\n\" }\n" +
+		"        - write: { path: vendor/x/.git/objects/.keep, content: \"\" }\n        - write: { path: vendor/x/.git/refs/heads/.keep, content: \"\" }\n" +
+		"      result: { status: ok, summary: planted a repo }\n"
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n", script)
+	base := r.State.Leaves["repos/app"].Checkpoint
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "policy violation") {
+		t.Fatalf("Advance() = %+v, %v; want the node failed for a policy violation", out, err)
+	}
+	l, _ := r.Leaf("repos/app")
+	if head, _ := l.Head(context.Background()); head != base {
+		t.Error("Odin committed the planted repository")
+	}
+}

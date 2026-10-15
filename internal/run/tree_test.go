@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/tree"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
@@ -148,6 +149,49 @@ func TestTheRealmCreatesTheLeavesAProjectLacks(t *testing.T) {
 	second.Close()
 	if b, _ := os.ReadFile(filepath.Join(second.Dir, "ledger.jsonl")); strings.Contains(string(b), "repo_created") {
 		t.Error("the second run created the leaf again")
+	}
+}
+
+func TestOneRunAdvancesAProjectAtATime(t *testing.T) {
+	r := startToyRun(t, scriptedRoles+fullCaps)
+	defer r.Close()
+	_, err := Start(ctx, Options{Project: r.Project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	if !errors.Is(err, ErrProjectBusy) {
+		t.Errorf("a second run in a busy project = %v, want ErrProjectBusy", err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(r.Project, ".factory", "runs"))
+	if len(entries) != 1 {
+		t.Errorf("the refused run left a directory: %d runs", len(entries))
+	}
+}
+
+func TestOpenPutsLeavesBackAtTheirCheckpoints(t *testing.T) {
+	r := startToyRun(t, scriptedRoles+fullCaps)
+	id, project, app := r.State.ID, r.Project, r.RepoDir("repos/app")
+	r.Close()
+	if err := os.WriteFile(filepath.Join(app, "half-done.txt"), []byte("an interrupted node's work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(ctx, project, id, "") // the run is "running": it was interrupted, so its node restarts
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(app, "half-done.txt")); err == nil {
+		t.Error("Open() kept an interrupted node's work; the node restarts from its checkpoint")
+	}
+	r.State.Status, r.State.Position, r.State.Pending, r.State.PendingGate = StatusStopped, 1, "design-gate", gungnir.GateDesign
+	if err := r.Save(); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if err := os.WriteFile(filepath.Join(app, "LICENSE"), []byte("changed by hand\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, project, id, ""); err == nil || !strings.Contains(err.Error(), "changed while the run waited") {
+		t.Errorf("Open() of a waiting run with a changed leaf = %v, want a refusal", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "LICENSE")); string(b) != "changed by hand\n" {
+		t.Error("Open() discarded a person's change")
 	}
 }
 

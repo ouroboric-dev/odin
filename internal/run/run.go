@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/agents"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
+	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/tree"
 )
@@ -199,7 +202,7 @@ func (s *Setup) Leaves() []string {
 	return ls
 }
 
-// Run is an open run: its directory, state, setup, ledger and lock.
+// Run is an open run: its directory, state, setup, ledger and locks.
 type Run struct {
 	Project string
 	Dir     string
@@ -222,6 +225,22 @@ func (r *Run) Leaf(repo string) (*leaf.Leaf, error) { return leaf.Open(r.Setup.R
 // Home is the HOME of exec nodes: the run's own directory, never a repo, so caches don't end up
 // in a commit.
 func (r *Run) Home() string { return filepath.Join(r.Dir, "home") }
+
+// LockFile returns the lock file of a repo of the project, in <project>/.factory/locks/.
+func (r *Run) LockFile(repo string) string { return LockFile(r.Project, repo) }
+
+// LockFile returns the lock file of a repo of project.
+func LockFile(project, repo string) string {
+	name := "project"
+	if repo != "." {
+		name = "repo-" + filepath.ToSlash(repo)
+	}
+	return filepath.Join(project, ".factory", "locks", filepath.FromSlash(name)+".lock")
+}
+
+// ErrProjectBusy means another ygg process is advancing a run of the same project. One run at a
+// time walks a project's leaves, which share their working copies.
+var ErrProjectBusy = errors.New("another ygg process is advancing a run of this project")
 
 // Log appends e to the ledger, with the run's id. A switch Open found is logged first.
 func (r *Run) Log(e gungnir.Event) error {
@@ -256,11 +275,29 @@ func (r *Run) Save() error {
 	return r.State.Save(r.Dir)
 }
 
-// Close closes the ledger and releases the lock.
+// Close closes the ledger and releases the locks.
 func (r *Run) Close() error {
 	err := r.Ledger.Close()
 	r.unlock()
 	return err
+}
+
+// takeLocks takes the run's lock, then the project's, and returns the function that releases
+// both. Neither waits, so the order can't deadlock; run first names the precise conflict.
+func takeLocks(project, dir string) (func(), error) {
+	releaseRun, err := Lock(dir)
+	if err != nil {
+		return nil, err
+	}
+	releaseProject, err := lock.Take(LockFile(project, "."))
+	if err != nil {
+		releaseRun()
+		if errors.Is(err, lock.ErrHeld) {
+			return nil, ErrProjectBusy
+		}
+		return nil, err
+	}
+	return func() { releaseProject(); releaseRun() }, nil
 }
 
 // Failed is a run that started and then failed before its first node; run.json records why.
@@ -306,7 +343,7 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 
 // record locks the new run and writes its run.json and first ledger line.
 func record(project, dir, id string, setup *Setup) (*Run, error) {
-	unlock, err := Lock(dir)
+	unlock, err := takeLocks(project, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +434,9 @@ func (r *Run) createLeaf(ctx context.Context, p string) error {
 
 // Open locks and loads run id for resume, approve or reject, and checks that it may continue: the
 // caps are still complete, the graph and brief are unchanged, the ledger reaches the anchor in
-// run.json. mode switches the run's mode at this pause ("" keeps it); a switch is logged.
+// run.json, and every leaf is at its checkpoint. A run that was interrupted or failed has its
+// leaves reset to their checkpoints, since its node restarts from scratch (spec §4.3). mode
+// switches the run's mode at this pause ("" keeps it); a switch is logged.
 func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("%q is not a run id", id)
@@ -410,7 +449,7 @@ func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, err
 	if _, err := os.Stat(filepath.Join(dir, "run.json")); err != nil {
 		return nil, fmt.Errorf("no run %s in %s", id, project)
 	}
-	unlock, err := Lock(dir)
+	unlock, err := takeLocks(project, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -444,6 +483,9 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 	if setup.Root != s.Root || setup.ProjectPath != s.ProjectPath {
 		return nil, fmt.Errorf("the run belongs to %s in %s, not this project", s.ProjectPath, s.Root)
 	}
+	if err := s.check(setup); err != nil {
+		return nil, fmt.Errorf("%s/run.json: %w", dir, err)
+	}
 	l, err := ledger.Open(filepath.Join(dir, "ledger.jsonl"), s.Ledger)
 	if err != nil {
 		return nil, err
@@ -456,6 +498,10 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 		s.Exec = nil
 	}
 	r := &Run{Project: setup.Project.Dir, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
+	if err := r.restoreLeaves(ctx); err != nil {
+		l.Close()
+		return nil, err
+	}
 	// The switches apply in memory now, and reach the ledger and run.json with the command's first
 	// write (Log or Save). A refused command writes nothing, so it switches nothing.
 	if setup.ConfigSHA256 != s.ConfigSHA256 {
@@ -467,6 +513,43 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 		s.Mode = mode
 	}
 	return r, nil
+}
+
+// restoreLeaves puts every leaf back to its checkpoint when the run's node restarts (interrupted,
+// failed, or stopped for a policy violation), and otherwise refuses a leaf that changed while the
+// run waited: Odin never discards work it didn't make.
+func (r *Run) restoreLeaves(ctx context.Context) error {
+	s := r.State
+	if s.Status == StatusDone {
+		return nil
+	}
+	restart := s.Status == StatusRunning || s.Status == StatusFailed || s.PendingGate == gungnir.GatePolicyViolation
+	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
+		rec := s.Leaves[p]
+		l, err := r.Leaf(p)
+		if err != nil {
+			return err
+		}
+		if restart {
+			if err := l.Reset(ctx, rec.Branch, rec.Checkpoint); err != nil {
+				return fmt.Errorf("resetting %s to its checkpoint: %w", p, err)
+			}
+			continue
+		}
+		head, err := l.Head(ctx)
+		if err != nil {
+			return err
+		}
+		st, err := l.Git(ctx, "status", "--porcelain")
+		if err != nil {
+			return err
+		}
+		if head != rec.Checkpoint || st != "" {
+			return fmt.Errorf("the leaf %s changed while the run waited: it is at %s, with %d uncommitted changes, and the run's checkpoint is %s; put it back, or start a new run",
+				p, head, strings.Count(st, "\n")+min(len(st), 1), rec.Checkpoint)
+		}
+	}
+	return nil
 }
 
 // stopLeftover stops the process group of an exec node that outlived its ygg process (killed, or

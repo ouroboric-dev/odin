@@ -15,6 +15,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -150,6 +151,9 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 		}
 		return &nodeFailure{runErr}
 	}
+	if ev.Commit, err = checkpoint(ctx, r, n, attempt); err != nil {
+		return failCheckpoint(r, ev, err)
+	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
 	if err := r.Log(ev); err != nil {
 		return err
@@ -215,6 +219,8 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 		DurationMS: time.Since(began).Milliseconds()}
 	if runErr != nil {
 		ev.Name = gungnir.EventNodeFailed
+	} else if ev.Commit, err = checkpoint(ctx, r, n, attempt); err != nil {
+		return failCheckpoint(r, ev, err)
 	}
 	if err := r.Log(ev); err != nil {
 		return err
@@ -224,4 +230,38 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 	}
 	r.State.Summaries[n.ID] = result
 	return nil
+}
+
+// checkpoint commits node n's work in its leaf to the run's branch, and records the commit in
+// run.json: resume resets the leaf to it (spec §4.3). A node that works in an umbrella has no
+// checkpoint; the commit that records an umbrella's change is Odin's own, at a pointer move.
+func checkpoint(ctx context.Context, r *run.Run, n schema.Node, attempt int) (string, error) {
+	rec, ok := r.State.Leaves[n.Repo]
+	if !ok {
+		return "", nil
+	}
+	l, err := r.Leaf(n.Repo)
+	if err != nil {
+		return "", err
+	}
+	head, _, err := l.Checkpoint(ctx, fmt.Sprintf("ygg: run %s, node %s, attempt %d", r.State.ID, n.ID, attempt))
+	if err != nil {
+		return "", err
+	}
+	rec.Checkpoint = head
+	r.State.Leaves[n.Repo] = rec
+	return head, nil
+}
+
+// failCheckpoint logs a node whose work Odin refused to commit, such as a leaf with a planted git
+// repository, and fails it. A failure of Odin itself stays an error.
+func failCheckpoint(r *run.Run, ev gungnir.Event, err error) error {
+	if !leaf.IsPolicy(err) {
+		return err
+	}
+	ev.Name, ev.Result, ev.Commit = gungnir.EventNodeFailed, err.Error(), ""
+	if lerr := r.Log(ev); lerr != nil {
+		return lerr
+	}
+	return &nodeFailure{err}
 }

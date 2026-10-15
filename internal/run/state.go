@@ -13,13 +13,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/ledger"
+	"github.com/ouroboric-dev/odin/internal/lock"
 )
 
 // StateSchema names the run.json format.
@@ -57,14 +58,15 @@ type State struct {
 	Brief        string                `json:"brief,omitempty"`
 	BriefSHA256  string                `json:"brief_sha256,omitempty"`
 	Roles        map[string]RoleRecord `json:"roles"`
-	Root         string                `json:"root"`                // the instance root, L0
-	ProjectPath  string                `json:"project"`             // the project's path from the root
-	Leaves       map[string]LeafRecord `json:"leaves"`              // leaf path from the project: the run's branch and checkpoint in it
-	Position     int                   `json:"position"`            // index of the next node to run
-	Attempts     map[string]int        `json:"attempts"`            // node id: attempts started
-	Pending      string                `json:"pending,omitempty"`   // the node waiting for a decision
-	Reasons      map[string]string     `json:"reasons,omitempty"`   // node id: rejection reason for its next attempt
-	Summaries    map[string]string     `json:"summaries,omitempty"` // node id: its last result
+	Root         string                `json:"root"`                   // the tree's root: the project, or an umbrella above it
+	ProjectPath  string                `json:"project"`                // the project's path from the root
+	Leaves       map[string]LeafRecord `json:"leaves"`                 // leaf path from the project: the run's branch and checkpoint in it
+	Position     int                   `json:"position"`               // index of the next node to run
+	Attempts     map[string]int        `json:"attempts"`               // node id: attempts started
+	Pending      string                `json:"pending,omitempty"`      // the node waiting for a decision
+	PendingGate  gungnir.Gate          `json:"pending_gate,omitempty"` // the approval point it waits at
+	Reasons      map[string]string     `json:"reasons,omitempty"`      // node id: rejection reason for its next attempt
+	Summaries    map[string]string     `json:"summaries,omitempty"`    // node id: its last result
 	Usage        gungnir.Usage         `json:"usage"`
 	Ledger       ledger.Anchor         `json:"ledger"`
 	Error        string                `json:"error,omitempty"`
@@ -229,26 +231,31 @@ var ErrInUse = errors.New("another ygg process is using this run")
 // Lock takes dir/lock for this process. The kernel drops the lock when the process ends, so a
 // killed run never stays locked.
 func Lock(dir string) (unlock func(), err error) {
-	f, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_RDWR|os.O_CREATE, 0o644)
-	if err != nil {
-		return nil, err
+	unlock, err = lock.Take(filepath.Join(dir, "lock"))
+	if errors.Is(err, lock.ErrHeld) {
+		return nil, ErrInUse
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, ErrInUse
-		}
-		return nil, err
-	}
-	return func() { f.Close() }, nil
+	return unlock, err
 }
 
-// Locked reports whether another process holds dir/lock.
-func Locked(dir string) bool {
-	unlock, err := Lock(dir)
-	if err != nil {
-		return errors.Is(err, ErrInUse)
+// Locked reports whether a process holds dir/lock. It never takes the lock, so a status check
+// can't make another process's resume fail.
+func Locked(dir string) bool { return lock.Held(filepath.Join(dir, "lock")) }
+
+// check refuses a run.json whose position, pending node or leaves don't fit setup's graph and
+// tree. Odin wrote it, but a hand-edited file must not crash the engine.
+func (s *State) check(setup *Setup) error {
+	nodes := setup.Graph.Nodes
+	if s.Position < 0 || s.Position > len(nodes) {
+		return fmt.Errorf("position %d is outside the graph's %d nodes", s.Position, len(nodes))
 	}
-	unlock()
-	return false
+	if s.Pending != "" && (s.Position >= len(nodes) || nodes[s.Position].ID != s.Pending) {
+		return fmt.Errorf("pending %q is not the node at position %d", s.Pending, s.Position)
+	}
+	for p := range s.Leaves {
+		if !slices.Contains(setup.Leaves(), p) {
+			return fmt.Errorf("leaf %s is not one the graph works in", p)
+		}
+	}
+	return nil
 }

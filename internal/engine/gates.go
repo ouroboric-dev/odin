@@ -38,7 +38,7 @@ func reachGate(r *run.Run, n schema.Node) (bool, error) {
 	if err := r.Log(ev); err != nil {
 		return false, err
 	}
-	s.Status, s.Pending = run.StatusStopped, n.ID
+	s.Status, s.Pending, s.PendingGate = run.StatusStopped, n.ID, n.Gate
 	return true, r.Save()
 }
 
@@ -102,7 +102,7 @@ func Approve(r *run.Run, gateID, note string) error {
 	if err := r.Log(gungnir.Event{Name: gungnir.EventGateApproved, Node: gateID, Gate: gateID, Note: note}); err != nil {
 		return err
 	}
-	s.Pending, s.Status = "", run.StatusRunning
+	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
 	s.Position++
 	return r.Save()
 }
@@ -123,7 +123,7 @@ func Reject(r *run.Run, gateID, reason string) error {
 		return err
 	}
 	s.Reasons[target] = reason
-	s.Pending, s.Status = "", run.StatusRunning
+	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
 	s.Position = g.Index(target)
 	return r.Save()
 }
