@@ -164,21 +164,47 @@ type ExecProcess struct {
 // procStart returns when process pid started, in clock ticks since boot (field 22 of
 // /proc/<pid>/stat), or 0 if the process doesn't exist.
 func procStart(pid int) uint64 {
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return 0
-	}
-	// The command name (field 2) is in parentheses and may hold spaces; fields from 3 follow it.
-	i := bytes.LastIndexByte(b, ')')
-	if i < 0 {
-		return 0
-	}
-	fields := strings.Fields(string(b[i+1:]))
+	fields := procStat(pid)
 	if len(fields) < 20 {
 		return 0
 	}
 	n, _ := strconv.ParseUint(fields[19], 10, 64)
 	return n
+}
+
+// procStat returns the fields of /proc/<pid>/stat from field 3 (the state) on, or nil.
+func procStat(pid int) []string {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return nil
+	}
+	// The command name (field 2) is in parentheses and may hold spaces; fields from 3 follow it.
+	i := bytes.LastIndexByte(b, ')')
+	if i < 0 {
+		return nil
+	}
+	return strings.Fields(string(b[i+1:]))
+}
+
+// groupAlive reports whether any process of group pgid is still running. A zombie isn't: it has
+// exited and only waits for its parent to reap it, which a container's PID 1 may never do.
+func groupAlive(pgid int) bool {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false
+	}
+	want := strconv.Itoa(pgid)
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		// From field 3: [0] is the state, [2] the process group.
+		if f := procStat(pid); len(f) > 2 && f[0] != "Z" && f[2] == want {
+			return true
+		}
+	}
+	return false
 }
 
 // ProcStart returns when process pid started, for ExecProcess.Start.

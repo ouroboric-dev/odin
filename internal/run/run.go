@@ -297,14 +297,14 @@ func stopLeftover(p *ExecProcess) error {
 		if err := syscall.Kill(-p.PGID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 			return fmt.Errorf("stopping node %s's leftover processes (group %d): %w", p.Node, p.PGID, err)
 		}
-	case syscall.Kill(-p.PGID, 0) == nil:
+	case groupAlive(p.PGID):
 		return fmt.Errorf("node %s's process group %d may still be running from an earlier ygg; "+
 			"check it with 'ps -g %d', stop it, then try again", p.Node, p.PGID, p.PGID)
 	default:
-		return nil // the group is gone
+		return nil // the group is gone, or only zombies are left
 	}
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if errors.Is(syscall.Kill(-p.PGID, 0), syscall.ESRCH) {
+		if !groupAlive(p.PGID) {
 			return nil
 		}
 	}
