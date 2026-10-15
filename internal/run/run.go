@@ -3,6 +3,7 @@ package run
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -189,6 +190,75 @@ func Start(o Options) (*Run, error) {
 	if err := r.Log(gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256}); err != nil {
 		r.Close()
 		return nil, err
+	}
+	return r, r.Save()
+}
+
+// Open locks and loads run id for resume, approve or reject, and checks that it may continue: the
+// caps are still complete, the graph and brief are unchanged, and the ledger reaches the anchor in
+// run.json. mode switches the run's mode at this pause ("" keeps it); a switch is logged.
+func Open(project, id string, mode gungnir.Mode) (*Run, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("%q is not a run id", id)
+	}
+	project, err := filepath.Abs(project)
+	if err != nil {
+		return nil, err
+	}
+	dir := Dir(project, id)
+	if _, err := os.Stat(filepath.Join(dir, "run.json")); err != nil {
+		return nil, fmt.Errorf("no run %s in %s", id, project)
+	}
+	unlock, err := Lock(dir)
+	if err != nil {
+		return nil, err
+	}
+	r, err := open(project, dir, mode)
+	if err != nil {
+		unlock()
+		return nil, err
+	}
+	r.unlock = unlock
+	return r, nil
+}
+
+func open(project, dir string, mode gungnir.Mode) (*Run, error) {
+	s, err := LoadState(dir)
+	if err != nil {
+		return nil, err
+	}
+	if mode == "" {
+		mode = s.Mode
+	}
+	setup, err := Prepare(Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Brief: s.Brief, Mode: mode})
+	if err != nil {
+		return nil, err
+	}
+	if setup.GraphSHA256 != s.GraphSHA256 {
+		return nil, errors.New("the realm's graph changed since the run started, so its positions no longer hold; start a new run")
+	}
+	if setup.BriefSHA256 != s.BriefSHA256 {
+		return nil, errors.New("the brief changed since the run started; a brief is frozen, so start a new run")
+	}
+	l, err := ledger.Open(filepath.Join(dir, "ledger.jsonl"), s.Ledger)
+	if err != nil {
+		return nil, err
+	}
+	r := &Run{Project: project, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
+	if setup.ConfigSHA256 != s.ConfigSHA256 {
+		s.ConfigSHA256 = setup.ConfigSHA256
+		if err := r.Log(gungnir.Event{Name: gungnir.EventConfigChanged, ConfigHash: setup.ConfigSHA256}); err != nil {
+			l.Close()
+			return nil, err
+		}
+	}
+	if mode != s.Mode {
+		looser := mode.Looser(s.Mode)
+		s.Mode = mode
+		if err := r.Log(gungnir.Event{Name: gungnir.EventModeChanged, Mode: mode, Looser: looser}); err != nil {
+			l.Close()
+			return nil, err
+		}
 	}
 	return r, r.Save()
 }

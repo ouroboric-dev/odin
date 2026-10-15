@@ -65,6 +65,21 @@ func TestRunRefusesWithoutCompleteCaps(t *testing.T) {
 			}
 		})
 	}
+	t.Run("resume refuses in the same cases", func(t *testing.T) {
+		project, cfgDir := t.TempDir(), t.TempDir()
+		r, err := Start(Options{Project: project, Config: writeConfig(t, cfgDir, scriptedRoles+fullCaps), Realm: toy(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := r.State.ID
+		r.Close()
+		writeConfig(t, cfgDir, scriptedRoles+"budget:\n  per_run: { tokens: 100000, turns: 100 }\n")
+		_, err = Open(project, id, "")
+		var ce *schema.CapsError
+		if !errors.As(err, &ce) || !strings.Contains(err.Error(), "budget.per_day") {
+			t.Errorf("Open() error = %v, want a *schema.CapsError naming budget.per_day", err)
+		}
+	})
 	t.Run("complete caps start a run", func(t *testing.T) {
 		project := t.TempDir()
 		r, err := Start(Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
