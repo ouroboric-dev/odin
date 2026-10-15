@@ -228,7 +228,8 @@ func (r *Run) Home() string { return filepath.Join(r.Dir, "home") }
 // LockFile returns the lock file of a repo of the project, in <project>/.factory/locks/.
 func (r *Run) LockFile(repo string) string { return LockFile(r.Project, repo) }
 
-// LockFile returns the lock file of a repo of project.
+// LockFile returns the lock file of a repo of project: the merge gate's for a leaf, the pointer
+// move's for an umbrella ("." is the project umbrella).
 func LockFile(project, repo string) string {
 	name := "project"
 	if repo != "." {
@@ -236,6 +237,10 @@ func LockFile(project, repo string) string {
 	}
 	return filepath.Join(project, ".factory", "locks", filepath.FromSlash(name)+".lock")
 }
+
+// RunsLock returns the lock that one advancing run of project holds. It is not the project
+// umbrella's own lock, which a pointer move into the umbrella takes while the run holds this one.
+func RunsLock(project string) string { return filepath.Join(project, ".factory", "locks", "runs.lock") }
 
 // ErrProjectBusy means another ygg process is advancing a run of the same project. One run at a
 // time walks a project's leaves, which share their working copies.
@@ -288,7 +293,7 @@ func takeLocks(project, dir string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	releaseProject, err := lock.Take(LockFile(project, "."))
+	releaseProject, err := lock.Take(RunsLock(project))
 	if err != nil {
 		releaseRun()
 		if errors.Is(err, lock.ErrHeld) {

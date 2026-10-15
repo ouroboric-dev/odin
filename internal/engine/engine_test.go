@@ -17,10 +17,16 @@ import (
 // starts a run on them in a fresh project, whose nodes work in the leaf repos/app.
 func start(t *testing.T, mode, gates, nodes, script string) *run.Run {
 	t.Helper()
+	return startPack(t, mode, gates, "", nodes, script)
+}
+
+// startPack is start with extra lines for the realm's pack.yaml, such as its checks.
+func startPack(t *testing.T, mode, gates, pack, nodes, script string) *run.Run {
+	t.Helper()
 	realm, cfg := t.TempDir(), t.TempDir()
 	project := treetest.Project(t, "repos/app")
 	files := map[string]string{
-		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n",
+		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + pack,
 		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nnodes:\n" + nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
 		filepath.Join(cfg, "script.yaml"):  script,
