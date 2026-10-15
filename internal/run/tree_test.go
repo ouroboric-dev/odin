@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/tree"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
@@ -23,7 +24,7 @@ func startToyRun(t *testing.T, config string) *Run {
 	return r
 }
 
-func TestARunFindsItsProjectAndReposInTheTree(t *testing.T) {
+func TestARunWorksInItsProjectsLeaves(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
 	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
 	if err != nil {
@@ -35,12 +36,16 @@ func TestARunFindsItsProjectAndReposInTheTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.RepoDir("repos/app") != nodes[1].Dir || r.RepoDir(".") != project {
-		t.Errorf("the run's repos are %s and %s", r.RepoDir("repos/app"), r.RepoDir("."))
-	}
+	app := git.Repo{GitDir: nodes[1].GitDir, WorkTree: nodes[1].Dir}
 	s, err := LoadState(Dir(project, id))
 	if err != nil {
 		t.Fatal(err)
+	}
+	rec := s.Leaves["repos/app"]
+	head, _ := app.Run(ctx, "rev-parse", "HEAD")
+	branch, _ := app.Run(ctx, "rev-parse", "--abbrev-ref", "HEAD")
+	if rec.Branch != "ygg/"+id || branch != rec.Branch || rec.Base != head || rec.Checkpoint != head {
+		t.Errorf("leaf record = %+v; the leaf is on %s at %s", rec, branch, head)
 	}
 	if s.Root != project || s.ProjectPath != "" {
 		t.Errorf("run.json places the run at %s in %s", s.ProjectPath, s.Root)
@@ -91,6 +96,26 @@ func TestPrepareRefusesAGraphTheProjectCantRun(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Prepare() = %v, want an error containing %q", name, err, c.want)
 		}
+	}
+}
+
+func TestAFailureAfterTheRunStartedIsRecorded(t *testing.T) {
+	project := treetest.Project(t, "repos/app")
+	nodes, err := tree.Resolve(ctx, project, "repos/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodes[1].Dir, "README.md"), []byte("a person's edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	var f *Failed
+	if !errors.As(err, &f) || !strings.Contains(err.Error(), "uncommitted") {
+		t.Fatalf("Start() = %v, want a *Failed: the leaf has a person's uncommitted edit", err)
+	}
+	s, err := LoadState(Dir(project, f.ID))
+	if err != nil || s.Status != StatusFailed || !strings.Contains(s.Error, "uncommitted") {
+		t.Errorf("run.json = %+v, %v; want the run recorded as failed, with why", s, err)
 	}
 }
 

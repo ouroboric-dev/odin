@@ -59,6 +59,7 @@ type State struct {
 	Roles        map[string]RoleRecord `json:"roles"`
 	Root         string                `json:"root"`                // the instance root, L0
 	ProjectPath  string                `json:"project"`             // the project's path from the root
+	Leaves       map[string]LeafRecord `json:"leaves"`              // leaf path from the project: the run's branch and checkpoint in it
 	Position     int                   `json:"position"`            // index of the next node to run
 	Attempts     map[string]int        `json:"attempts"`            // node id: attempts started
 	Pending      string                `json:"pending,omitempty"`   // the node waiting for a decision
@@ -70,6 +71,13 @@ type State struct {
 	Exec         *ExecProcess          `json:"exec,omitempty"` // the exec node running now, if any
 	Created      time.Time             `json:"created"`
 	Updated      time.Time             `json:"updated"`
+}
+
+// LeafRecord is where a run stands in one leaf (spec §4.3).
+type LeafRecord struct {
+	Branch     string `json:"branch"`     // the run's branch: ygg/<run id>
+	Base       string `json:"base"`       // the leaf's main when the run started
+	Checkpoint string `json:"checkpoint"` // the last checkpoint commit; resume resets the leaf to it
 }
 
 var idPattern = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$`)
@@ -151,6 +159,9 @@ func LoadState(dir string) (*State, error) {
 	}
 	if s.Summaries == nil {
 		s.Summaries = map[string]string{}
+	}
+	if s.Leaves == nil {
+		s.Leaves = map[string]LeafRecord{}
 	}
 	return &s, nil
 }

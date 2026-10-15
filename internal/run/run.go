@@ -196,6 +196,9 @@ type Run struct {
 	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
 }
 
+// Branch is the branch a run works on in every leaf.
+func Branch(id string) string { return "ygg/" + id }
+
 // RepoDir is the working copy of a repo the graph names.
 func (r *Run) RepoDir(repo string) string { return r.Setup.Repos[repo].Dir }
 
@@ -246,8 +249,18 @@ func (r *Run) Close() error {
 	return err
 }
 
-// Start prepares a new run, then creates its directory, run.json and first ledger line. If Prepare
-// refuses, or the run can't be recorded, nothing is left behind.
+// Failed is a run that started and then failed before its first node; run.json records why.
+type Failed struct {
+	ID  string
+	Err error
+}
+
+func (f *Failed) Error() string { return fmt.Sprintf("run %s failed: %v", f.ID, f.Err) }
+func (f *Failed) Unwrap() error { return f.Err }
+
+// Start prepares a new run, then creates its directory, run.json and first ledger line, and starts
+// the run's branch in every leaf. If Prepare refuses, or the run can't be recorded, nothing is left
+// behind. A failure after that is a *Failed.
 func Start(ctx context.Context, o Options) (*Run, error) {
 	setup, err := Prepare(ctx, o)
 	if err != nil {
@@ -267,7 +280,14 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		os.RemoveAll(dir) // the run's own new directory: nothing ran
 		return nil, err
 	}
-	return r, nil
+	if err := r.begin(ctx); err != nil {
+		r.State.Status, r.State.Error = StatusFailed, err.Error()
+		r.Log(gungnir.Event{Name: gungnir.EventRunFailed, Result: r.State.Error})
+		r.Save()
+		r.Close()
+		return nil, &Failed{ID: id, Err: err}
+	}
+	return r, r.Save()
 }
 
 // record locks the new run and writes its run.json and first ledger line.
@@ -288,7 +308,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		GraphVersion: setup.Graph.Version, GraphSHA256: setup.GraphSHA256,
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup),
-		Root: setup.Root, ProjectPath: setup.ProjectPath,
+		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
 		Created: now, Updated: now,
 	}}
@@ -309,6 +329,22 @@ func roles(setup *Setup) map[string]RoleRecord {
 		roles[name] = RoleRecord{Agent: setup.Config.Roles[name].Agent, Model: setup.Config.Roles[name].Model}
 	}
 	return roles
+}
+
+// begin starts the run's branch in every leaf.
+func (r *Run) begin(ctx context.Context) error {
+	for _, p := range r.Setup.Leaves() {
+		l, err := r.Leaf(p)
+		if err != nil {
+			return err
+		}
+		head, err := l.StartBranch(ctx, Branch(r.State.ID), "main")
+		if err != nil {
+			return err
+		}
+		r.State.Leaves[p] = LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head}
+	}
+	return nil
 }
 
 // Open locks and loads run id for resume, approve or reject, and checks that it may continue: the
