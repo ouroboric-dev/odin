@@ -33,8 +33,14 @@ func TestModeTimesApprovalPointTable(t *testing.T) {
 			t.Errorf("%s: got %v, want %v", g, got, want)
 		}
 	}
-	if len(table)+8 != len(gungnir.Gates()) {
-		t.Errorf("the table covers %d soft gates; gungnir knows %d gates", len(table), len(gungnir.Gates()))
+	soft := 0
+	for _, g := range gungnir.Gates() {
+		if !g.Hard() {
+			soft++
+		}
+	}
+	if len(table) != soft {
+		t.Errorf("the table covers %d soft gates; gungnir knows %d", len(table), soft)
 	}
 }
 
