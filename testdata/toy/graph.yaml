@@ -1,0 +1,14 @@
+# The toy graph: every node kind and four approval points, with a scripted agent (spec §13).
+name: toy
+version: 1.0.0
+nodes:
+  - { id: design, kind: agent, role: planner, prompt: prompts/design.md }
+  - { id: design-gate, kind: gate, gate: design }
+  - { id: spec, kind: agent, role: planner, prompt: prompts/spec.md }
+  - { id: spec-gate, kind: gate, gate: spec }
+  - { id: plan, kind: agent, role: planner, prompt: prompts/plan.md }
+  - { id: dor, kind: exec, run: [test, -s, plan.md] }
+  - { id: plan-gate, kind: gate, gate: plan, reruns: plan }
+  - { id: build, kind: agent, role: implementer, prompt: prompts/build.md }
+  - { id: check, kind: exec, run: [grep, -q, done, build.txt] }
+  - { id: feature-gate, kind: gate, gate: feature }

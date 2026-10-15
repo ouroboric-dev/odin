@@ -1,0 +1,16 @@
+# The scripted agent's answers for the toy graph. spec has a second attempt for a rejection.
+steps:
+  design:
+    - actions: [ { write: { path: design.md, content: "# Design\n" } } ]
+      result: { status: ok, summary: wrote design.md, usage: { in: 1000, out: 100, turns: 2 } }
+  spec:
+    - actions: [ { write: { path: spec.md, content: "# Spec\n" } } ]
+      result: { status: ok, summary: wrote spec.md, usage: { in: 1000, out: 100, turns: 2 } }
+    - actions: [ { write: { path: spec.md, content: "# Spec\n\nUsers: photographers and their clients.\n" } } ]
+      result: { status: ok, summary: named the users in spec.md, usage: { in: 1000, out: 100, turns: 2 } }
+  plan:
+    - actions: [ { write: { path: plan.md, content: "# Plan\n" } } ]
+      result: { status: ok, summary: wrote plan.md, usage: { in: 1000, out: 100, turns: 2 } }
+  build:
+    - actions: [ { write: { path: build.txt, content: "done\n" } } ]
+      result: { status: ok, summary: built it, usage: { in: 2000, out: 400, cache: 1500, turns: 5 } }
