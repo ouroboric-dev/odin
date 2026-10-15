@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
 // ygg runs one command in-process and returns its exit code, stdout and stderr.
@@ -17,16 +19,16 @@ func ygg(t *testing.T, args ...string) (int, string, string) {
 	return code, out.String(), errOut.String()
 }
 
-// project makes a project directory with a factory.yaml for the toy realm. Its roles use script,
-// a file in testdata/toy; extra is added to the config as is.
+// project makes a project umbrella in a fresh instance tree, and a factory.yaml for the toy realm
+// beside it. Its roles use script, a file in testdata/toy; extra is added to the config as is.
 func project(t *testing.T, script, extra string) (dir, config string) {
 	t.Helper()
 	toy, err := filepath.Abs("../../testdata/toy")
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir = t.TempDir()
-	config = filepath.Join(dir, "factory.yaml")
+	dir = treetest.Project(t, "repos/app")
+	config = filepath.Join(t.TempDir(), "factory.yaml")
 	s := filepath.Join(toy, script)
 	body := extra + "roles:\n  planner: { agent: scripted, model: none, script: " + s + " }\n" +
 		"  implementer: { agent: scripted, model: none, script: " + s + " }\n"

@@ -116,8 +116,8 @@ func TestToyGraphEndToEnd(t *testing.T) {
 			if names[len(names)-1] != "run_finished" {
 				t.Errorf("the last event is %s, want run_finished", names[len(names)-1])
 			}
-			if b, err := os.ReadFile(filepath.Join(dir, "workspace", "build.txt")); err != nil || string(b) != "done\n" {
-				t.Errorf("workspace/build.txt = %q, %v", b, err)
+			if b, err := os.ReadFile(filepath.Join(dir, "repos", "app", "build.txt")); err != nil || string(b) != "done\n" {
+				t.Errorf("repos/app/build.txt = %q, %v", b, err)
 			}
 		})
 	}
@@ -138,7 +138,7 @@ func TestToyGraphEndToEnd(t *testing.T) {
 		if code, _, _ := ygg(t, "approve", id, "spec-gate", "--project", dir); code != ExitDone {
 			t.Errorf("approve: exit %d, want 0", code)
 		}
-		if spec, _ := os.ReadFile(filepath.Join(dir, "workspace", "spec.md")); !strings.Contains(string(spec), "photographers") {
+		if spec, _ := os.ReadFile(filepath.Join(dir, "repos", "app", "spec.md")); !strings.Contains(string(spec), "photographers") {
 			t.Errorf("spec.md = %q, want attempt 2's text", spec)
 		}
 	})

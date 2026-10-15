@@ -10,13 +10,15 @@ import (
 
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/run"
+	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
 // start makes a realm with the given nodes and a prompt file, a script and a factory.yaml, and
-// starts a run on them in a fresh project.
+// starts a run on them in a fresh project, whose nodes work in the leaf repos/app.
 func start(t *testing.T, mode, gates, nodes, script string) *run.Run {
 	t.Helper()
-	realm, cfg, project := t.TempDir(), t.TempDir(), t.TempDir()
+	realm, cfg := t.TempDir(), t.TempDir()
+	project := treetest.Project(t, "repos/app")
 	files := map[string]string{
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n",
 		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nnodes:\n" + nodes,
@@ -31,7 +33,7 @@ func start(t *testing.T, mode, gates, nodes, script string) *run.Run {
 			t.Fatal(err)
 		}
 	}
-	r, err := run.Start(run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm})
+	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +57,7 @@ const okScript = `steps:
 `
 
 func TestAgentAndExecNodesRunInOrder(t *testing.T) {
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md }\n  - { id: check, kind: exec, run: [grep, -q, done, out.txt] }\n", okScript)
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: check, kind: exec, run: [grep, -q, done, out.txt], repo: repos/app }\n", okScript)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v; want done", out, err)
@@ -75,7 +77,7 @@ func TestAgentAndExecNodesRunInOrder(t *testing.T) {
 
 func TestAFailedNodeStopsTheRunAndResumeRerunsIt(t *testing.T) {
 	script := "steps:\n  a:\n    - result: { status: failed, summary: tests fail }\n    - result: { status: ok, summary: fixed }\n"
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md }\n", script)
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n", script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "tests fail") {
 		t.Fatalf("Advance() = %+v, %v; want failed with the agent's summary", out, err)
@@ -90,7 +92,7 @@ func TestAFailedNodeStopsTheRunAndResumeRerunsIt(t *testing.T) {
 
 func TestAMalformedAgentResultIsAFailureNotAPass(t *testing.T) {
 	script := "steps:\n  a:\n    - result: { status: ok, usage: { turns: -1 } }\n"
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md }\n", script)
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n", script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed {
 		t.Errorf("Advance() = %+v, %v; want failed", out, err)
@@ -100,11 +102,11 @@ func TestAMalformedAgentResultIsAFailureNotAPass(t *testing.T) {
 func TestExecGetsNoCredentialsFromTheOperator(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "operator-token")
 	t.Setenv("ANTHROPIC_API_KEY", "operator-key")
-	r := start(t, "key-points", "", "  - { id: env, kind: exec, run: [sh, -c, \"env > env.txt\"] }\n", "steps: {}\n")
+	r := start(t, "key-points", "", "  - { id: env, kind: exec, run: [sh, -c, \"env > env.txt\"], repo: repos/app }\n", "steps: {}\n")
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	b, err := os.ReadFile(filepath.Join(r.Workspace(), "env.txt"))
+	b, err := os.ReadFile(filepath.Join(r.RepoDir("repos/app"), "env.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +122,7 @@ func TestExecGetsNoCredentialsFromTheOperator(t *testing.T) {
 
 func TestAnExecTimeoutKillsTheProcessGroup(t *testing.T) {
 	r := start(t, "key-points", "",
-		"  - { id: slow, kind: exec, run: [sh, -c, \"sleep 30 & echo $! > child.pid; wait\"], timeout: 300ms }\n", "steps: {}\n")
+		"  - { id: slow, kind: exec, run: [sh, -c, \"sleep 30 & echo $! > child.pid; wait\"], timeout: 300ms, repo: repos/app }\n", "steps: {}\n")
 	began := time.Now()
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed {
@@ -129,7 +131,7 @@ func TestAnExecTimeoutKillsTheProcessGroup(t *testing.T) {
 	if time.Since(began) > 10*time.Second {
 		t.Errorf("Advance() took %v; the timeout didn't stop it", time.Since(began))
 	}
-	pid := strings.TrimSpace(string(must(os.ReadFile(filepath.Join(r.Workspace(), "child.pid")))))
+	pid := strings.TrimSpace(string(must(os.ReadFile(filepath.Join(r.RepoDir("repos/app"), "child.pid")))))
 	// A killed child is dead once it is gone or a zombie: in a container whose PID 1 doesn't
 	// reap orphans, such as CI's, it stays a zombie.
 	for deadline := time.Now().Add(2 * time.Second); running(pid); time.Sleep(20 * time.Millisecond) {
@@ -155,7 +157,7 @@ func must(b []byte, err error) []byte {
 
 func TestAnInterruptedAgentCountsItsAttempt(t *testing.T) {
 	script := "steps:\n  a:\n    - hang: true\n    - result: { status: ok, summary: done }\n"
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md }\n", script)
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n", script)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusFailed {
@@ -174,12 +176,12 @@ func TestAnInterruptedAgentCountsItsAttempt(t *testing.T) {
 
 func TestRunJSONRecordsTheRunningExecProcess(t *testing.T) {
 	// The node waits up to 5s for the record, since the engine saves it just after the node starts.
-	peek := `for i in $(seq 50); do grep -q pgid ../.factory/runs/*/run.json && break; sleep 0.1; done; cat ../.factory/runs/*/run.json > seen.json`
-	r := start(t, "key-points", "", "  - { id: peek, kind: exec, run: [sh, -c, '"+peek+"'] }\n", "steps: {}\n")
+	peek := `for i in $(seq 50); do grep -q pgid ../.factory/runs/*/run.json && break; sleep 0.1; done; cat ../../.factory/runs/*/run.json > seen.json`
+	r := start(t, "key-points", "", "  - { id: peek, kind: exec, run: [sh, -c, '"+peek+"'], repo: repos/app }\n", "steps: {}\n")
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	seen, err := os.ReadFile(filepath.Join(r.Workspace(), "seen.json"))
+	seen, err := os.ReadFile(filepath.Join(r.RepoDir("repos/app"), "seen.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

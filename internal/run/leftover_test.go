@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
 // leftover starts script in its own process group, as the engine starts exec nodes, and records
@@ -47,8 +49,8 @@ func leftover(t *testing.T, project, id, script string) (pgid, child int) {
 
 func startToy(t *testing.T) (project, id string) {
 	t.Helper()
-	project = t.TempDir()
-	r, err := Start(Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	project = treetest.Project(t, "repos/app")
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +66,7 @@ func alive(pid int) bool {
 func TestOpenStopsAnExecProcessAKilledYggLeftBehind(t *testing.T) {
 	project, id := startToy(t)
 	pgid, child := leftover(t, project, id, "sleep 30 & echo $! > pid; wait")
-	r, err := Open(project, id, "")
+	r, err := Open(ctx, project, id, "")
 	if err != nil {
 		t.Fatalf("Open() = %v", err)
 	}
@@ -83,7 +85,7 @@ func TestOpenRefusesWhenItCantTellALeftoverGroupIsTheRuns(t *testing.T) {
 	project, id := startToy(t)
 	// The leader exits at once, so only its background child keeps the group alive.
 	_, child := leftover(t, project, id, "sleep 30 & echo $! > pid")
-	if _, err := Open(project, id, ""); err == nil || !strings.Contains(err.Error(), "may still be running") {
+	if _, err := Open(ctx, project, id, ""); err == nil || !strings.Contains(err.Error(), "may still be running") {
 		t.Errorf("Open() = %v, want a refusal that names the running group", err)
 	}
 	if !alive(child) {

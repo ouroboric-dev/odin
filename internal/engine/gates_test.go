@@ -11,7 +11,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-const gateNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md }\n  - { id: check, kind: exec, run: [test, -s, spec.md] }\n  - { id: spec-gate, kind: gate, gate: spec, reruns: spec }\n"
+const gateNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: check, kind: exec, run: [test, -s, spec.md], repo: repos/app }\n  - { id: spec-gate, kind: gate, gate: spec, reruns: spec }\n"
 
 const gateScript = `steps:
   spec:

@@ -120,7 +120,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Log(start); err != nil {
 		return err
 	}
-	task := gungnir.Task{Role: n.Role, Node: n.ID, Attempt: attempt, Prompt: text, Workdir: r.Workspace(),
+	task := gungnir.Task{Role: n.Role, Node: n.ID, Attempt: attempt, Prompt: text, Workdir: r.RepoDir(n.Repo),
 		Model: role.Model, ReadOnly: n.ReadOnly, MaxTurns: n.MaxTurns, Timeout: time.Duration(n.Timeout),
 		TranscriptDir: filepath.Join(r.Dir, "transcripts")}
 	actx, cancel := ctx, context.CancelFunc(func() {})
@@ -159,8 +159,8 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	return nil
 }
 
-// runExec runs n's command in the workspace, without a shell. The command gets only PATH, HOME
-// (the workspace) and LANG, so no credential in the operator's environment reaches it. A cancel
+// runExec runs n's command in its repo, without a shell. The command gets only PATH, HOME (the
+// run's own directory, so caches never land in a repo) and LANG, so no credential in the operator's environment reaches it. A cancel
 // or timeout kills the command's whole process group (spec §6.2). Phase 3 moves leaf commands
 // into the sandbox.
 func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
@@ -187,8 +187,8 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, n.Run[0], n.Run[1:]...)
-	cmd.Dir = r.Workspace()
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + r.Workspace(), "LANG=C.UTF-8"}
+	cmd.Dir = r.RepoDir(n.Repo)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + r.Home(), "LANG=C.UTF-8"}
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

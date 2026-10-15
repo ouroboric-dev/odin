@@ -23,7 +23,7 @@ import (
 )
 
 // StateSchema names the run.json format.
-const StateSchema = "ygg.run/v1"
+const StateSchema = "ygg.run/v2" // v2: runs live in the instance tree (Phase 2)
 
 // Status is where a run stands.
 type Status string
@@ -57,9 +57,11 @@ type State struct {
 	Brief        string                `json:"brief,omitempty"`
 	BriefSHA256  string                `json:"brief_sha256,omitempty"`
 	Roles        map[string]RoleRecord `json:"roles"`
+	Root         string                `json:"root"`                // the instance root, L0
+	ProjectPath  string                `json:"project"`             // the project's path from the root
 	Position     int                   `json:"position"`            // index of the next node to run
 	Attempts     map[string]int        `json:"attempts"`            // node id: attempts started
-	Pending      string                `json:"pending,omitempty"`   // the gate node waiting for a decision
+	Pending      string                `json:"pending,omitempty"`   // the node waiting for a decision
 	Reasons      map[string]string     `json:"reasons,omitempty"`   // node id: rejection reason for its next attempt
 	Summaries    map[string]string     `json:"summaries,omitempty"` // node id: its last result
 	Usage        gungnir.Usage         `json:"usage"`

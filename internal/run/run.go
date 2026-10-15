@@ -1,24 +1,28 @@
 package run
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/agents"
+	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
+	"github.com/ouroboric-dev/odin/internal/tree"
 )
 
 // Options say what to run.
 type Options struct {
-	Project string       // the directory that holds .factory/ and workspace/
+	Project string       // the project umbrella (L1), inside an instance tree
 	Config  string       // factory.yaml
 	Realm   string       // the directory that holds pack.yaml
 	Brief   string       // optional
@@ -39,12 +43,19 @@ type Setup struct {
 	BriefSHA256  string
 	Mode         gungnir.Mode
 	Agents       map[string]gungnir.Agent // role: adapter, for every role the graph uses
+
+	Root        string               // the tree's root: the project, or an umbrella above it
+	ProjectPath string               // the project's path from the root
+	Project     tree.Node            // the project umbrella
+	Repos       map[string]tree.Node // every repo the graph names, by path from the project; "." is the project
 }
 
-// Prepare loads and checks the config, the realm and the brief, and builds the agents. It writes
-// nothing. Incomplete caps give a *schema.CapsError (change require-budget-caps).
-func Prepare(o Options) (*Setup, error) {
-	s := &Setup{Agents: map[string]gungnir.Agent{}}
+// Prepare loads and checks the config, the realm, the brief and the project's place in the
+// instance tree, and builds the agents. It writes nothing, and checks out only the submodules on
+// the paths to the project and its repos. Incomplete caps give a *schema.CapsError (change
+// require-budget-caps).
+func Prepare(ctx context.Context, o Options) (*Setup, error) {
+	s := &Setup{Agents: map[string]gungnir.Agent{}, Repos: map[string]tree.Node{}}
 	var err error
 	if s.ConfigPath, err = filepath.Abs(o.Config); err != nil {
 		return nil, err
@@ -79,22 +90,12 @@ func Prepare(o Options) (*Setup, error) {
 		return nil, err
 	}
 	s.GraphSHA256 = sum(graphData)
+	if err := s.findProject(ctx, o.Project); err != nil {
+		return nil, err
+	}
 	for _, n := range s.Graph.Nodes {
-		if n.Kind != schema.KindAgent {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(s.RealmDir, n.Prompt)); err != nil {
-			return nil, fmt.Errorf("%s: node %s: %w", graphPath, n.ID, err)
-		}
-		if s.Agents[n.Role] != nil {
-			continue
-		}
-		role, ok := s.Config.Roles[n.Role]
-		if !ok {
-			return nil, fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
-		}
-		if s.Agents[n.Role], err = agents.New(role, filepath.Dir(s.ConfigPath)); err != nil {
-			return nil, fmt.Errorf("role %s: %w", n.Role, err)
+		if err := s.checkNode(ctx, graphPath, n); err != nil {
+			return nil, err
 		}
 	}
 	if o.Brief != "" {
@@ -110,6 +111,80 @@ func Prepare(o Options) (*Setup, error) {
 	return s, nil
 }
 
+// findProject places the project in the instance tree: Odin runs on nothing outside it, because a
+// resume resets leaves (spec §4.3).
+func (s *Setup) findProject(ctx context.Context, project string) error {
+	var err error
+	if s.Root, s.ProjectPath, err = tree.FindRoot(ctx, project); err != nil {
+		return err
+	}
+	nodes, err := tree.Resolve(ctx, s.Root, s.ProjectPath)
+	if err != nil {
+		return err
+	}
+	s.Project = nodes[len(nodes)-1]
+	if s.Project.Kind != schema.ChildUmbrella {
+		return fmt.Errorf("%s is a leaf; --project names a project umbrella", project)
+	}
+	s.Repos["."] = s.Project
+	return nil
+}
+
+// checkNode checks that node n can run in this project: its repo, its role and prompt, its checks.
+func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) error {
+	if n.Kind == schema.KindGate {
+		return nil
+	}
+	if n.Repo == "" {
+		return fmt.Errorf("%s: node %s names no repo; every node that does work runs in a repo of the project", graphPath, n.ID)
+	}
+	if _, ok := s.Repos[n.Repo]; !ok {
+		nodes, err := tree.Resolve(ctx, s.Root, filepath.Join(s.ProjectPath, n.Repo))
+		if err != nil {
+			return fmt.Errorf("%s: node %s works in %s, which the project lacks: %w", graphPath, n.ID, n.Repo, err)
+		}
+		s.Repos[n.Repo] = nodes[len(nodes)-1]
+	}
+	if n.Kind != schema.KindExec && s.Repos[n.Repo].Kind != schema.ChildLeaf {
+		return fmt.Errorf("%s: node %s works in %s, which is an umbrella; agents, merges and pointer moves work in a leaf (spec §3.3)", graphPath, n.ID, n.Repo)
+	}
+	for _, c := range slices.Concat(n.Checks, n.Acceptance) {
+		if _, ok := s.Pack.Checks[c]; !ok {
+			return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
+		}
+	}
+	if n.Kind != schema.KindAgent {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(s.RealmDir, n.Prompt)); err != nil {
+		return fmt.Errorf("%s: node %s: %w", graphPath, n.ID, err)
+	}
+	if s.Agents[n.Role] != nil {
+		return nil
+	}
+	role, ok := s.Config.Roles[n.Role]
+	if !ok {
+		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
+	}
+	var err error
+	if s.Agents[n.Role], err = agents.New(role, filepath.Dir(s.ConfigPath)); err != nil {
+		return fmt.Errorf("role %s: %w", n.Role, err)
+	}
+	return nil
+}
+
+// Leaves returns the paths of the leaves the graph works in, sorted.
+func (s *Setup) Leaves() []string {
+	var ls []string
+	for p, n := range s.Repos {
+		if n.Kind == schema.ChildLeaf {
+			ls = append(ls, p)
+		}
+	}
+	slices.Sort(ls)
+	return ls
+}
+
 // Run is an open run: its directory, state, setup, ledger and lock.
 type Run struct {
 	Project string
@@ -121,8 +196,15 @@ type Run struct {
 	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
 }
 
-// Workspace is the directory agents and exec nodes work in. Phase 2 replaces it with the leaf.
-func (r *Run) Workspace() string { return filepath.Join(r.Project, "workspace") }
+// RepoDir is the working copy of a repo the graph names.
+func (r *Run) RepoDir(repo string) string { return r.Setup.Repos[repo].Dir }
+
+// Leaf returns a leaf the graph works in.
+func (r *Run) Leaf(repo string) (*leaf.Leaf, error) { return leaf.Open(r.Setup.Repos[repo]) }
+
+// Home is the HOME of exec nodes: the run's own directory, never a repo, so caches don't end up
+// in a commit.
+func (r *Run) Home() string { return filepath.Join(r.Dir, "home") }
 
 // Log appends e to the ledger, with the run's id. A switch Open found is logged first.
 func (r *Run) Log(e gungnir.Event) error {
@@ -164,28 +246,32 @@ func (r *Run) Close() error {
 	return err
 }
 
-// Start prepares a new run, then creates its directory, run.json and first ledger line. If
-// Prepare refuses, nothing is created.
-func Start(o Options) (*Run, error) {
-	setup, err := Prepare(o)
+// Start prepares a new run, then creates its directory, run.json and first ledger line. If Prepare
+// refuses, or the run can't be recorded, nothing is left behind.
+func Start(ctx context.Context, o Options) (*Run, error) {
+	setup, err := Prepare(ctx, o)
 	if err != nil {
 		return nil, err
 	}
-	project, err := filepath.Abs(o.Project)
-	if err != nil {
-		return nil, err
-	}
+	project := setup.Project.Dir
 	id, err := NewIDNow()
 	if err != nil {
 		return nil, err
 	}
 	dir := Dir(project, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "home"), 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Join(project, "workspace"), 0o755); err != nil {
+	r, err := record(project, dir, id, setup)
+	if err != nil {
+		os.RemoveAll(dir) // the run's own new directory: nothing ran
 		return nil, err
 	}
+	return r, nil
+}
+
+// record locks the new run and writes its run.json and first ledger line.
+func record(project, dir, id string, setup *Setup) (*Run, error) {
 	unlock, err := Lock(dir)
 	if err != nil {
 		return nil, err
@@ -196,16 +282,13 @@ func Start(o Options) (*Run, error) {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	roles := map[string]RoleRecord{}
-	for name := range setup.Agents {
-		roles[name] = RoleRecord{Agent: setup.Config.Roles[name].Agent, Model: setup.Config.Roles[name].Model}
-	}
 	r := &Run{Project: project, Dir: dir, Setup: setup, Ledger: l, unlock: unlock, State: &State{
 		ID: id, Status: StatusRunning, Mode: setup.Mode,
 		Realm: setup.Pack.Name, RealmVersion: setup.Pack.Version, RealmDir: setup.RealmDir,
 		GraphVersion: setup.Graph.Version, GraphSHA256: setup.GraphSHA256,
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
-		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles,
+		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup),
+		Root: setup.Root, ProjectPath: setup.ProjectPath,
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
 		Created: now, Updated: now,
 	}}
@@ -213,13 +296,25 @@ func Start(o Options) (*Run, error) {
 		r.Close()
 		return nil, err
 	}
-	return r, r.Save()
+	if err := r.Save(); err != nil {
+		r.Close()
+		return nil, err
+	}
+	return r, nil
+}
+
+func roles(setup *Setup) map[string]RoleRecord {
+	roles := map[string]RoleRecord{}
+	for name := range setup.Agents {
+		roles[name] = RoleRecord{Agent: setup.Config.Roles[name].Agent, Model: setup.Config.Roles[name].Model}
+	}
+	return roles
 }
 
 // Open locks and loads run id for resume, approve or reject, and checks that it may continue: the
-// caps are still complete, the graph and brief are unchanged, and the ledger reaches the anchor in
+// caps are still complete, the graph and brief are unchanged, the ledger reaches the anchor in
 // run.json. mode switches the run's mode at this pause ("" keeps it); a switch is logged.
-func Open(project, id string, mode gungnir.Mode) (*Run, error) {
+func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("%q is not a run id", id)
 	}
@@ -235,7 +330,7 @@ func Open(project, id string, mode gungnir.Mode) (*Run, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := open(project, dir, mode)
+	r, err := open(ctx, project, dir, mode)
 	if err != nil {
 		unlock()
 		return nil, err
@@ -244,7 +339,7 @@ func Open(project, id string, mode gungnir.Mode) (*Run, error) {
 	return r, nil
 }
 
-func open(project, dir string, mode gungnir.Mode) (*Run, error) {
+func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, error) {
 	s, err := LoadState(dir)
 	if err != nil {
 		return nil, err
@@ -252,7 +347,7 @@ func open(project, dir string, mode gungnir.Mode) (*Run, error) {
 	if mode == "" {
 		mode = s.Mode
 	}
-	setup, err := Prepare(Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Brief: s.Brief, Mode: mode})
+	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Brief: s.Brief, Mode: mode})
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +356,9 @@ func open(project, dir string, mode gungnir.Mode) (*Run, error) {
 	}
 	if setup.BriefSHA256 != s.BriefSHA256 {
 		return nil, errors.New("the brief changed since the run started; a brief is frozen, so start a new run")
+	}
+	if setup.Root != s.Root || setup.ProjectPath != s.ProjectPath {
+		return nil, fmt.Errorf("the run belongs to %s in %s, not this project", s.ProjectPath, s.Root)
 	}
 	l, err := ledger.Open(filepath.Join(dir, "ledger.jsonl"), s.Ledger)
 	if err != nil {
@@ -273,7 +371,7 @@ func open(project, dir string, mode gungnir.Mode) (*Run, error) {
 		}
 		s.Exec = nil
 	}
-	r := &Run{Project: project, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
+	r := &Run{Project: setup.Project.Dir, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
 	// The switches apply in memory now, and reach the ledger and run.json with the command's first
 	// write (Log or Save). A refused command writes nothing, so it switches nothing.
 	if setup.ConfigSHA256 != s.ConfigSHA256 {

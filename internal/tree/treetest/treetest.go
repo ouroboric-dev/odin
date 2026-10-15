@@ -47,6 +47,17 @@ func Deep() Node {
 				"repos/api": {Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Leaf: true}}}}}}}
 }
 
+// Project builds a project umbrella that is its own tree's root, with the given leaves (path from
+// the project), and returns its fresh clone. The leaves stay unchecked-out, as in a fresh clone.
+func Project(t *testing.T, leaves ...string) string {
+	t.Helper()
+	project := Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Children: map[string]Node{}}
+	for _, l := range leaves {
+		project.Children[l] = Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Leaf: true}
+	}
+	return Build(t, project)
+}
+
 // Build makes the tree's repos and returns the path of a fresh clone of the root, with no
 // submodule initialised.
 func Build(t *testing.T, root Node) string {
@@ -111,4 +122,18 @@ func write(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// SubProject builds a project that holds a sub-project, projects/sub, with the given leaves, and
+// returns the root and the sub-project's directory, checked out. A project MAY hold sub-projects
+// (change project-is-its-own-tree), though company-shaped work belongs in Asgard.
+func SubProject(t *testing.T, leaves ...string) (root, sub string) {
+	t.Helper()
+	child := Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Children: map[string]Node{}}
+	for _, l := range leaves {
+		child.Children[l] = Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Leaf: true}
+	}
+	root = Build(t, Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Children: map[string]Node{"projects/sub": child}})
+	run(t, context.Background(), root, "submodule", "update", "--init", "--", "projects/sub")
+	return root, filepath.Join(root, "projects", "sub")
 }

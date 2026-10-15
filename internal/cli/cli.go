@@ -121,7 +121,7 @@ func (c *command) run(args []string) int {
 	if !ok {
 		return ExitRefused
 	}
-	r, err := run.Start(run.Options{Project: f.project, Config: f.config, Realm: f.realm, Brief: f.brief, Mode: mode})
+	r, err := run.Start(c.ctx, run.Options{Project: f.project, Config: f.config, Realm: f.realm, Brief: f.brief, Mode: mode})
 	if err != nil {
 		return c.refuse(err)
 	}
@@ -136,7 +136,7 @@ func (c *command) open(f *flags, id string) (*run.Run, int) {
 	if !ok {
 		return nil, ExitRefused
 	}
-	r, err := run.Open(f.project, id, mode)
+	r, err := run.Open(c.ctx, f.project, id, mode)
 	if err != nil {
 		return nil, c.refuse(err)
 	}
