@@ -1,0 +1,14 @@
+# The toy graph for sandboxed runs: the same nodes as the toy realm, with no acceptance check, which
+# runs in the project umbrella and so outside any sandbox (Phase 3, decision 11).
+name: toy-sandbox
+version: 0.1.0
+nodes:
+  - { id: design, kind: agent, role: planner, prompt: prompts/design.md, repo: repos/app }
+  - { id: design-gate, kind: gate, gate: design }
+  - { id: build, kind: agent, role: implementer, prompt: prompts/build.md, repo: repos/app }
+  - { id: check, kind: exec, run: [grep, -q, done, build.txt], repo: repos/app }
+  - { id: feature-gate, kind: gate, gate: feature }
+  - { id: merge-gate, kind: gate, gate: merge }
+  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }
+  - { id: pointer-gate, kind: gate, gate: pointer }
+  - { id: pointer, kind: pointer, repo: repos/app, checks: [unit] }

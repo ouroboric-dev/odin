@@ -109,7 +109,7 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 	switch {
 	case n.Kind == schema.KindGate:
 		s.Position++
-	case s.PendingGate == gungnir.GatePolicyViolation:
+	case run.Quarantines(s.PendingGate):
 		rec := s.Leaves[n.Repo]
 		l, err := r.Leaf(n.Repo)
 		if err != nil {
@@ -171,8 +171,8 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Time: %s\n\n## Why\n\n%v\n\n", s.ID, s.Mode,
 		time.Now().UTC().Format(time.RFC3339), h.err)
 	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
-	if h.gate == gungnir.GatePolicyViolation {
-		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again.\n", n.Repo, n.ID)
+	if run.Quarantines(h.gate) {
+		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again; what the node wrote is not saved.\n", n.Repo, n.ID)
 	} else {
 		b.WriteString("Approving lands this move with the generated files as they are.\n")
 	}

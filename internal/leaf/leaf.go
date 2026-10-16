@@ -7,10 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/git"
@@ -135,6 +138,49 @@ func (l *Leaf) Save(ctx context.Context, ref, since, msg string) (saved bool, er
 	return true, nil
 }
 
+// KeepCommits is Save without the working tree, for a leaf whose uncommitted work must not go into
+// git (it was never scanned for secrets): when the branch has moved past since, it creates ref
+// (which must not exist) at the branch head, so the commits a reset to since drops stay reachable.
+// It writes no object. kept is false when the branch is at since.
+func (l *Leaf) KeepCommits(ctx context.Context, ref, since, msg string) (kept bool, err error) {
+	head, err := l.Head(ctx)
+	if err != nil || head == since {
+		return false, err
+	}
+	// An empty old value: create the ref, never overwrite one.
+	if _, err := l.repo.Run(ctx, "update-ref", "-m", msg, ref, head, ""); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Pending returns, sorted, the files a checkpoint would commit content for, as host git sees them:
+// tracked files that differ from HEAD (staged or not, a link included), and new files that are not
+// ignored. Deleted files commit no content and are left out. The secret scan reads exactly these
+// (decision 12), so nothing in the sandbox picks what is scanned. A leaf that breaks a sandbox rule
+// is a *PolicyError, like a checkpoint.
+func (l *Leaf) Pending(ctx context.Context) ([]string, error) {
+	if err := l.Guard(); err != nil {
+		return nil, err
+	}
+	changed, err := l.repo.Output(ctx, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=d", "HEAD", "--")
+	if err != nil {
+		return nil, err
+	}
+	added, err := l.repo.Output(ctx, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, f := range strings.Split(string(changed)+string(added), "\x00") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	slices.Sort(files)
+	return slices.Compact(files), nil
+}
+
 // Guard refuses a leaf that breaks a sandbox rule — a rewritten .git file, or a planted git
 // repository below its top level — without committing anything. A merge gate's or pointer move's
 // checks run leaf code, so Odin re-checks the leaf before it runs parent git on it (decision 3, 9).
@@ -143,6 +189,20 @@ func (l *Leaf) Guard() error {
 		return err
 	}
 	return l.checkNested()
+}
+
+// Tidy puts the leaf's working tree back to the commit it has checked out, after a node's checks ran
+// there: what a check wrote is removed, ignored files stay. A rewritten .git file or a planted
+// repository is a *PolicyError, and nothing is touched, so a clean can't erase the evidence.
+func (l *Leaf) Tidy(ctx context.Context) error {
+	if err := l.Guard(); err != nil {
+		return err
+	}
+	if _, err := l.repo.Run(ctx, "reset", "-q", "--hard", "HEAD"); err != nil {
+		return err
+	}
+	_, err := l.repo.Run(ctx, "clean", "-q", "-ffd")
+	return err
 }
 
 // Reset puts the leaf back to commit sha on branch: the branch is moved to sha and checked out,
@@ -160,11 +220,35 @@ func (l *Leaf) Reset(ctx context.Context, branch, sha string) error {
 	return err
 }
 
-// checkGitFile refuses a leaf whose .git no longer points at the git dir Odin holds for it.
+// maxGitFile bounds what Odin reads of a leaf's .git file: git writes one short line.
+const maxGitFile = 4096
+
+// checkGitFile refuses a leaf whose .git no longer points at the git dir Odin holds for it. A .git
+// that is not a regular file (a link, a named pipe) is refused before it is opened, and the file is
+// opened without following a link or waiting on a pipe, then read only up to maxGitFile.
 func (l *Leaf) checkGitFile() error {
-	b, err := os.ReadFile(filepath.Join(l.Dir(), ".git"))
+	p := filepath.Join(l.Dir(), ".git")
+	st, err := os.Lstat(p)
 	if err != nil {
 		return &PolicyError{fmt.Sprintf("the leaf's .git is not the file git made: %v", err)}
+	}
+	if !st.Mode().IsRegular() {
+		return &PolicyError{fmt.Sprintf("the leaf's .git is %s, not the file git made", kind(st.Mode()))}
+	}
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return &PolicyError{fmt.Sprintf("the leaf's .git is not the file git made: %v", err)}
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return &PolicyError{"the leaf's .git is not the file git made"}
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxGitFile+1))
+	if err != nil {
+		return &PolicyError{fmt.Sprintf("the leaf's .git is not the file git made: %v", err)}
+	}
+	if len(b) > maxGitFile {
+		return &PolicyError{"the leaf's .git file was changed: it is larger than git makes it"}
 	}
 	target, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir: ")
 	if !ok {
@@ -181,16 +265,56 @@ func (l *Leaf) checkGitFile() error {
 	return nil
 }
 
+// restoreGitFile puts back the .git file git made. A .git that is not a regular file (a directory,
+// a symlink, a named pipe) is a *PolicyError and stays as it is: Odin never reads or writes through
+// it. The new file is created in the leaf and renamed over .git, so the restore replaces the name
+// and never writes to a file a link shares.
 func (l *Leaf) restoreGitFile() error {
 	rel, err := filepath.Rel(l.Dir(), l.repo.GitDir)
 	if err != nil {
 		return err
 	}
 	p := filepath.Join(l.Dir(), ".git")
-	if st, err := os.Lstat(p); err == nil && st.IsDir() {
-		return &PolicyError{"the leaf's .git is a directory"}
+	if st, err := os.Lstat(p); err == nil && !st.Mode().IsRegular() {
+		return &PolicyError{fmt.Sprintf("the leaf's .git is %s, not the file git made; remove it, and Odin puts the file back", kind(st.Mode()))}
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
-	return os.WriteFile(p, []byte("gitdir: "+rel+"\n"), 0o644)
+	f, err := os.CreateTemp(l.Dir(), ".git.ygg-*")
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString("gitdir: " + rel + "\n")
+	if err == nil {
+		err = f.Chmod(0o644)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), p)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
+}
+
+// kind names a file type that is not a regular file.
+func kind(m fs.FileMode) string {
+	switch {
+	case m.IsDir():
+		return "a directory"
+	case m&fs.ModeSymlink != 0:
+		return "a symlink"
+	case m&fs.ModeNamedPipe != 0:
+		return "a named pipe"
+	case m&fs.ModeSocket != 0:
+		return "a socket"
+	case m&fs.ModeDevice != 0:
+		return "a device"
+	}
+	return "not a regular file"
 }
 
 // checkNested refuses any .git below the leaf's top level: an agent can build a repository from

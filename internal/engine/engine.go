@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ouroboric-dev/gleipnir/sandbox"
+	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/leaf"
@@ -27,13 +29,25 @@ type Outcome struct {
 	Status run.Status // done, stopped or failed
 	Gate   string     // stopped: the gate node waiting for a decision
 	Err    error      // failed: why
+	Warn   []string   // what the run couldn't clean up, such as a sandbox that wouldn't stop; doctor finds it
 }
 
 // Advance runs nodes from the run's position until the graph ends, an approval point stops the
 // run, or a node fails. It saves run.json after every node. Every node is safe to re-run: resume
 // starts the interrupted node again from scratch (spec §4.3). The returned error is for failures
 // of Odin itself (disk, ledger); a failing node is an Outcome.
-func Advance(ctx context.Context, r *run.Run) (Outcome, error) {
+func Advance(ctx context.Context, r *run.Run) (out Outcome, err error) {
+	// Every sandbox this call started stops when it returns, whatever way it returns. A sandbox that
+	// won't stop stays recorded in run.json, and the next resume or ygg doctor stops it.
+	defer func() {
+		if derr := r.DownSandboxes(context.WithoutCancel(ctx)); derr != nil {
+			out.Warn = append(out.Warn, derr.Error())
+		}
+	}()
+	return advance(ctx, r)
+}
+
+func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 	s := r.State
 	if s.Pending != "" {
 		return Outcome{Status: run.StatusStopped, Gate: s.Pending}, nil
@@ -117,6 +131,14 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 		return err
 	}
 	text := string(prompt)
+	// Skills load explicitly, the ones this node names, and no others (spec §5.1).
+	skillText, err := r.Setup.Libs.Load(n.Skills)
+	if err != nil {
+		return err
+	}
+	if skillText != "" {
+		text += "\n\n" + skillText
+	}
 	if r.Setup.BriefText != "" {
 		text += "\n\n## Brief\n\n" + r.Setup.BriefText
 	}
@@ -129,9 +151,13 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Log(start); err != nil {
 		return err
 	}
+	runner, err := r.Runner(ctx, n.Repo)
+	if err != nil {
+		return sandboxStart(err)
+	}
 	task := gungnir.Task{Role: n.Role, Node: n.ID, Attempt: attempt, Prompt: text, Workdir: r.RepoDir(n.Repo),
 		Model: role.Model, ReadOnly: n.ReadOnly, MaxTurns: n.MaxTurns, Timeout: time.Duration(n.Timeout),
-		TranscriptDir: filepath.Join(r.Dir, "transcripts")}
+		TranscriptDir: filepath.Join(r.Dir, "transcripts"), Sandbox: runner}
 	actx, cancel := ctx, context.CancelFunc(func() {})
 	if task.Timeout > 0 {
 		actx, cancel = context.WithTimeout(ctx, task.Timeout)
@@ -146,6 +172,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 			// Only a well-formed result's usage counts; a malformed one is never trusted.
 			s.Usage = s.Usage.Add(res.Usage)
 			ev = ev.WithUsage(res.Usage)
+			ev.Provider, ev.CLIVersion = res.Provider, res.CLIVersion
 			if res.Status != gungnir.StatusOK {
 				runErr = fmt.Errorf("the agent reported %s: %s", res.Status, res.Summary)
 			}
@@ -158,6 +185,11 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 			return err
 		}
 		return &nodeFailure{runErr}
+	}
+	if n.ReadOnly {
+		if err := readOnly(ctx, r, n); err != nil {
+			return failCheckpoint(r, ev, err)
+		}
 	}
 	if ev.Commit, err = checkpoint(ctx, r, n, attempt); err != nil {
 		return failCheckpoint(r, ev, err)
@@ -182,7 +214,7 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 	}
 	logPath := filepath.Join(r.Dir, "logs", fmt.Sprintf("%s-%d.log", n.ID, attempt))
 	began := time.Now()
-	runErr, err := command(ctx, r, n.ID, n.Run, r.RepoDir(n.Repo), time.Duration(n.Timeout), logPath)
+	runErr, err := command(ctx, r, n.ID, n.Repo, r.RepoDir(n.Repo), n.Run, time.Duration(n.Timeout), logPath)
 	if err != nil {
 		return err
 	}
@@ -207,13 +239,30 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 	return nil
 }
 
-// command runs args in dir, without a shell, for node. The command gets only PATH, HOME (the run's
-// own directory, so caches never land in a repo) and LANG, so no credential in the operator's
-// environment reaches it. Its output goes to logPath. A cancel or timeout (ExecTimeout when 0)
-// kills its whole process group (spec §6.2), and run.json records the group while it runs, so a
-// later ygg can stop it if this one dies. cmdErr is the command's failure; err is Odin's. Phase 3
-// moves leaf commands into the sandbox.
-func command(ctx context.Context, r *run.Run, node string, args []string, dir string, timeout time.Duration, logPath string) (cmdErr, err error) {
+// command runs args in repo, without a shell, for node. In a leaf of a run with a sandbox it runs in
+// the leaf's sandbox, which holds no credential and no host path but the leaf (spec §6); anywhere
+// else, which is Odin's own generators in an umbrella and the whole of a run without a sandbox, it
+// runs on the host with only PATH, HOME (the run's own directory, so caches never land in a repo)
+// and LANG. Its output goes to logPath. A timeout (ExecTimeout when 0) or a cancel stops it: on the
+// host by killing its whole process group, in the sandbox by killing what it started there (spec
+// §6.2). cmdErr is the command's failure; err is Odin's, and a sandbox that won't start is a
+// *sandboxFailure or a *hardStop.
+func command(ctx context.Context, r *run.Run, node, repo, dir string, args []string, timeout time.Duration, logPath string) (cmdErr, err error) {
+	if timeout == 0 {
+		timeout = ExecTimeout
+	}
+	runner, err := r.Runner(ctx, repo)
+	if err != nil {
+		return nil, sandboxStart(err)
+	}
+	if runner != nil {
+		return inSandbox(ctx, runner, args, timeout, logPath)
+	}
+	return onHost(ctx, r, node, args, dir, timeout, logPath)
+}
+
+// inSandbox runs args through runner, with no environment of its own.
+func inSandbox(ctx context.Context, runner gungnir.Runner, args []string, timeout time.Duration, logPath string) (cmdErr, err error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return nil, err
 	}
@@ -222,9 +271,32 @@ func command(ctx context.Context, r *run.Run, node string, args []string, dir st
 		return nil, err
 	}
 	defer out.Close()
-	if timeout == 0 {
-		timeout = ExecTimeout
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	res, err := runner.Run(cctx, gungnir.Cmd{Argv: args, Stdout: out, Stderr: out})
+	switch {
+	case err != nil && errors.Is(cctx.Err(), context.DeadlineExceeded):
+		return fmt.Errorf("timed out after %s", timeout), nil
+	case err != nil && ctx.Err() == nil:
+		return nil, err
+	case err != nil:
+		return nil, ctx.Err()
+	case res.ExitCode != 0:
+		return fmt.Errorf("exit status %d", res.ExitCode), nil
 	}
+	return nil, nil
+}
+
+// onHost runs args in dir on the host, in its own process group.
+func onHost(ctx context.Context, r *run.Run, node string, args []string, dir string, timeout time.Duration, logPath string) (cmdErr, err error) {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return nil, err
+	}
+	out, err := os.Create(logPath)
+	if err != nil {
+		return nil, err
+	}
+	defer out.Close()
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, args[0], args[1:]...)
@@ -249,12 +321,14 @@ func command(ctx context.Context, r *run.Run, node string, args []string, dir st
 	return cmdErr, nil
 }
 
-// runChecks runs the pack checks names in dir, in order, for the given attempt of node n, and logs
-// each result. The first failing check is the error.
-func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, dir string) error {
+// runChecks runs the pack checks names in order, for the given attempt of node n, and logs each
+// result. The first failing check is the error. repo is the leaf they check, whose sandbox runs them
+// when the run has one; the pointer node's acceptance checks pass "" and the umbrella's dir, and run
+// on the host.
+func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, repo, dir string) error {
 	for _, c := range names {
 		logPath := filepath.Join(r.Dir, "logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, c))
-		cmdErr, err := command(ctx, r, n.ID, r.Setup.Pack.Checks[c], dir, time.Duration(n.Timeout), logPath)
+		cmdErr, err := command(ctx, r, n.ID, repo, dir, r.Setup.Pack.Checks[c], time.Duration(n.Timeout), logPath)
 		if err != nil {
 			return err
 		}
@@ -284,6 +358,9 @@ func checkpoint(ctx context.Context, r *run.Run, n schema.Node, attempt int) (st
 	if err != nil {
 		return "", err
 	}
+	if err := scanForSecrets(ctx, r, l, n.Repo); err != nil {
+		return "", err
+	}
 	head, _, err := l.Checkpoint(ctx, fmt.Sprintf("ygg: run %s, node %s, attempt %d", r.State.ID, n.ID, attempt))
 	if err != nil {
 		return "", err
@@ -297,12 +374,84 @@ func checkpoint(ctx context.Context, r *run.Run, n schema.Node, attempt int) (st
 // repository, and stops the run at the hard approval point policy-violation. A failure of Odin
 // itself stays an error.
 func failCheckpoint(r *run.Run, ev gungnir.Event, err error) error {
-	if !leaf.IsPolicy(err) {
+	var hs *hardStop
+	var nf *nodeFailure
+	switch {
+	case errors.As(err, &hs), errors.As(err, &nf):
+	case leaf.IsPolicy(err):
+		hs = &hardStop{gate: gungnir.GatePolicyViolation, err: err}
+	default:
 		return err
 	}
 	ev.Name, ev.Result, ev.Commit = gungnir.EventNodeFailed, err.Error(), ""
 	if lerr := r.Log(ev); lerr != nil {
 		return lerr
 	}
-	return &hardStop{gate: gungnir.GatePolicyViolation, err: err}
+	if hs != nil {
+		return hs
+	}
+	return nf
+}
+
+// scanForSecrets looks for secrets in what a checkpoint would commit, in the leaf's sandbox (spec
+// §14). Odin's host git lists the files, so the scan covers exactly what the checkpoint commits. A
+// run without a sandbox has nowhere to run the scanner, and only scripted agents. Secrets are a
+// hard stop at real-secrets-or-user-data, with nothing committed; a scan that couldn't run fails
+// the node, because no answer is never "clean". A leaf that breaks a sandbox rule is a
+// *leaf.PolicyError, as at the checkpoint.
+func scanForSecrets(ctx context.Context, r *run.Run, l *leaf.Leaf, repo string) error {
+	runner, err := r.Runner(ctx, repo)
+	if err != nil {
+		return sandboxStart(err)
+	}
+	if runner == nil {
+		return nil
+	}
+	files, err := l.Pending(ctx)
+	if err != nil {
+		return err
+	}
+	err = scan.Run(ctx, runner, files)
+	var found *scan.FoundError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &found):
+		return &hardStop{gate: gungnir.GateRealSecrets, err: err}
+	}
+	return &nodeFailure{err}
+}
+
+// readOnly refuses a read-only agent that changed the leaf: the tool flags and the adapter's
+// settings keep such a role to read and search tools, and this is the check that doesn't trust them.
+func readOnly(ctx context.Context, r *run.Run, n schema.Node) error {
+	l, err := r.Leaf(n.Repo)
+	if err != nil {
+		return err
+	}
+	st, err := l.Git(ctx, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if st != "" {
+		return &hardStop{gate: gungnir.GatePolicyViolation, err: &leaf.PolicyError{Reason: "the read-only role " + n.Role + " changed the leaf:\n" + st}}
+	}
+	return nil
+}
+
+// sandboxFailure is a sandbox that wouldn't start: an infrastructure failure, so the run stops
+// failed with no retry loop (spec §12), and a resume tries again.
+type sandboxFailure struct{ err error }
+
+func (f *sandboxFailure) Error() string { return "the sandbox didn't start: " + f.err.Error() }
+func (f *sandboxFailure) Unwrap() error { return f.err }
+
+// sandboxStart classifies an error from starting a sandbox: a configuration that breaks the
+// hardening rules is a hard stop at policy-violation; anything else is an infrastructure failure.
+func sandboxStart(err error) error {
+	var pe *sandbox.PolicyError
+	if errors.As(err, &pe) {
+		return &hardStop{gate: gungnir.GatePolicyViolation, err: err}
+	}
+	return &nodeFailure{&sandboxFailure{err}}
 }

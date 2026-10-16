@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ouroboric-dev/gleipnir/skills"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/agents"
@@ -31,6 +32,13 @@ type Options struct {
 	Realm   string       // the directory that holds pack.yaml
 	Brief   string       // optional
 	Mode    gungnir.Mode // "" means the config's mode
+	Hooks   Hooks        // tests only
+}
+
+// Hooks replace parts of a run in tests: the skill libraries, and the sandbox driver.
+type Hooks struct {
+	Libs       *skills.Libraries
+	NewSandbox NewSandbox
 }
 
 // Setup is everything a run needs, loaded and checked.
@@ -47,6 +55,10 @@ type Setup struct {
 	BriefSHA256  string
 	Mode         gungnir.Mode
 	Agents       map[string]gungnir.Agent // role: adapter, for every role the graph uses
+	Libs         skills.Libraries         // where the graph's skills come from
+	Skills       skills.Record            // every skill the graph names, with the set's hash
+	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
+	newSandbox   NewSandbox
 
 	Root        string               // the tree's root: the project, or an umbrella above it
 	ProjectPath string               // the project's path from the root
@@ -101,6 +113,13 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		if err := s.checkNode(ctx, graphPath, n); err != nil {
 			return nil, err
 		}
+	}
+	s.newSandbox = o.Hooks.NewSandbox
+	if err := s.prepareSandbox(); err != nil {
+		return nil, err
+	}
+	if err := s.prepareSkills(o.Hooks.Libs); err != nil {
+		return nil, err
 	}
 	if o.Brief != "" {
 		if s.Brief, err = filepath.Abs(o.Brief); err != nil {
@@ -175,7 +194,7 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
 	}
 	var err error
-	if s.Agents[n.Role], err = agents.New(role, filepath.Dir(s.ConfigPath)); err != nil {
+	if s.Agents[n.Role], err = agents.New(role, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy}); err != nil {
 		return fmt.Errorf("role %s: %w", n.Role, err)
 	}
 	return nil
@@ -210,7 +229,8 @@ type Run struct {
 	Ledger  *ledger.Ledger
 	unlock  func()
 	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
-	Saved   []string        // one note per leaf whose discarded changes Open saved to a ref before resetting it
+	Saved   []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
+	Sandbox gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
 }
 
 // Branch is the branch a run works on in every leaf.
@@ -336,6 +356,11 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		os.RemoveAll(dir) // the run's own new directory: nothing ran
 		return nil, err
 	}
+	if err := r.openSandbox(setup.newSandbox); err != nil {
+		r.Close()
+		os.RemoveAll(dir)
+		return nil, err
+	}
 	if err := r.begin(ctx); err != nil {
 		r.State.Status, r.State.Error = StatusFailed, err.Error()
 		r.Log(gungnir.Event{Name: gungnir.EventRunFailed, Result: r.State.Error})
@@ -363,7 +388,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Realm: setup.Pack.Name, RealmVersion: setup.Pack.Version, RealmDir: setup.RealmDir,
 		GraphVersion: setup.Graph.Version, GraphSHA256: setup.GraphSHA256,
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
-		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup),
+		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
 		Waived: map[string]bool{}, Created: now, Updated: now,
@@ -448,6 +473,11 @@ func (r *Run) createLeaf(ctx context.Context, p string) error {
 // leaves reset to their checkpoints, since its node restarts from scratch (spec §4.3). mode
 // switches the run's mode at this pause ("" keeps it); a switch is logged.
 func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, error) {
+	return OpenWith(ctx, project, id, mode, Hooks{})
+}
+
+// OpenWith is Open with parts replaced, for tests.
+func OpenWith(ctx context.Context, project, id string, mode gungnir.Mode, h Hooks) (*Run, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("%q is not a run id", id)
 	}
@@ -463,7 +493,7 @@ func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, err
 	if err != nil {
 		return nil, err
 	}
-	r, err := open(ctx, project, dir, mode)
+	r, err := open(ctx, project, dir, mode, h)
 	if err != nil {
 		unlock()
 		return nil, err
@@ -472,7 +502,7 @@ func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, err
 	return r, nil
 }
 
-func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, error) {
+func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) (*Run, error) {
 	s, err := LoadState(dir)
 	if err != nil {
 		return nil, err
@@ -480,7 +510,7 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 	if mode == "" {
 		mode = s.Mode
 	}
-	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Brief: s.Brief, Mode: mode})
+	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Brief: s.Brief, Mode: mode, Hooks: h})
 	if err != nil {
 		return nil, err
 	}
@@ -489,6 +519,9 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 	}
 	if setup.BriefSHA256 != s.BriefSHA256 {
 		return nil, errors.New("the brief changed since the run started; a brief is frozen, so start a new run")
+	}
+	if setup.Skills.Hash != s.Skills.Hash {
+		return nil, errors.New("the skills the graph names changed since the run started, so results would not compare; start a new run")
 	}
 	if setup.Root != s.Root || setup.ProjectPath != s.ProjectPath {
 		return nil, fmt.Errorf("the run belongs to %s in %s, not this project", s.ProjectPath, s.Root)
@@ -508,6 +541,15 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 		s.Exec = nil
 	}
 	r := &Run{Project: setup.Project.Dir, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
+	if err := r.openSandbox(setup.newSandbox); err != nil {
+		l.Close()
+		return nil, err
+	}
+	// A ygg that was killed leaves its sandboxes up: stop them before the run goes on.
+	if err := r.DownSandboxes(ctx); err != nil {
+		l.Close()
+		return nil, fmt.Errorf("stopping the sandboxes an earlier ygg left; ygg doctor can stop them: %w", err)
+	}
 	if err := r.restoreLeaves(ctx); err != nil {
 		l.Close()
 		return nil, err
@@ -532,13 +574,21 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 	return r, nil
 }
 
+// Quarantines reports whether a run stopped at gate keeps its leaves as they are for investigation:
+// a sandbox rule broken, or a secret in what the node wrote (spec §12). Only approving the stop
+// puts the leaf back, and what it held is not saved: a secret must not land in a ref.
+func Quarantines(g gungnir.Gate) bool {
+	return g == gungnir.GatePolicyViolation || g == gungnir.GateRealSecrets
+}
+
 // restoreLeaves puts every leaf back to its checkpoint when the run's node restarts (interrupted
 // or failed), and otherwise refuses a leaf that changed while the run waited: Odin never discards
-// work it didn't make. A run stopped at policy-violation is quarantined: its leaves stay as they
-// are for investigation, and only approving the stop resets them (spec §12).
+// work it didn't make. In a run with a sandbox, the working tree a node left is discarded unsaved,
+// since no scan has seen it (decision 12). A run stopped at policy-violation is quarantined: its
+// leaves stay as they are for investigation, and only approving the stop resets them (spec §12).
 func (r *Run) restoreLeaves(ctx context.Context) error {
 	s := r.State
-	if s.Status == StatusDone || s.PendingGate == gungnir.GatePolicyViolation {
+	if s.Status == StatusDone || Quarantines(s.PendingGate) {
 		return nil
 	}
 	restart := s.Status == StatusRunning || s.Status == StatusFailed
@@ -552,7 +602,16 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 			// Odin never discards work it didn't make: save what the reset removes first.
 			saved, _ := l.Git(ctx, "for-each-ref", "--format=%(refname)", "refs/ygg/"+s.ID+"/discarded/")
 			ref := fmt.Sprintf("refs/ygg/%s/discarded/%d", s.ID, strings.Count(saved, "\n")+min(len(saved), 1)+1)
-			if ok, err := l.Save(ctx, ref, rec.Checkpoint, "ygg: run "+s.ID+", what resetting "+p+" to its checkpoint discarded"); err != nil {
+			msg := "ygg: run " + s.ID + ", what resetting " + p + " to its checkpoint discarded"
+			if r.Sandbox != nil {
+				// A node's work in a sandbox is scanned for secrets only at its checkpoint, so what it
+				// left is discarded, never put in git (decision 12). Commits are already in git: kept.
+				if err := r.discardUnscanned(ctx, l, p, ref, rec, msg); err != nil {
+					return err
+				}
+				continue
+			}
+			if ok, err := l.Save(ctx, ref, rec.Checkpoint, msg); err != nil {
 				return fmt.Errorf("saving %s before resetting it to its checkpoint: %w", p, err)
 			} else if ok {
 				r.Saved = append(r.Saved, fmt.Sprintf("%s: the changes since its checkpoint are saved as %s (git -C %s show --stat %s)", p, ref, r.RepoDir(p), ref))
@@ -577,6 +636,41 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 	}
 	return nil
 }
+
+// discardUnscanned resets a leaf with a sandbox to its checkpoint without saving its working tree,
+// which no scan has seen: only commits on the run's branch past the checkpoint, already in git, are
+// kept at ref. The run notes what it discarded.
+func (r *Run) discardUnscanned(ctx context.Context, l *leaf.Leaf, p, ref string, rec LeafRecord, msg string) error {
+	st, err := l.Git(ctx, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	kept, err := l.KeepCommits(ctx, ref, rec.Checkpoint, msg)
+	if err != nil {
+		return fmt.Errorf("keeping the commits of %s before resetting it to its checkpoint: %w", p, err)
+	}
+	if err := l.Reset(ctx, rec.Branch, rec.Checkpoint); err != nil {
+		return fmt.Errorf("resetting %s to its checkpoint: %w", p, err)
+	}
+	var notes []string
+	if st != "" {
+		notes = append(notes, "the uncommitted changes since its checkpoint are discarded and not saved: they ran in the sandbox and were never scanned for secrets")
+	}
+	if kept {
+		notes = append(notes, fmt.Sprintf("the commits on its branch past the checkpoint are kept as %s (git -C %s log %s)", ref, r.RepoDir(p), ref))
+	}
+	if len(notes) > 0 {
+		r.Saved = append(r.Saved, p+": "+strings.Join(notes, "; "))
+	}
+	return nil
+}
+
+// LeftoverProcess reports whether the exec node run.json recorded still has processes running.
+func LeftoverProcess(p *ExecProcess) bool { return groupAlive(p.PGID) }
+
+// StopLeftoverProcess stops the process group of an exec node that outlived its ygg, as a resume
+// does, and says why when it can't.
+func StopLeftoverProcess(p *ExecProcess) error { return stopLeftover(p) }
 
 // stopLeftover stops the process group of an exec node that outlived its ygg process (killed, or
 // its terminal closed), so the node never runs again beside its old copy. It kills the group only

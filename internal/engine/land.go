@@ -37,7 +37,16 @@ func runMerge(ctx context.Context, r *run.Run, n schema.Node) error {
 	rec := r.State.Leaves[n.Repo]
 	began := time.Now()
 	res, landErr := merge.Land(ctx, merge.Spec{Leaf: l, Branch: rec.Branch, Base: "main", Lock: r.LockFile(n.Repo),
-		Check: func(ctx context.Context) error { return runChecks(ctx, r, n, attempt, n.Checks, l.Dir()) }})
+		Check: func(ctx context.Context) error {
+			return tidied(ctx, l, runChecks(ctx, r, n, attempt, n.Checks, n.Repo, l.Dir()))
+		}})
+	var hs *hardStop
+	if errors.As(landErr, &hs) { // the sandbox broke a hardening rule
+		return hs
+	}
+	if leaf.IsPolicy(landErr) { // a check rewrote the leaf's .git or planted a repository
+		return &hardStop{gate: gungnir.GatePolicyViolation, err: landErr}
+	}
 	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt,
 		DurationMS: time.Since(began).Milliseconds()}
 	if landErr != nil {
@@ -89,11 +98,17 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
 	began := time.Now()
 	res, moveErr := pointer.Move(ctx, pointer.Spec{Parent: parent, Child: child, Leaf: l, To: to,
-		Lock:       r.LockFile(parentRepo),
-		Check:      func(ctx context.Context) error { return runChecks(ctx, r, n, attempt, n.Checks, l.Dir()) },
-		Acceptance: func(ctx context.Context) error { return runChecks(ctx, r, n, attempt, n.Acceptance, parent.Dir) },
+		Lock: r.LockFile(parentRepo),
+		Check: func(ctx context.Context) error {
+			return tidied(ctx, l, runChecks(ctx, r, n, attempt, n.Checks, n.Repo, l.Dir()))
+		},
+		Acceptance: func(ctx context.Context) error { return runChecks(ctx, r, n, attempt, n.Acceptance, "", parent.Dir) },
 		Generated:  n.Generated, SkipShrink: s.Waived[n.ID],
 		Message: fmt.Sprintf("Move %s to %.12s (run %s, node %s)", child, to, s.ID, n.ID)})
+	var hs *hardStop
+	if errors.As(moveErr, &hs) { // the sandbox broke a hardening rule
+		return hs
+	}
 	var se *shrink.Error
 	if errors.As(moveErr, &se) {
 		return &hardStop{gate: gungnir.GateShrinkGuard, err: moveErr}
@@ -135,4 +150,14 @@ func failLanding(r *run.Run, ev gungnir.Event, err error) error {
 		return lerr
 	}
 	return &nodeFailure{err}
+}
+
+// tidied returns the checks' own result, after putting the leaf back to the commit they ran on, so
+// no file a check wrote blocks the next run (backlog B-004). A leaf the checks left breaking a sandbox
+// rule isn't cleaned: that is the error, for a hard stop.
+func tidied(ctx context.Context, l *leaf.Leaf, checkErr error) error {
+	if err := l.Tidy(ctx); err != nil {
+		return err
+	}
+	return checkErr
 }

@@ -1,0 +1,14 @@
+# The smoke graph (spec §13): one real session of each adapter in a sandbox, then the merge gate and a
+# pointer move. The implementer writes hello.txt; the reviewer, read-only, reads it back. It costs a few
+# cents. Run it with a factory.yaml whose implementer is claude-code and whose reviewer is opencode.
+name: smoke
+version: 0.1.0
+nodes:
+  - { id: hello, kind: agent, role: implementer, prompt: prompts/hello.md, repo: repos/app, max_turns: 8, timeout: 5m }
+  - { id: check, kind: exec, run: [grep, -q, hello, hello.txt], repo: repos/app }
+  - { id: review, kind: agent, role: reviewer, prompt: prompts/review.md, repo: repos/app, read_only: true, max_turns: 6, timeout: 5m }
+  - { id: feature-gate, kind: gate, gate: feature }
+  - { id: merge-gate, kind: gate, gate: merge }
+  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }
+  - { id: pointer-gate, kind: gate, gate: pointer }
+  - { id: pointer, kind: pointer, repo: repos/app, checks: [unit] }
