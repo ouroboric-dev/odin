@@ -109,6 +109,30 @@ func TestMergeGateAbortsWhenTheHeadMovedAfterReview(t *testing.T) {
 	}
 }
 
+// A person's commit on main during the checks must survive: the gate moves main only if it is still
+// the base it merged (update-ref's old value).
+func TestMergeGateRefusesWhenMainMovesDuringTheChecks(t *testing.T) {
+	l, spec := setup(t, nil)
+	var person string
+	spec.Check = func(ctx context.Context) error {
+		base, _ := l.Rev(ctx, "main")
+		var err error
+		if person, err = l.Git(ctx, "commit-tree", base+"^{tree}", "-p", base, "-m", "a person's commit on main"); err != nil {
+			return err
+		}
+		_, err = l.Git(ctx, "update-ref", "refs/heads/main", person)
+		return err
+	}
+	_, err := Land(ctx, spec)
+	var r *Refused
+	if !errors.As(err, &r) || r.Why != WhyMoved {
+		t.Fatalf("Land() = %v, want refused because main moved", err)
+	}
+	if main, _ := l.Rev(ctx, "main"); main != person {
+		t.Errorf("main = %s, want the person's commit %s", main, person)
+	}
+}
+
 func TestMergeGateLandsTheCheckedCommit(t *testing.T) {
 	var checkedOn string
 	l, spec := setup(t, nil)
