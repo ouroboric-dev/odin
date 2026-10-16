@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -151,6 +152,33 @@ func (l *Leaf) KeepCommits(ctx context.Context, ref, since, msg string) (kept bo
 		return false, err
 	}
 	return true, nil
+}
+
+// Pending returns, sorted, the files a checkpoint would commit content for, as host git sees them:
+// tracked files that differ from HEAD (staged or not, a link included), and new files that are not
+// ignored. Deleted files commit no content and are left out. The secret scan reads exactly these
+// (decision 12), so nothing in the sandbox picks what is scanned. A leaf that breaks a sandbox rule
+// is a *PolicyError, like a checkpoint.
+func (l *Leaf) Pending(ctx context.Context) ([]string, error) {
+	if err := l.Guard(); err != nil {
+		return nil, err
+	}
+	changed, err := l.repo.Output(ctx, "diff", "-z", "--name-only", "--no-renames", "--diff-filter=d", "HEAD", "--")
+	if err != nil {
+		return nil, err
+	}
+	added, err := l.repo.Output(ctx, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, f := range strings.Split(string(changed)+string(added), "\x00") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	slices.Sort(files)
+	return slices.Compact(files), nil
 }
 
 // Guard refuses a leaf that breaks a sandbox rule — a rewritten .git file, or a planted git

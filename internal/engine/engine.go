@@ -358,7 +358,7 @@ func checkpoint(ctx context.Context, r *run.Run, n schema.Node, attempt int) (st
 	if err != nil {
 		return "", err
 	}
-	if err := scanForSecrets(ctx, r, n.Repo); err != nil {
+	if err := scanForSecrets(ctx, r, l, n.Repo); err != nil {
 		return "", err
 	}
 	head, _, err := l.Checkpoint(ctx, fmt.Sprintf("ygg: run %s, node %s, attempt %d", r.State.ID, n.ID, attempt))
@@ -394,10 +394,12 @@ func failCheckpoint(r *run.Run, ev gungnir.Event, err error) error {
 }
 
 // scanForSecrets looks for secrets in what a checkpoint would commit, in the leaf's sandbox (spec
-// §14). A run without a sandbox has nowhere to run the scanner, and only scripted agents. Secrets
-// are a hard stop at real-secrets-or-user-data, with nothing committed; a scan that couldn't run
-// fails the node, because no answer is never "clean".
-func scanForSecrets(ctx context.Context, r *run.Run, repo string) error {
+// §14). Odin's host git lists the files, so the scan covers exactly what the checkpoint commits. A
+// run without a sandbox has nowhere to run the scanner, and only scripted agents. Secrets are a
+// hard stop at real-secrets-or-user-data, with nothing committed; a scan that couldn't run fails
+// the node, because no answer is never "clean". A leaf that breaks a sandbox rule is a
+// *leaf.PolicyError, as at the checkpoint.
+func scanForSecrets(ctx context.Context, r *run.Run, l *leaf.Leaf, repo string) error {
 	runner, err := r.Runner(ctx, repo)
 	if err != nil {
 		return sandboxStart(err)
@@ -405,7 +407,11 @@ func scanForSecrets(ctx context.Context, r *run.Run, repo string) error {
 	if runner == nil {
 		return nil
 	}
-	err = scan.Run(ctx, runner)
+	files, err := l.Pending(ctx)
+	if err != nil {
+		return err
+	}
+	err = scan.Run(ctx, runner, files)
 	var found *scan.FoundError
 	switch {
 	case err == nil:

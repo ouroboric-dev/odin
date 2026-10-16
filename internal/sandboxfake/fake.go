@@ -7,11 +7,15 @@ package sandboxfake
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 
+	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
 )
 
@@ -22,6 +26,8 @@ type Sandbox struct {
 	Downs []gungnir.Env
 	Execs []gungnir.Cmd // every command but the secret scan
 	Scans int           // how many secret scans ran
+	// ScanFiles is the files each secret scan was given, in order.
+	ScanFiles [][]string
 	// UpErr, if set, is what Up returns.
 	UpErr error
 	// Scan is how the secret scan ends. The zero value is a clean tree. Exit 7 with a gitleaks
@@ -52,17 +58,26 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 		return gungnir.ExecResult{}, err
 	}
 	s.mu.Lock()
-	hook, scan := s.Intercept, s.Scan
-	isScan := len(c.Argv) == 2 && c.Argv[0] == "bash" && c.Argv[1] == "-s" // the secret scan: gitleaks isn't on the host
+	hook, result := s.Intercept, s.Scan
+	isScan := slices.Equal(c.Argv, scan.Argv()) // the secret scan: gitleaks isn't on the host
 	if isScan {
 		s.Scans++
+		var files []string
+		if c.Stdin != nil {
+			b, _ := io.ReadAll(c.Stdin)
+			files = strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+			if len(b) == 0 {
+				files = []string{}
+			}
+		}
+		s.ScanFiles = append(s.ScanFiles, files)
 	} else {
 		s.Execs = append(s.Execs, c)
 	}
 	s.mu.Unlock()
 	if isScan {
-		c.Stdout.Write([]byte(scan.Report))
-		return gungnir.ExecResult{ExitCode: scan.Exit}, nil
+		c.Stdout.Write([]byte(result.Report))
+		return gungnir.ExecResult{ExitCode: result.Exit}, nil
 	}
 	if hook != nil {
 		if res, ok := hook(c); ok {

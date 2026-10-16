@@ -60,15 +60,22 @@ func env() []string {
 // Run runs git with args in dir and returns its standard output, trimmed. An error carries the
 // command and git's own message.
 func Run(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := Output(ctx, dir, args...)
+	return strings.TrimSpace(string(out)), err
+}
+
+// Output is Run with git's standard output as it is, for output a trim would change, such as a
+// -z list whose first name starts with a space.
+func Output(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", append(append([]string{}, safe...), args...)...)
 	cmd.Dir = dir
 	cmd.Env = env()
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s (in %s): %w: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(errOut.String()))
+		return nil, fmt.Errorf("git %s (in %s): %w: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(errOut.String()))
 	}
-	return strings.TrimSpace(out.String()), nil
+	return out.Bytes(), nil
 }
 
 // Repo is a repo whose git dir Odin chose itself.
@@ -80,6 +87,11 @@ type Repo struct {
 // Run runs git with args against r, with the git dir and work tree given explicitly.
 func (r Repo) Run(ctx context.Context, args ...string) (string, error) {
 	return Run(ctx, r.WorkTree, append([]string{"--git-dir=" + r.GitDir, "--work-tree=" + r.WorkTree}, args...)...)
+}
+
+// Output is Run with git's standard output untrimmed.
+func (r Repo) Output(ctx context.Context, args ...string) ([]byte, error) {
+	return Output(ctx, r.WorkTree, append([]string{"--git-dir=" + r.GitDir, "--work-tree=" + r.WorkTree}, args...)...)
 }
 
 // CheckURL refuses a repo URL that host git shouldn't fetch: anything but https, ssh (also in the

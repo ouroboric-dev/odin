@@ -94,6 +94,10 @@ func TestLeafCommandsRunInTheSandboxAndUmbrellaCommandsOnTheHost(t *testing.T) {
 	if fake.Scans != 2 {
 		t.Errorf("%d secret scans, want one before each of the two checkpoints (the agent's and the exec's)", fake.Scans)
 	}
+	// Odin's host git lists what each scan reads: what that checkpoint commits.
+	if len(fake.ScanFiles) != 2 || strings.Join(fake.ScanFiles[0], ",") != "build.txt" || len(fake.ScanFiles[1]) != 0 {
+		t.Errorf("the scans were given %q; want the agent's build.txt, then nothing", fake.ScanFiles)
+	}
 	if b, _ := os.ReadFile(filepath.Join(r.Dir, "logs", "check-1.log")); len(b) != 0 {
 		t.Errorf("the log of a quiet check = %q", b)
 	}

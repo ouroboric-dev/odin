@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -107,6 +108,67 @@ func TestCheckpointRefusesAChangedGitFile(t *testing.T) {
 	entries, _ := os.ReadDir(evil)
 	if len(entries) != 0 {
 		t.Error("git wrote to the planted git dir")
+	}
+}
+
+// The secret scan gets its files from Pending, so Pending must be exactly what the checkpoint
+// commits with content: changed, new and staged files, links, odd names; never an ignored or a
+// deleted file, or one the leaf's own git settings would hide.
+func TestTheScanCoversExactlyWhatTheCheckpointCommits(t *testing.T) {
+	l := api(t)
+	write(t, l, ".gitignore", ".env\nbuild/\n")
+	write(t, l, "tracked.txt", "v1\n")
+	write(t, l, "gone.txt", "bye\n")
+	write(t, l, "old-name.txt", "moved\n")
+	write(t, l, "becomes-link.txt", "a file\n")
+	write(t, l, "build/forced.txt", "tracked though ignored\n")
+	if _, err := l.Git(ctx, "add", "-f", "build/forced.txt"); err != nil {
+		t.Fatal(err)
+	}
+	cp, _, err := l.Checkpoint(ctx, "base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, l, "tracked.txt", "v2\n")
+	write(t, l, "new/deep.txt", "new\n")
+	write(t, l, " lead.txt", "a name with a space first\n")
+	write(t, l, "odd\nname.txt", "a newline in the name\n")
+	write(t, l, ".env", "SECRET=ignored\n")
+	write(t, l, "build/forced.txt", "changed\n")
+	write(t, l, "staged.txt", "staged by a person\n")
+	if _, err := l.Git(ctx, "add", "staged.txt"); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(l.Dir(), "gone.txt"))
+	os.Rename(filepath.Join(l.Dir(), "old-name.txt"), filepath.Join(l.Dir(), "new-name.txt"))
+	os.Remove(filepath.Join(l.Dir(), "becomes-link.txt"))
+	os.Symlink("tracked.txt", filepath.Join(l.Dir(), "becomes-link.txt"))
+	os.Symlink("/etc/hostname", filepath.Join(l.Dir(), "link"))
+	// An ignore file a git that reads the user's settings would apply: it would hide every .txt.
+	xdg := t.TempDir()
+	os.MkdirAll(filepath.Join(xdg, "git"), 0o755)
+	os.WriteFile(filepath.Join(xdg, "git", "ignore"), []byte("*.txt\n"), 0o644)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	files, err := l.Pending(ctx)
+	if err != nil {
+		t.Fatalf("Pending() = %v", err)
+	}
+	want := []string{" lead.txt", "becomes-link.txt", "build/forced.txt", "link", "new-name.txt", "new/deep.txt", "odd\nname.txt", "staged.txt", "tracked.txt"}
+	if !slices.Equal(files, want) {
+		t.Errorf("Pending() = %q\nwant %q", files, want)
+	}
+	head, committed, err := l.Checkpoint(ctx, "the node's work")
+	if err != nil || !committed {
+		t.Fatal(err)
+	}
+	out, err := l.repo.Output(ctx, "diff-tree", "-r", "-z", "--no-renames", "--name-only", "--diff-filter=d", cp, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commits := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	slices.Sort(commits)
+	if !slices.Equal(files, commits) {
+		t.Errorf("the scan covers %q\nthe checkpoint committed %q", files, commits)
 	}
 }
 
