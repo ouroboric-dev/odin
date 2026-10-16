@@ -20,6 +20,7 @@ import (
 
 	"github.com/ouroboric-dev/gleipnir/skills"
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
 )
@@ -75,11 +76,25 @@ type State struct {
 	Usage        gungnir.Usage          `json:"usage"`
 	Paused       *Pause                 `json:"paused,omitempty"` // why the run is paused
 	Warned       map[string]bool        `json:"warned,omitempty"` // the budget warnings already given, so each comes once
+	Loops        map[string]*LoopRecord `json:"loops,omitempty"`  // loop node id: where its loop stands
 	Ledger       ledger.Anchor          `json:"ledger"`
 	Error        string                 `json:"error,omitempty"`
 	Exec         *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
 	Created      time.Time              `json:"created"`
 	Updated      time.Time              `json:"updated"`
+}
+
+// LoopRecord is where one loop node stands (spec §4.2): Jormungandr's state, which holds the attempt,
+// the phase and every finding, and why the loop waits for a person, if it does.
+type LoopRecord struct {
+	State      jormungandr.State `json:"state"`
+	Escalation *Escalation       `json:"escalation,omitempty"`
+}
+
+// Escalation is why a loop gave up (spec §7.3): see the Reason constants of Jormungandr.
+type Escalation struct {
+	Reason string `json:"reason"`
+	Detail string `json:"detail"`
 }
 
 // Pause is why a run waits for the provider (spec §12).
@@ -181,6 +196,9 @@ func LoadState(dir string) (*State, error) {
 	}
 	if s.Warned == nil {
 		s.Warned = map[string]bool{}
+	}
+	if s.Loops == nil {
+		s.Loops = map[string]*LoopRecord{}
 	}
 	if s.Leaves == nil {
 		s.Leaves = map[string]LeafRecord{}

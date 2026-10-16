@@ -219,22 +219,36 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 			return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
 		}
 	}
-	if n.Kind != schema.KindAgent {
+	if n.Kind != schema.KindAgent && n.Kind != schema.KindLoop {
 		return nil
 	}
-	if _, err := os.Stat(filepath.Join(s.RealmDir, n.Prompt)); err != nil {
-		return fmt.Errorf("%s: node %s: %w", graphPath, n.ID, err)
+	if err := s.checkSession(graphPath, n.ID, n.Role, n.Prompt); err != nil {
+		return err
 	}
-	if s.Agents[n.Role] != nil {
+	for _, rv := range n.Reviewers {
+		if err := s.checkSession(graphPath, n.SessionKey(rv), rv.Role, rv.Prompt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSession checks that a session of node (a node, or a loop's reviewer) can run: its prompt file
+// is in the realm and its role is in factory.yaml, whose adapter is built once per role.
+func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
+	if _, err := os.Stat(filepath.Join(s.RealmDir, prompt)); err != nil {
+		return fmt.Errorf("%s: node %s: %w", graphPath, node, err)
+	}
+	if s.Agents[role] != nil {
 		return nil
 	}
-	role, ok := s.Config.Roles[n.Role]
+	r, ok := s.Config.Roles[role]
 	if !ok {
-		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
+		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, node, role, s.ConfigPath)
 	}
 	var err error
-	if s.Agents[n.Role], err = agents.New(role, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy}); err != nil {
-		return fmt.Errorf("role %s: %w", n.Role, err)
+	if s.Agents[role], err = agents.New(r, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy}); err != nil {
+		return fmt.Errorf("role %s: %w", role, err)
 	}
 	return nil
 }
@@ -449,7 +463,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
-		Waived: map[string]bool{}, Warned: map[string]bool{}, Created: now, Updated: now,
+		Waived: map[string]bool{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Created: now, Updated: now,
 	}}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256}); err != nil {
 		r.Close()
@@ -639,6 +653,35 @@ func Quarantines(g gungnir.Gate) bool {
 	return g == gungnir.GatePolicyViolation || g == gungnir.GateRealSecrets
 }
 
+// DiscardWork puts leaf p back to its run's last checkpoint, as a resume does for a node that restarts
+// (spec §4.3): what the work since then changed is saved to refs/ygg/<run>/discarded/<n> first, so
+// Odin never discards work it didn't make. In a run with a sandbox that work was never scanned for
+// secrets, so it is discarded and not saved (decision 12), and only commits already in git are kept.
+// What happened is added to r.Saved.
+func (r *Run) DiscardWork(ctx context.Context, p string) error {
+	s := r.State
+	rec := s.Leaves[p]
+	l, err := r.Leaf(p)
+	if err != nil {
+		return err
+	}
+	saved, _ := l.Git(ctx, "for-each-ref", "--format=%(refname)", "refs/ygg/"+s.ID+"/discarded/")
+	ref := fmt.Sprintf("refs/ygg/%s/discarded/%d", s.ID, strings.Count(saved, "\n")+min(len(saved), 1)+1)
+	msg := "ygg: run " + s.ID + ", what resetting " + p + " to its checkpoint discarded"
+	if r.Sandbox != nil {
+		return r.discardUnscanned(ctx, l, p, ref, rec, msg)
+	}
+	if ok, err := l.Save(ctx, ref, rec.Checkpoint, msg); err != nil {
+		return fmt.Errorf("saving %s before resetting it to its checkpoint: %w", p, err)
+	} else if ok {
+		r.Saved = append(r.Saved, fmt.Sprintf("%s: the changes since its checkpoint are saved as %s (git -C %s show --stat %s)", p, ref, r.RepoDir(p), ref))
+	}
+	if err := l.Reset(ctx, rec.Branch, rec.Checkpoint); err != nil {
+		return fmt.Errorf("resetting %s to its checkpoint: %w", p, err)
+	}
+	return nil
+}
+
 // restoreLeaves puts every leaf back to its checkpoint when the run's node restarts (interrupted
 // or failed), and otherwise refuses a leaf that changed while the run waited: Odin never discards
 // work it didn't make. In a run with a sandbox, the working tree a node left is discarded unsaved,
@@ -657,25 +700,8 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 			return err
 		}
 		if restart {
-			// Odin never discards work it didn't make: save what the reset removes first.
-			saved, _ := l.Git(ctx, "for-each-ref", "--format=%(refname)", "refs/ygg/"+s.ID+"/discarded/")
-			ref := fmt.Sprintf("refs/ygg/%s/discarded/%d", s.ID, strings.Count(saved, "\n")+min(len(saved), 1)+1)
-			msg := "ygg: run " + s.ID + ", what resetting " + p + " to its checkpoint discarded"
-			if r.Sandbox != nil {
-				// A node's work in a sandbox is scanned for secrets only at its checkpoint, so what it
-				// left is discarded, never put in git (decision 12). Commits are already in git: kept.
-				if err := r.discardUnscanned(ctx, l, p, ref, rec, msg); err != nil {
-					return err
-				}
-				continue
-			}
-			if ok, err := l.Save(ctx, ref, rec.Checkpoint, msg); err != nil {
-				return fmt.Errorf("saving %s before resetting it to its checkpoint: %w", p, err)
-			} else if ok {
-				r.Saved = append(r.Saved, fmt.Sprintf("%s: the changes since its checkpoint are saved as %s (git -C %s show --stat %s)", p, ref, r.RepoDir(p), ref))
-			}
-			if err := l.Reset(ctx, rec.Branch, rec.Checkpoint); err != nil {
-				return fmt.Errorf("resetting %s to its checkpoint: %w", p, err)
+			if err := r.DiscardWork(ctx, p); err != nil {
+				return err
 			}
 			continue
 		}

@@ -47,8 +47,8 @@ func (s *Setup) prepareSandbox() error {
 	}
 	egress := slices.Clone(s.Pack.Sandbox.Egress)
 	for _, n := range s.Graph.Nodes {
-		if n.Kind == schema.KindAgent {
-			egress = append(egress, agents.Hosts(s.Config.Roles[n.Role].Agent)...)
+		for _, role := range nodeRoles(n) {
+			egress = append(egress, agents.Hosts(s.Config.Roles[role].Agent)...)
 		}
 	}
 	sort.Strings(egress)
@@ -76,11 +76,30 @@ func (s *Setup) prepareSkills(override *skills.Libraries) error {
 	var names []string
 	for _, n := range s.Graph.Nodes {
 		names = append(names, n.Skills...)
+		for _, rv := range n.Reviewers {
+			names = append(names, rv.Skills...)
+		}
 	}
 	rec, err := s.Libs.Record(names)
 	if err != nil {
 		return fmt.Errorf("the graph names a skill the library lacks: %w", err)
 	}
 	s.Skills = rec
+	return nil
+}
+
+// nodeRoles returns the roles a node's sessions run as: an agent node's, or a loop's implementer and
+// its reviewers.
+func nodeRoles(n schema.Node) []string {
+	switch n.Kind {
+	case schema.KindAgent:
+		return []string{n.Role}
+	case schema.KindLoop:
+		out := []string{n.Role}
+		for _, rv := range n.Reviewers {
+			out = append(out, rv.Role)
+		}
+		return out
+	}
 	return nil
 }
