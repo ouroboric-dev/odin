@@ -2,11 +2,11 @@ github.com/dlclark/regexp2 v1.11.0 h1:G/nrcoOa7ZXlpoa/91N3X7mM3r8eIlMBBJZvsz/mxK
 github.com/dlclark/regexp2 v1.11.0/go.mod h1:DHkYz0B9wPfa6wondMfaivmHpzrQ3v9q8cnmRbL6yW8=
 github.com/ouroboric-dev/gleipnir v0.0.0-20261015075331-f829fbb0fb0d h1:PSLzYxCrX7QPEyR50UO4X6G4Q28upxiekqgYvp0iOCY=
 github.com/ouroboric-dev/gleipnir v0.0.0-20261015075331-f829fbb0fb0d/go.mod h1:nHJs/lR7SXDmMhSupQwVNM8h89oKw8xfzzL7A71yuuw=
-github.com/ouroboric-dev/gungnir v0.0.0-20261015075305-227460aaf8a6 h1:NxO3OrsDdW3BzyM+WTUGwcQVJvYqbJ5wnaGByTEkg/0=
-github.com/ouroboric-dev/gungnir v0.0.0-20261015075305-227460aaf8a6/go.mod h1:1v0Dz5N50AToXaIn+RYzmgeiH6qSnwtuSrdXyCwW4FY=
+github.com/ouroboric-dev/gungnir v0.0.0-20261016010107-8631647c4b44 h1:YejPLqpK2A6/Lo4ryKvNsezdZGqNBJLb2nuewGCc/ps=
+github.com/ouroboric-dev/gungnir v0.0.0-20261016010107-8631647c4b44/go.mod h1:NEj+bRbIgN2QLv8AbnDF4CAn9IYV0m/8i4j25unu10s=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3/go.mod h1:JXeL+ps8p7/KNMjDQk3TCwPpBy0wYklyWTfbkIzdIFU=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
 go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=
-golang.org/x/text v0.14.0 h1:ScX5w1eTa3QqT8oi6+ziP7dTV1S2+ALU0bI+0zXKWiQ=
-golang.org/x/text v0.14.0/go.mod h1:18ZOQIKpY8NJVqYksKHtTdi31H5itFRjB5/qKTNYzSU=
+golang.org/x/text v0.41.0 h1:vz/seA0lnX87Othu2f/0L24RcgrXD9/YFTSuGjj3rH8=
+golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
