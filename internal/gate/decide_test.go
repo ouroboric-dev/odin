@@ -18,6 +18,7 @@ func TestModeTimesApprovalPointTable(t *testing.T) {
 		"merge":            {Stop, Auto, Auto},
 		"pointer":          {Stop, Auto, Auto},
 		"pointer-contract": {Stop, Stop, Block},
+		"escalation":       {Stop, Stop, Stop},
 	}
 	for _, g := range gungnir.Gates() {
 		want, soft := table[g]

@@ -25,6 +25,12 @@ func Decide(mode gungnir.Mode, g gungnir.Gate, overrides map[gungnir.Gate]string
 	if !g.Known() || g.Hard() || mode == gungnir.ModeStepByStep || overrides[g] == "stop" {
 		return Stop
 	}
+	if g == gungnir.GateEscalation {
+		// A loop that ran out of attempts waits for a person in every mode. Unattended mode would mark
+		// the task blocked and go on with the rest (spec §7.3), but a linear graph has nothing else to
+		// do, so the run stops there too (Phase 4, decision 7).
+		return Stop
+	}
 	switch g {
 	case gungnir.GateDesign:
 		if mode == gungnir.ModeUnattended && overrides[g] == "auto" {
