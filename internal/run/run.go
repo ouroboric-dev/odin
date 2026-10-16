@@ -293,15 +293,18 @@ func (r *Run) Meter() *budget.Meter {
 
 // Spend counts what a session used, whether or not it succeeded: in the day's journal first, so a
 // crash between the two leaves the spend counted twice at worst, and then in the run's usage. The
-// caller saves run.json. A usage of nothing is not recorded.
+// caller saves run.json. A journal that can't take the line is an error, and the run's usage counts
+// the spend all the same, saved here, since the caller stops on the error (review I4). A usage of
+// nothing is not recorded.
 func (r *Run) Spend(node string, u gungnir.Usage) error {
 	if u == (gungnir.Usage{}) {
 		return nil
 	}
-	if err := r.Setup.Journal.Append(budget.Entry{Run: r.State.ID, Project: r.Project, Node: node, Usage: u}); err != nil {
-		return fmt.Errorf("recording the spend in %s: %w", r.Setup.Journal.Dir, err)
-	}
+	jerr := r.Setup.Journal.Append(budget.Entry{Run: r.State.ID, Project: r.Project, Node: node, Usage: u})
 	r.State.Usage = r.State.Usage.Add(u)
+	if jerr != nil {
+		return errors.Join(fmt.Errorf("recording the spend in %s: %w", r.Setup.Journal.Dir, jerr), r.Save())
+	}
 	return nil
 }
 

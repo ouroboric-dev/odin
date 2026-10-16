@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,5 +212,34 @@ func TestTheLedgerWarnsOnceWhenACapIsEightyPercentUsed(t *testing.T) {
 	}
 	if !r.State.Warned["run/tokens"] {
 		t.Errorf("warned = %v; the warning must be remembered, so a resume doesn't repeat it", r.State.Warned)
+	}
+}
+
+// journalBreaker runs its agent, and then puts a file where the journal's folder, not made yet, would
+// be, as a disk that stopped taking writes would: the session's spend can't be appended.
+type journalBreaker struct {
+	gungnir.Agent
+	dir string
+}
+
+func (b journalBreaker) Run(ctx context.Context, t gungnir.Task) (gungnir.Result, error) {
+	res, err := b.Agent.Run(ctx, t)
+	return res, errors.Join(err, os.WriteFile(b.dir, nil, 0o600))
+}
+
+// Review I4: a journal that can't be written still leaves the session in the run's usage.
+func TestASpendTheJournalCannotTakeStillCountsInTheRun(t *testing.T) {
+	journal := filepath.Join(t.TempDir(), "spend")
+	r := startWith(t, setup{nodes: twoNodes, script: spendScript, journal: journal})
+	r.Setup.Agents["planner"] = journalBreaker{Agent: r.Setup.Agents["planner"], dir: journal}
+	if out, err := Advance(context.Background(), r); err == nil || !strings.Contains(err.Error(), "recording the spend") {
+		t.Fatalf("Advance() = %+v, %v; want the journal's error", out, err)
+	}
+	s, err := run.LoadState(r.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Usage.InTok != 100 || s.Usage.Turns != 3 {
+		t.Errorf("run.json usage = %+v; the session's spend counts though the journal didn't take it", s.Usage)
 	}
 }
