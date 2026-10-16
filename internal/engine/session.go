@@ -46,6 +46,12 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 	meter := r.Meter()
 	retrier := jormungandr.Retrier{Backoff: r.Setup.Backoff, Meter: meter, Sleep: r.Setup.Sleep,
 		OnRetry: func(try int, wait time.Duration, why string) error {
+			// The failed try may have left half its work in the leaf: the retry starts from the checkpoint.
+			if _, ok := r.State.Leaves[sp.repo]; ok {
+				if err := r.DiscardWork(ctx, sp.repo); err != nil {
+					return err
+				}
+			}
 			return r.Log(gungnir.Event{Name: gungnir.EventRetry, Node: sp.key, Attempt: r.State.Attempts[sp.key],
 				Note: fmt.Sprintf("try %d failed for a reason that is not the agent's; it runs again in %s: %s", try, wait, why)})
 		}}

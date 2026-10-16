@@ -63,6 +63,8 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		switch n.Kind {
 		case schema.KindAgent:
 			err = runAgent(ctx, r, n)
+		case schema.KindLoop:
+			err = runLoop(ctx, r, n)
 		case schema.KindExec:
 			err = runExec(ctx, r, n)
 		case schema.KindGate:
