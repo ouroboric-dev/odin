@@ -201,6 +201,15 @@ func TestOpenPutsLeavesBackAtTheirCheckpoints(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(app, "half-done.txt")); err == nil {
 		t.Error("Open() kept an interrupted node's work; the node restarts from its checkpoint")
 	}
+	// Nothing is lost: what the reset discarded is saved to a ref, and the run says where.
+	ref := "refs/ygg/" + id + "/discarded/1"
+	l, _ := r.Leaf("repos/app")
+	if files, _ := l.Git(ctx, "ls-tree", "-r", "--name-only", ref); !strings.Contains(files, "half-done.txt") {
+		t.Errorf("%s holds %q, want the discarded half-done.txt", ref, files)
+	}
+	if len(r.Saved) != 1 || !strings.Contains(r.Saved[0], ref) {
+		t.Errorf("Saved = %q, want a note naming %s", r.Saved, ref)
+	}
 	r.State.Status, r.State.Position, r.State.Pending, r.State.PendingGate = StatusStopped, 1, "design-gate", gungnir.GateDesign
 	if err := r.Save(); err != nil {
 		t.Fatal(err)

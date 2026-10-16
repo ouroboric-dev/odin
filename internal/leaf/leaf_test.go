@@ -129,10 +129,12 @@ func TestResetGoesBackToTheCheckpoint(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(l.Dir(), "keep.txt")); string(b) != "kept\n" {
 		t.Errorf("keep.txt = %q, want the checkpoint's", b)
 	}
-	for _, gone := range []string{"new.txt", "build/out.bin"} {
-		if _, err := os.Stat(filepath.Join(l.Dir(), gone)); err == nil {
-			t.Errorf("%s survived the reset", gone)
-		}
+	if _, err := os.Stat(filepath.Join(l.Dir(), "new.txt")); err == nil {
+		t.Error("new.txt survived the reset")
+	}
+	// Ignored files are never committed, and may be a person's (.env, node_modules): a reset keeps them.
+	if _, err := os.Stat(filepath.Join(l.Dir(), "build/out.bin")); err != nil {
+		t.Errorf("the reset deleted an ignored file: %v", err)
 	}
 	if head, _ := l.Head(ctx); head != cp {
 		t.Errorf("HEAD = %s, want the checkpoint %s", head, cp)
@@ -142,6 +144,43 @@ func TestResetGoesBackToTheCheckpoint(t *testing.T) {
 	}
 	if _, _, err := l.Checkpoint(ctx, "after the reset"); err != nil {
 		t.Errorf("the reset didn't restore the leaf's .git: %v", err)
+	}
+}
+
+// What a reset would discard, a person's fix or a commit on the run's branch after the checkpoint,
+// is saved to a ref first.
+func TestSaveKeepsWhatAResetWouldDiscard(t *testing.T) {
+	l := api(t)
+	write(t, l, ".gitignore", "build/\n")
+	cp, _, err := l.Checkpoint(ctx, "checkpoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := l.Save(ctx, "refs/ygg/run1/discarded/1", cp, "nothing to save"); err != nil || saved {
+		t.Errorf("Save() of a leaf at its checkpoint = %v, %v; want nothing saved", saved, err)
+	}
+	write(t, l, "committed.txt", "a commit after the checkpoint\n")
+	after, _, err := l.Checkpoint(ctx, "after the checkpoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, l, "fixed.txt", "a person's fix\n")
+	write(t, l, "build/out.bin", "ignored\n")
+	saved, err := l.Save(ctx, "refs/ygg/run1/discarded/1", cp, "before resetting to the checkpoint")
+	if err != nil || !saved {
+		t.Fatalf("Save() = %v, %v", saved, err)
+	}
+	if files, _ := l.Git(ctx, "ls-tree", "-r", "--name-only", "refs/ygg/run1/discarded/1"); !strings.Contains(files, "fixed.txt") || !strings.Contains(files, "committed.txt") || strings.Contains(files, "out.bin") {
+		t.Errorf("the saved commit holds %q, want the fix and the later commit, and no ignored file", files)
+	}
+	if parent, _ := l.Rev(ctx, "refs/ygg/run1/discarded/1^"); parent != after {
+		t.Errorf("the saved commit's parent = %s, want the branch head %s, so its commits stay reachable", parent, after)
+	}
+	if head, _ := l.Head(ctx); head != after {
+		t.Error("Save() moved the branch")
+	}
+	if _, err := l.Save(ctx, "refs/ygg/run1/discarded/1", cp, "again"); err == nil {
+		t.Error("Save() overwrote an existing ref")
 	}
 }
 

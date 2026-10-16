@@ -182,8 +182,20 @@ func TestToyGraphEndToEnd(t *testing.T) {
 		if code != ExitDone || !strings.Contains(out, "interrupted") {
 			t.Errorf("status after the kill: exit %d:\n%s", code, out)
 		}
-		if code, out, errOut := ygg(t, "resume", id, "--project", dir); code != ExitDone {
+		// A person's file in the leaf: the resume resets the leaf, but saves the file first.
+		if err := os.WriteFile(filepath.Join(dir, "repos", "app", "fixed.txt"), []byte("a person's fix\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		code, out, errOut := ygg(t, "resume", id, "--project", dir)
+		if code != ExitDone {
 			t.Fatalf("resume: exit %d:\n%s%s", code, out, errOut)
+		}
+		ref := "refs/ygg/" + id + "/discarded/1"
+		if !strings.Contains(errOut, ref) {
+			t.Errorf("resume doesn't say where the discarded changes went:\n%s", errOut)
+		}
+		if b, _ := os.ReadFile(filepath.Join(run.Dir(dir, id), "ledger.jsonl")); !strings.Contains(string(b), `"event":"run_resumed"`) || !strings.Contains(string(b), ref) {
+			t.Error("the run_resumed line doesn't record the saved ref")
 		}
 		s, _ := run.LoadState(run.Dir(dir, id))
 		if s.Attempts["build"] != 2 || s.Attempts["design"] != 1 {

@@ -10,6 +10,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/engine"
@@ -129,7 +130,7 @@ func (c *command) run(args []string) int {
 	r, err := run.Start(c.ctx, run.Options{Project: f.project, Config: f.config, Realm: f.realm, Brief: f.brief, Mode: mode})
 	var failed *run.Failed
 	if errors.As(err, &failed) { // it started, so run.json records it: fix the cause, then resume
-		fmt.Fprintf(c.err, "Run %s failed: %v\nFix the cause, then run: ygg resume %s\n", failed.ID, failed.Err, failed.ID)
+		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", failed.ID, failed.Err, resumeHint(failed.ID))
 		return ExitFailed
 	}
 	if err != nil {
@@ -140,7 +141,13 @@ func (c *command) run(args []string) int {
 	return c.advance(r)
 }
 
-// open opens a run for resume, approve and reject.
+// resumeHint tells the operator how to go on after a failure, and what a resume does to the leaves.
+func resumeHint(id string) string {
+	return fmt.Sprintf("Fix the cause, then run: ygg resume %s\n"+
+		"A resume puts each leaf back to its last checkpoint; changes made since are saved under refs/ygg/%s/discarded/.\n", id, id)
+}
+
+// open opens a run for resume, approve and reject, and says where Open saved what it discarded.
 func (c *command) open(f *flags, id string) (*run.Run, int) {
 	mode, ok := c.mode(f)
 	if !ok {
@@ -149,6 +156,9 @@ func (c *command) open(f *flags, id string) (*run.Run, int) {
 	r, err := run.Open(c.ctx, f.project, id, mode)
 	if err != nil {
 		return nil, c.refuse(err)
+	}
+	for _, s := range r.Saved {
+		fmt.Fprintf(c.err, "ygg: %s\n", s)
 	}
 	return r, ExitDone
 }
@@ -173,7 +183,7 @@ func (c *command) resume(args []string) int {
 		}
 		return c.advance(r)
 	}
-	if err := r.Log(gungnir.Event{Name: gungnir.EventRunResumed, Mode: r.State.Mode}); err != nil {
+	if err := r.Log(gungnir.Event{Name: gungnir.EventRunResumed, Mode: r.State.Mode, Note: strings.Join(r.Saved, "; ")}); err != nil {
 		return c.refuse(err)
 	}
 	return c.advance(r)
@@ -228,7 +238,7 @@ func (c *command) advance(r *run.Run) int {
 			id, out.Gate, filepath.Join(r.Dir, "gates"), id, out.Gate, id, out.Gate)
 		return ExitStopped
 	default:
-		fmt.Fprintf(c.err, "Run %s failed: %v\nFix the cause, then run: ygg resume %s\n", id, out.Err, id)
+		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", id, out.Err, resumeHint(id))
 		return ExitFailed
 	}
 }

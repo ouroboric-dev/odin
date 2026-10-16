@@ -163,7 +163,8 @@ func TestAFailedStartExitsOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
-	if code != ExitFailed || !strings.Contains(errOut, "ygg resume "+runID(t, dir)) {
+	id := runID(t, dir)
+	if code != ExitFailed || !strings.Contains(errOut, "ygg resume "+id) || !strings.Contains(errOut, "refs/ygg/"+id+"/discarded/") {
 		t.Errorf("run with a dirty leaf: exit %d, want %d with the resume hint:\n%s", code, ExitFailed, errOut)
 	}
 }

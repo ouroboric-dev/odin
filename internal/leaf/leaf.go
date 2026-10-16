@@ -93,8 +93,52 @@ func (l *Leaf) Checkpoint(ctx context.Context, msg string) (head string, committ
 	return head, true, err
 }
 
+// Save keeps what a reset to since would discard: when the leaf has changes, or its branch has
+// moved past since, it creates ref (which must not exist) at a commit holding the leaf as it is,
+// whose parent is the branch head. Ignored files aren't saved, and a reset keeps them. saved is
+// false when there was nothing to keep. A planted repository is a *PolicyError, and nothing is saved.
+func (l *Leaf) Save(ctx context.Context, ref, since, msg string) (saved bool, err error) {
+	if err := l.restoreGitFile(); err != nil {
+		return false, err
+	}
+	if err := l.checkNested(); err != nil {
+		return false, err
+	}
+	head, err := l.Head(ctx)
+	if err != nil {
+		return false, err
+	}
+	st, err := l.repo.Run(ctx, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	if st == "" && head == since {
+		return false, nil
+	}
+	commit := head
+	if st != "" {
+		if _, err := l.repo.Run(ctx, "add", "-A"); err != nil {
+			return false, err
+		}
+		tree, err := l.repo.Run(ctx, "write-tree")
+		if err != nil {
+			return false, err
+		}
+		if commit, err = l.repo.Run(ctx, "commit-tree", tree, "-p", head, "-m", msg); err != nil {
+			return false, err
+		}
+	}
+	// An empty old value: create the ref, never overwrite one.
+	if _, err := l.repo.Run(ctx, "update-ref", "-m", msg, ref, commit, ""); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Reset puts the leaf back to commit sha on branch: the branch is moved to sha and checked out,
-// changes and untracked files (ignored ones too) are removed, and the .git file is restored.
+// changes and untracked files are removed, and the .git file is restored. Ignored files stay: they
+// are never committed, and may be a person's own (.env, node_modules). Save first what a person may
+// want back.
 func (l *Leaf) Reset(ctx context.Context, branch, sha string) error {
 	if err := l.restoreGitFile(); err != nil {
 		return err
@@ -102,7 +146,7 @@ func (l *Leaf) Reset(ctx context.Context, branch, sha string) error {
 	if _, err := l.repo.Run(ctx, "switch", "-q", "-f", "-C", branch, sha); err != nil {
 		return err
 	}
-	_, err := l.repo.Run(ctx, "clean", "-q", "-ffdx")
+	_, err := l.repo.Run(ctx, "clean", "-q", "-ffd")
 	return err
 }
 

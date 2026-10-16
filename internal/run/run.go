@@ -210,6 +210,7 @@ type Run struct {
 	Ledger  *ledger.Ledger
 	unlock  func()
 	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
+	Saved   []string        // one note per leaf whose discarded changes Open saved to a ref before resetting it
 }
 
 // Branch is the branch a run works on in every leaf.
@@ -548,6 +549,14 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 			return err
 		}
 		if restart {
+			// Odin never discards work it didn't make: save what the reset removes first.
+			saved, _ := l.Git(ctx, "for-each-ref", "--format=%(refname)", "refs/ygg/"+s.ID+"/discarded/")
+			ref := fmt.Sprintf("refs/ygg/%s/discarded/%d", s.ID, strings.Count(saved, "\n")+min(len(saved), 1)+1)
+			if ok, err := l.Save(ctx, ref, rec.Checkpoint, "ygg: run "+s.ID+", what resetting "+p+" to its checkpoint discarded"); err != nil {
+				return fmt.Errorf("saving %s before resetting it to its checkpoint: %w", p, err)
+			} else if ok {
+				r.Saved = append(r.Saved, fmt.Sprintf("%s: the changes since its checkpoint are saved as %s (git -C %s show --stat %s)", p, ref, r.RepoDir(p), ref))
+			}
 			if err := l.Reset(ctx, rec.Branch, rec.Checkpoint); err != nil {
 				return fmt.Errorf("resetting %s to its checkpoint: %w", p, err)
 			}
