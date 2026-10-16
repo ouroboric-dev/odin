@@ -241,14 +241,20 @@ func (c *command) advance(r *run.Run) int {
 		fmt.Fprintf(c.out, "Run %s is done.\n", id)
 		return ExitDone
 	case run.StatusStopped:
-		if engine.Rejectable(r) {
+		approve, reject := engine.Approvable(r), engine.Rejectable(r)
+		gates := filepath.Join(r.Dir, "gates")
+		switch {
+		case reject && approve:
 			fmt.Fprintf(c.out, "Run %s stopped at approval point %s. Read %s, then run one of:\n"+
 				"  ygg approve %s %s [--note \"...\"]\n  ygg reject %s %s --reason \"...\"\n",
-				id, out.Gate, filepath.Join(r.Dir, "gates"), id, out.Gate, id, out.Gate)
-		} else {
+				id, out.Gate, gates, id, out.Gate, id, out.Gate)
+		case reject:
+			fmt.Fprintf(c.out, "Run %s stopped at approval point %s, which takes no approval. Read %s, then run:\n"+
+				"  ygg reject %s %s --reason \"...\"\n", id, out.Gate, gates, id, out.Gate)
+		default:
 			fmt.Fprintf(c.out, "Run %s stopped at the hard approval point %s. Read %s, then run:\n"+
 				"  ygg approve %s %s [--note \"...\"]\nA hard stop takes no rejection: to drop the work, start a new run.\n",
-				id, r.State.PendingGate, filepath.Join(r.Dir, "gates"), id, out.Gate)
+				id, r.State.PendingGate, gates, id, out.Gate)
 		}
 		return ExitStopped
 	case run.StatusPaused:
@@ -289,6 +295,17 @@ func (c *command) status(args []string) int {
 	}
 	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
 		fmt.Fprintf(c.out, "leaf:     %s on %s at %.12s\n", p, s.Leaves[p].Branch, s.Leaves[p].Checkpoint)
+	}
+	for _, id := range slices.Sorted(maps.Keys(s.Loops)) {
+		l := s.Loops[id]
+		line := fmt.Sprintf("attempt %d of %d, %s, %d finding(s) open", min(l.State.Attempt, l.State.Limit), l.State.Limit, l.State.Phase, len(l.State.Book.Open()))
+		if l.State.Passed {
+			line = fmt.Sprintf("passed in attempt %d, %d finding(s) open", l.State.Attempt, len(l.State.Book.Open()))
+		}
+		if l.Escalation != nil {
+			line = fmt.Sprintf("gave up after %d attempt(s) (%s), %d finding(s) open", l.State.Limit, l.Escalation.Reason, len(l.State.Book.Open()))
+		}
+		fmt.Fprintf(c.out, "loop:     %s: %s\n", id, line)
 	}
 	if s.Paused != nil {
 		fmt.Fprintf(c.out, "paused:   at %s since %s: %s\n", s.Paused.Node, s.Paused.Since.Format(time.RFC3339), s.Paused.Reason)

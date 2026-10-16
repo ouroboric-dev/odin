@@ -11,6 +11,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/gate"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -103,11 +104,25 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 	}
 	s := r.State
 	n := r.Setup.Graph.Nodes[s.Position]
+	if n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation {
+		if rec := s.Loops[n.ID]; rec == nil || rec.Escalation == nil || rec.Escalation.Reason != jormungandr.ReasonExhausted {
+			return fmt.Errorf("loop %s stopped because a reviewer's answer can't be read, and an answer nobody can read is not an approval; "+
+				"fix the reviewer or its prompt, and then reject the stop to ask it again", n.ID)
+		}
+	}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventGateApproved, Node: gateID, Gate: gateID, Note: note}); err != nil {
 		return err
 	}
 	switch {
 	case n.Kind == schema.KindGate:
+		s.Position++
+	case n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation:
+		// The operator accepts the work with its findings open. They stay open in the ledger: only their
+		// source can close a finding.
+		rec := s.Loops[n.ID]
+		rec.State.Passed, rec.Escalation = true, nil
+		s.Summaries[n.ID] = fmt.Sprintf("accepted by the operator after %d attempt(s), with %d finding(s) open", rec.State.Attempt-1, len(rec.State.Book.Open()))
+		delete(s.Reasons, n.ID)
 		s.Position++
 	case run.Quarantines(s.PendingGate):
 		rec := s.Leaves[n.Repo]
@@ -125,16 +140,37 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 	return r.Save()
 }
 
-// Rejectable reports whether the run's pending stop takes a rejection: a gate node does. A hard stop
-// that a node raised takes approve only, or a new run (spec §7.2).
+// Rejectable reports whether the run's pending stop takes a rejection: a gate node does, and so does a
+// loop that gave up. A hard stop that a node raised takes approve only, or a new run (spec §7.2).
 func Rejectable(r *run.Run) bool {
 	s := r.State
-	return s.Pending != "" && s.Position < len(r.Setup.Graph.Nodes) && r.Setup.Graph.Nodes[s.Position].Kind == schema.KindGate
+	if s.Pending == "" || s.Position >= len(r.Setup.Graph.Nodes) {
+		return false
+	}
+	n := r.Setup.Graph.Nodes[s.Position]
+	return n.Kind == schema.KindGate || (n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation)
 }
 
-// Reject sends reason back into the node the gate re-runs (spec §7.2). Advance re-runs it with
-// the reason in its prompt, then reaches the gate again. A hard stop a node raised takes no
-// rejection: approve it, or start a new run to drop the work.
+// Approvable reports whether the pending stop takes an approval. A loop that gave up because a
+// reviewer's answer can't be read does not: that is not a decision a person can take for the reviewer.
+func Approvable(r *run.Run) bool {
+	s := r.State
+	if s.Pending == "" || s.Position >= len(r.Setup.Graph.Nodes) {
+		return false
+	}
+	n := r.Setup.Graph.Nodes[s.Position]
+	if n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation {
+		rec := s.Loops[n.ID]
+		return rec != nil && rec.Escalation != nil && rec.Escalation.Reason == jormungandr.ReasonExhausted
+	}
+	return true
+}
+
+// Reject sends reason back (spec §7.2). At a gate it goes into the node the gate re-runs: Advance
+// re-runs it with the reason in its prompt, then reaches the gate again; when that node is a loop,
+// the loop starts over. At a loop that gave up (spec §7.3) the reason goes to the loop's implementer,
+// and the loop gets a full set of attempts again, with its findings. A hard stop a node raised takes
+// no rejection: approve it, or start a new run to drop the work.
 func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 	if err := pending(r, gateID); err != nil {
 		return err
@@ -147,13 +183,23 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 	if strings.TrimSpace(reason) == "" {
 		return errors.New("a rejection needs a reason; it goes back to the node as input")
 	}
-	target := g.Nodes[g.Index(gateID)].Reruns
 	if err := r.Log(gungnir.Event{Name: gungnir.EventGateRejected, Node: gateID, Gate: gateID, Note: reason}); err != nil {
 		return err
 	}
-	s.Reasons[target] = reason
+	if n := g.Nodes[s.Position]; n.Kind == schema.KindLoop {
+		rec := s.Loops[n.ID]
+		rec.State.Extend(loopConfig(n))
+		rec.Escalation = nil
+		s.Reasons[n.ID] = reason
+	} else {
+		target := n.Reruns
+		s.Reasons[target] = reason
+		s.Position = g.Index(target)
+		if g.Nodes[s.Position].Kind == schema.KindLoop {
+			delete(s.Loops, target) // the work goes back to the start of a new loop
+		}
+	}
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
-	s.Position = g.Index(target)
 	return r.Save()
 }
 

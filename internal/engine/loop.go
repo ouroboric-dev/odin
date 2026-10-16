@@ -48,8 +48,19 @@ func runLoop(ctx context.Context, r *run.Run, n schema.Node) error {
 	case jormungandr.Paused:
 		return &pause{out.Quota}
 	}
-	// Escalated: the next task stops the run for a person; until then the node fails with the reason.
-	return &nodeFailure{fmt.Errorf("the loop %s gave up (%s): %s", n.ID, out.Reason, out.Detail)}
+	// Escalated: a person decides (spec §7.3). In unattended mode the task would be marked blocked and
+	// the rest would go on; a linear graph has no rest, so the run stops here in every mode, and the
+	// ledger says "blocked" for unattended runs (Phase 4, decision 7).
+	rec.Escalation = &run.Escalation{Reason: out.Reason, Detail: out.Detail}
+	result := "stopped"
+	if s.Mode == gungnir.ModeUnattended {
+		result = "blocked"
+	}
+	if err := r.Log(gungnir.Event{Name: gungnir.EventEscalation, Node: n.ID, Attempt: out.Attempts, Result: result,
+		Mode: s.Mode, Note: out.Reason + ": " + out.Detail}); err != nil {
+		return err
+	}
+	return &escalation{out: out}
 }
 
 func loopConfig(n schema.Node) jormungandr.Config {

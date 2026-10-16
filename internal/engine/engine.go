@@ -86,6 +86,10 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		if errors.As(err, &p) {
 			return pauseRun(r, n, p)
 		}
+		var esc *escalation
+		if errors.As(err, &esc) {
+			return stopEscalation(r, n, esc)
+		}
 		if err != nil {
 			return Outcome{}, err
 		}
