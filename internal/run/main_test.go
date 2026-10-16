@@ -14,5 +14,17 @@ func TestMain(m *testing.M) {
 	if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 1, 0); e != 0 {
 		panic(e)
 	}
-	os.Exit(m.Run())
+	os.Exit(withStateFolder(m))
+}
+
+// withStateFolder points the operator's state folder, where the spend journal defaults to, at a
+// folder of the test's own, so no test writes under the real HOME.
+func withStateFolder(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "ygg-state-")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+	os.Setenv("XDG_STATE_HOME", dir)
+	return m.Run()
 }

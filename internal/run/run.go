@@ -17,7 +17,9 @@ import (
 	"github.com/ouroboric-dev/gleipnir/skills"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/agents"
+	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
@@ -35,10 +37,14 @@ type Options struct {
 	Hooks   Hooks        // tests only
 }
 
-// Hooks replace parts of a run in tests: the skill libraries, and the sandbox driver.
+// Hooks replace parts of a run in tests: the skill libraries, the sandbox driver, the clock that
+// decides which day a session's spend belongs to, and the retry policy with its wait.
 type Hooks struct {
 	Libs       *skills.Libraries
 	NewSandbox NewSandbox
+	Now        func() time.Time
+	Backoff    *jormungandr.Backoff
+	Sleep      func(ctx context.Context, d time.Duration) error
 }
 
 // Setup is everything a run needs, loaded and checked.
@@ -59,6 +65,9 @@ type Setup struct {
 	Skills       skills.Record            // every skill the graph names, with the set's hash
 	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
 	newSandbox   NewSandbox
+	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
+	Backoff      jormungandr.Backoff
+	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
 
 	Root        string               // the tree's root: the project, or an umbrella above it
 	ProjectPath string               // the project's path from the root
@@ -114,6 +123,9 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
+	if err := s.prepareBudget(o.Hooks); err != nil {
+		return nil, err
+	}
 	s.newSandbox = o.Hooks.NewSandbox
 	if err := s.prepareSandbox(); err != nil {
 		return nil, err
@@ -132,6 +144,33 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		s.BriefText, s.BriefSHA256 = string(b), sum(b)
 	}
 	return s, nil
+}
+
+// prepareBudget says where the spend journal is, and the retry policy. The journal's folder is made
+// at the first session, not here: Prepare writes nothing.
+func (s *Setup) prepareBudget(h Hooks) error {
+	var err error
+	if s.Journal, err = BudgetJournal(s.Config, h.Now); err != nil {
+		return fmt.Errorf("%s: %w", s.ConfigPath, err)
+	}
+	s.Backoff, s.Sleep = jormungandr.DefaultBackoff, h.Sleep
+	if h.Backoff != nil {
+		s.Backoff = *h.Backoff
+	}
+	return nil
+}
+
+// BudgetJournal returns the spend journal of a config: the folder it names, or the operator's state
+// folder. now is the clock of a test; nil is the real one.
+func BudgetJournal(cfg *schema.Factory, now func() time.Time) (*budget.Journal, error) {
+	dir := cfg.Budget.Journal
+	if dir == "" {
+		var err error
+		if dir, err = budget.DefaultDir(os.Getenv, os.UserHomeDir); err != nil {
+			return nil, err
+		}
+	}
+	return &budget.Journal{Dir: dir, Now: now}, nil
 }
 
 // findProject places the project in the instance tree: Odin runs on nothing outside it, because a
@@ -180,22 +219,36 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 			return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
 		}
 	}
-	if n.Kind != schema.KindAgent {
+	if n.Kind != schema.KindAgent && n.Kind != schema.KindLoop {
 		return nil
 	}
-	if _, err := os.Stat(filepath.Join(s.RealmDir, n.Prompt)); err != nil {
-		return fmt.Errorf("%s: node %s: %w", graphPath, n.ID, err)
+	if err := s.checkSession(graphPath, n.ID, n.Role, n.Prompt); err != nil {
+		return err
 	}
-	if s.Agents[n.Role] != nil {
+	for _, rv := range n.Reviewers {
+		if err := s.checkSession(graphPath, n.SessionKey(rv), rv.Role, rv.Prompt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkSession checks that a session of node (a node, or a loop's reviewer) can run: its prompt file
+// is in the realm and its role is in factory.yaml, whose adapter is built once per role.
+func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
+	if _, err := os.Stat(filepath.Join(s.RealmDir, prompt)); err != nil {
+		return fmt.Errorf("%s: node %s: %w", graphPath, node, err)
+	}
+	if s.Agents[role] != nil {
 		return nil
 	}
-	role, ok := s.Config.Roles[n.Role]
+	r, ok := s.Config.Roles[role]
 	if !ok {
-		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
+		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, node, role, s.ConfigPath)
 	}
 	var err error
-	if s.Agents[n.Role], err = agents.New(role, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy}); err != nil {
-		return fmt.Errorf("role %s: %w", n.Role, err)
+	if s.Agents[role], err = agents.New(r, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy}); err != nil {
+		return fmt.Errorf("role %s: %w", role, err)
 	}
 	return nil
 }
@@ -231,6 +284,28 @@ type Run struct {
 	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
 	Saved   []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
 	Sandbox gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
+}
+
+// Meter returns the budget of this run: its caps against its own usage and the day's journal.
+func (r *Run) Meter() *budget.Meter {
+	return &budget.Meter{Run: &r.State.Usage, Caps: r.Setup.Config.Budget, USD: r.Setup.Config.PaysPerToken(), Journal: r.Setup.Journal}
+}
+
+// Spend counts what a session used, whether or not it succeeded: in the day's journal first, so a
+// crash between the two leaves the spend counted twice at worst, and then in the run's usage. The
+// caller saves run.json. A journal that can't take the line is an error, and the run's usage counts
+// the spend all the same, saved here, since the caller stops on the error (review I4). A usage of
+// nothing is not recorded.
+func (r *Run) Spend(node string, u gungnir.Usage) error {
+	if u == (gungnir.Usage{}) {
+		return nil
+	}
+	jerr := r.Setup.Journal.Append(budget.Entry{Run: r.State.ID, Project: r.Project, Node: node, Usage: u})
+	r.State.Usage = r.State.Usage.Add(u)
+	if jerr != nil {
+		return errors.Join(fmt.Errorf("recording the spend in %s: %w", r.Setup.Journal.Dir, jerr), r.Save())
+	}
+	return nil
 }
 
 // Branch is the branch a run works on in every leaf.
@@ -391,7 +466,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
-		Waived: map[string]bool{}, Created: now, Updated: now,
+		Waived: map[string]bool{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Created: now, Updated: now,
 	}}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256}); err != nil {
 		r.Close()
@@ -581,6 +656,35 @@ func Quarantines(g gungnir.Gate) bool {
 	return g == gungnir.GatePolicyViolation || g == gungnir.GateRealSecrets
 }
 
+// DiscardWork puts leaf p back to its run's last checkpoint, as a resume does for a node that restarts
+// (spec §4.3): what the work since then changed is saved to refs/ygg/<run>/discarded/<n> first, so
+// Odin never discards work it didn't make. In a run with a sandbox that work was never scanned for
+// secrets, so it is discarded and not saved (decision 12), and only commits already in git are kept.
+// What happened is added to r.Saved.
+func (r *Run) DiscardWork(ctx context.Context, p string) error {
+	s := r.State
+	rec := s.Leaves[p]
+	l, err := r.Leaf(p)
+	if err != nil {
+		return err
+	}
+	saved, _ := l.Git(ctx, "for-each-ref", "--format=%(refname)", "refs/ygg/"+s.ID+"/discarded/")
+	ref := fmt.Sprintf("refs/ygg/%s/discarded/%d", s.ID, strings.Count(saved, "\n")+min(len(saved), 1)+1)
+	msg := "ygg: run " + s.ID + ", what resetting " + p + " to its checkpoint discarded"
+	if r.Sandbox != nil {
+		return r.discardUnscanned(ctx, l, p, ref, rec, msg)
+	}
+	if ok, err := l.Save(ctx, ref, rec.Checkpoint, msg); err != nil {
+		return fmt.Errorf("saving %s before resetting it to its checkpoint: %w", p, err)
+	} else if ok {
+		r.Saved = append(r.Saved, fmt.Sprintf("%s: the changes since its checkpoint are saved as %s (git -C %s show --stat %s)", p, ref, r.RepoDir(p), ref))
+	}
+	if err := l.Reset(ctx, rec.Branch, rec.Checkpoint); err != nil {
+		return fmt.Errorf("resetting %s to its checkpoint: %w", p, err)
+	}
+	return nil
+}
+
 // restoreLeaves puts every leaf back to its checkpoint when the run's node restarts (interrupted
 // or failed), and otherwise refuses a leaf that changed while the run waited: Odin never discards
 // work it didn't make. In a run with a sandbox, the working tree a node left is discarded unsaved,
@@ -591,7 +695,7 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 	if s.Status == StatusDone || Quarantines(s.PendingGate) {
 		return nil
 	}
-	restart := s.Status == StatusRunning || s.Status == StatusFailed
+	restart := s.Status == StatusRunning || s.Status == StatusFailed || s.Status == StatusPaused
 	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
 		rec := s.Leaves[p]
 		l, err := r.Leaf(p)
@@ -599,25 +703,8 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 			return err
 		}
 		if restart {
-			// Odin never discards work it didn't make: save what the reset removes first.
-			saved, _ := l.Git(ctx, "for-each-ref", "--format=%(refname)", "refs/ygg/"+s.ID+"/discarded/")
-			ref := fmt.Sprintf("refs/ygg/%s/discarded/%d", s.ID, strings.Count(saved, "\n")+min(len(saved), 1)+1)
-			msg := "ygg: run " + s.ID + ", what resetting " + p + " to its checkpoint discarded"
-			if r.Sandbox != nil {
-				// A node's work in a sandbox is scanned for secrets only at its checkpoint, so what it
-				// left is discarded, never put in git (decision 12). Commits are already in git: kept.
-				if err := r.discardUnscanned(ctx, l, p, ref, rec, msg); err != nil {
-					return err
-				}
-				continue
-			}
-			if ok, err := l.Save(ctx, ref, rec.Checkpoint, msg); err != nil {
-				return fmt.Errorf("saving %s before resetting it to its checkpoint: %w", p, err)
-			} else if ok {
-				r.Saved = append(r.Saved, fmt.Sprintf("%s: the changes since its checkpoint are saved as %s (git -C %s show --stat %s)", p, ref, r.RepoDir(p), ref))
-			}
-			if err := l.Reset(ctx, rec.Branch, rec.Checkpoint); err != nil {
-				return fmt.Errorf("resetting %s to its checkpoint: %w", p, err)
+			if err := r.DiscardWork(ctx, p); err != nil {
+				return err
 			}
 			continue
 		}

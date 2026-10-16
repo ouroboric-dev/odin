@@ -23,23 +23,50 @@ func start(t *testing.T, mode, gates, nodes, script string) *run.Run {
 // startPack is start with extra lines for the realm's pack.yaml, such as its checks.
 func startPack(t *testing.T, mode, gates, pack, nodes, script string) *run.Run {
 	t.Helper()
+	return startWith(t, setup{mode: mode, gates: gates, pack: pack, nodes: nodes, script: script})
+}
+
+// setup says how a test run is made. Unset fields have the values start uses.
+type setup struct {
+	mode, gates, pack, nodes, script string
+	budget                           string // the budget: section of factory.yaml, whole; generous by default
+	roles                            string // the roles: section, whole; one scripted planner by default
+	journal                          string // the folder of the spend journal; one of the test's own by default
+	hooks                            run.Hooks
+}
+
+// startWith makes the realm, the config and a fresh project (see start), and starts a run. It returns
+// with the config's path in r.Setup.ConfigPath, so a test can edit it before it opens the run again.
+func startWith(t *testing.T, o setup) *run.Run {
+	t.Helper()
 	realm, cfg := t.TempDir(), t.TempDir()
 	project := treetest.Project(t, "repos/app")
+	if o.mode == "" {
+		o.mode = "key-points"
+	}
+	if o.budget == "" {
+		o.budget = "budget:\n  per_run: { tokens: 100000, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\n"
+	}
+	if o.roles == "" {
+		o.roles = "roles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n"
+	}
+	if o.journal == "" {
+		o.journal = filepath.Join(cfg, "spend")
+	}
+	o.budget = strings.TrimRight(o.budget, "\n") + "\n  journal: " + o.journal + "\n"
 	files := map[string]string{
-		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + pack,
-		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nnodes:\n" + nodes,
+		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + o.pack,
+		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nnodes:\n" + o.nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
-		filepath.Join(cfg, "script.yaml"):  script,
-		filepath.Join(cfg, "factory.yaml"): "mode: " + mode + "\n" + gates +
-			"roles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n" +
-			"budget:\n  per_run: { tokens: 100000, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\n",
+		filepath.Join(cfg, "script.yaml"):  o.script,
+		filepath.Join(cfg, "factory.yaml"): "mode: " + o.mode + "\n" + o.gates + o.roles + o.budget,
 	}
 	for p, body := range files {
 		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm})
+	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm, Hooks: o.hooks})
 	if err != nil {
 		t.Fatal(err)
 	}

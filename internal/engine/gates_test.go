@@ -109,3 +109,26 @@ func TestRejectRerunsTheNodeWithTheReason(t *testing.T) {
 		t.Error("the reason is kept after the node used it")
 	}
 }
+
+// Review I2: new work under a loop that passed goes through the loop again.
+func TestARejectionThatRerunsANodeBeforeAPassedLoopRunsTheLoopAgain(t *testing.T) {
+	nodes := "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n" + loopNode +
+		"  - { id: review, kind: gate, gate: spec, reruns: plan }\n"
+	script := "steps:\n  plan:\n    - actions: [ " + write("plan.md", "v1") + " ]\n      result: { status: ok }\n" +
+		"    - actions: [ " + write("plan.md", "v2") + " ]\n      result: { status: ok }\n" +
+		"  build:\n    - actions: [ " + write("build.txt", "done v1") + " ]\n      result: { status: ok }\n" +
+		"    - actions: [ " + write("build.txt", "done v2") + " ]\n      result: { status: ok }\n"
+	r := startPack(t, "step-by-step", "", unitCheck, nodes, script)
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped || out.Gate != "review" {
+		t.Fatalf("Advance() = %+v, %v; want stopped at review", out, err)
+	}
+	if err := Reject(context.Background(), r, "review", "Plan for two users."); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped || out.Gate != "review" {
+		t.Fatalf("Advance() = %+v, %v; want stopped at review again", out, err)
+	}
+	if r.State.Attempts["plan"] != 2 || r.State.Attempts["build"] != 2 {
+		t.Errorf("plan sessions %d, build sessions %d; want 2 and 2: the loop checks the new work", r.State.Attempts["plan"], r.State.Attempts["build"])
+	}
+}

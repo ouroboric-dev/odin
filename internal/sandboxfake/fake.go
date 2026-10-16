@@ -36,6 +36,9 @@ type Sandbox struct {
 		Exit   int
 		Report string
 	}
+	// Fail, if set, is asked before every command but the secret scan. An error it returns is what Exec
+	// returns, as the real driver does when podman itself fails.
+	Fail func(gungnir.Cmd) error
 	// Intercept, if set, sees every command first. A true handled result is the command's result.
 	Intercept func(gungnir.Cmd) (res gungnir.ExecResult, handled bool)
 }
@@ -58,7 +61,7 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 		return gungnir.ExecResult{}, err
 	}
 	s.mu.Lock()
-	hook, result := s.Intercept, s.Scan
+	hook, result, fail := s.Intercept, s.Scan, s.Fail
 	isScan := slices.Equal(c.Argv, scan.Argv()) // the secret scan: gitleaks isn't on the host
 	if isScan {
 		s.Scans++
@@ -78,6 +81,11 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 	if isScan {
 		c.Stdout.Write([]byte(result.Report))
 		return gungnir.ExecResult{ExitCode: result.Exit}, nil
+	}
+	if fail != nil {
+		if err := fail(c); err != nil {
+			return gungnir.ExecResult{}, err
+		}
 	}
 	if hook != nil {
 		if res, ok := hook(c); ok {

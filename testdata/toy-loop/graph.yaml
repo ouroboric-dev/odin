@@ -1,0 +1,17 @@
+# The toy loop graph: an implementer, a check and two reviewers in a bounded loop, then a gate and the
+# merge. Its sessions work in one leaf, repos/app, which the realm creates when a project lacks it.
+name: toy-loop
+version: 1.0.0
+nodes:
+  - id: build
+    kind: loop
+    repo: repos/app
+    role: implementer
+    prompt: prompts/build.md
+    attempts: 3
+    checks: [unit]
+    reviewers:
+      - { id: spec, role: reviewer, prompt: prompts/review-spec.md }
+      - { id: quality, role: reviewer, prompt: prompts/review-quality.md }
+  - { id: feature-gate, kind: gate, gate: feature }
+  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }

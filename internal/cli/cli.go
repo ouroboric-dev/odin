@@ -11,8 +11,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/engine"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -23,6 +26,7 @@ const (
 	ExitFailed  = 1 // a node failed; fix the cause, then resume
 	ExitRefused = 2 // bad usage or config: nothing ran
 	ExitStopped = 3 // the run waits at an approval point
+	ExitPaused  = 4 // the run waits for the provider's quota; resume it once the quota is back
 )
 
 const usage = `usage:
@@ -33,7 +37,7 @@ const usage = `usage:
   ygg status  <run-id> [--project <dir>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
   ygg sandbox build --realm <dir> [--config <factory.yaml>]
-exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point
+exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused: the provider's quota is used up
 `
 
 // Main runs one ygg command and returns its exit code.
@@ -237,10 +241,26 @@ func (c *command) advance(r *run.Run) int {
 		fmt.Fprintf(c.out, "Run %s is done.\n", id)
 		return ExitDone
 	case run.StatusStopped:
-		fmt.Fprintf(c.out, "Run %s stopped at approval point %s. Read %s, then run one of:\n"+
-			"  ygg approve %s %s [--note \"...\"]\n  ygg reject %s %s --reason \"...\"\n",
-			id, out.Gate, filepath.Join(r.Dir, "gates"), id, out.Gate, id, out.Gate)
+		approve, reject := engine.Approvable(r), engine.Rejectable(r)
+		gates := filepath.Join(r.Dir, "gates")
+		switch {
+		case reject && approve:
+			fmt.Fprintf(c.out, "Run %s stopped at approval point %s. Read %s, then run one of:\n"+
+				"  ygg approve %s %s [--note \"...\"]\n  ygg reject %s %s --reason \"...\"\n",
+				id, out.Gate, gates, id, out.Gate, id, out.Gate)
+		case reject:
+			fmt.Fprintf(c.out, "Run %s stopped at approval point %s, which takes no approval. Read %s, then run:\n"+
+				"  ygg reject %s %s --reason \"...\"\n", id, out.Gate, gates, id, out.Gate)
+		default:
+			fmt.Fprintf(c.out, "Run %s stopped at the hard approval point %s. Read %s, then run:\n"+
+				"  ygg approve %s %s [--note \"...\"]\nA hard stop takes no rejection: to drop the work, start a new run.\n",
+				id, r.State.PendingGate, gates, id, out.Gate)
+		}
 		return ExitStopped
+	case run.StatusPaused:
+		fmt.Fprintf(c.err, "Run %s paused: %v\nNothing is lost. Once the provider's quota is back, run: ygg resume %s\n"+
+			"A resume starts the node again from its last checkpoint.\n", id, out.Err, id)
+		return ExitPaused
 	default:
 		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", id, out.Err, resumeHint(id))
 		return ExitFailed
@@ -276,11 +296,59 @@ func (c *command) status(args []string) int {
 	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
 		fmt.Fprintf(c.out, "leaf:     %s on %s at %.12s\n", p, s.Leaves[p].Branch, s.Leaves[p].Checkpoint)
 	}
+	for _, id := range slices.Sorted(maps.Keys(s.Loops)) {
+		l := s.Loops[id]
+		line := fmt.Sprintf("attempt %d of %d, %s, %d finding(s) open", min(l.State.Attempt, l.State.Limit), l.State.Limit, l.State.Phase, len(l.State.Book.Open()))
+		if l.State.Passed {
+			line = fmt.Sprintf("passed in attempt %d, %d finding(s) open", l.State.Attempt, len(l.State.Book.Open()))
+		}
+		if l.Escalation != nil {
+			line = fmt.Sprintf("gave up in attempt %d (%s), %d finding(s) open", min(l.State.Attempt, l.State.Limit), l.Escalation.Reason, len(l.State.Book.Open()))
+		}
+		fmt.Fprintf(c.out, "loop:     %s: %s\n", id, line)
+	}
+	if s.Paused != nil {
+		fmt.Fprintf(c.out, "paused:   at %s since %s: %s\n", s.Paused.Node, s.Paused.Since.Format(time.RFC3339), s.Paused.Reason)
+	}
 	if s.Error != "" {
 		fmt.Fprintf(c.out, "error:    %s\n", s.Error)
 	}
 	u := s.Usage
 	fmt.Fprintf(c.out, "usage:    %d tokens in, %d out, %d from cache; %d turns; $%.4f\n",
 		u.InTok, u.OutTok, u.CacheTok, u.Turns, u.CostUSD)
+	if line := capsLine(s); line != "" {
+		fmt.Fprintf(c.out, "caps:     %s\n", line)
+	}
 	return ExitDone
+}
+
+// capsLine says how much of the caps the run and the day have used, from the run's config as it is now.
+// It is empty when the config can't be read: status then says nothing about caps, rather than guess.
+func capsLine(s *run.State) string {
+	cfg, err := schema.LoadFactory(s.ConfigPath)
+	if err != nil {
+		return ""
+	}
+	j, err := run.BudgetJournal(cfg, nil)
+	if err != nil {
+		return ""
+	}
+	m := &budget.Meter{Run: &s.Usage, Caps: cfg.Budget, USD: cfg.PaysPerToken(), Journal: j}
+	day, err := m.Today()
+	if err != nil {
+		return "the day's spend can't be read: " + err.Error()
+	}
+	return describeCaps(cfg, s.Usage, day)
+}
+
+// describeCaps is the run's and the day's use of each cap, in words.
+func describeCaps(cfg *schema.Factory, runUse, dayUse gungnir.Usage) string {
+	one := func(c schema.Cap, u gungnir.Usage) string {
+		out := fmt.Sprintf("%d of %d tokens, %d of %d turns", u.CapTokens(), c.Tokens, u.Turns, c.Turns)
+		if cfg.PaysPerToken() {
+			out += fmt.Sprintf(", $%.4f of $%.4f", u.CostUSD, c.USD)
+		}
+		return out
+	}
+	return "this run " + one(cfg.Budget.PerRun, runUse) + "; today " + one(cfg.Budget.PerDay, dayUse)
 }

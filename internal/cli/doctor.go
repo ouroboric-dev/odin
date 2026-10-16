@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/run"
@@ -51,6 +52,7 @@ func (c *command) doctor(args []string) int {
 		return exit(bad)
 	}
 	if factory != nil {
+		checkBudget(factory, report)
 		c.checkSandbox(f.project, factory, report)
 	}
 	runs := filepath.Join(f.project, ".factory", "runs")
@@ -109,6 +111,33 @@ func checkConfig(path string, report func(level, what, msg string)) *schema.Fact
 	}
 	report("OK", "config", path)
 	return f
+}
+
+// checkBudget says what the caps are and how much of today's is used, and checks that the spend
+// journal can be read and written: a spend that can't be recorded can't be capped (spec §7.4).
+func checkBudget(f *schema.Factory, report func(level, what, msg string)) {
+	j, err := run.BudgetJournal(f, nil)
+	if err != nil {
+		report("ERROR", "budget", err.Error())
+		return
+	}
+	if err := os.MkdirAll(j.Dir, 0o700); err != nil {
+		report("ERROR", "budget", "the spend journal can't be made: "+err.Error())
+		return
+	}
+	probe, err := os.CreateTemp(j.Dir, ".doctor-*")
+	if err != nil {
+		report("ERROR", "budget", "the spend journal folder isn't writable: "+err.Error())
+		return
+	}
+	probe.Close()
+	os.Remove(probe.Name())
+	day, err := j.Today()
+	if err != nil {
+		report("ERROR", "budget", err.Error())
+		return
+	}
+	report("OK", "budget", describeCaps(f, gungnir.Usage{}, day)+" (journal "+j.Dir+")")
 }
 
 // checkSandbox checks the engine and the sandboxes of the project's runs (spec §6.2, §12): the

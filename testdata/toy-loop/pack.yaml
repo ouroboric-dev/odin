@@ -1,0 +1,7 @@
+name: toy-loop
+version: 0.1.0
+graph: graph.yaml
+checks:
+  unit: [grep, -q, done, build.txt] # in the leaf
+leaves:
+  repos/app: { description: the toy app, template: templates/app, first_commit: [LICENSE] }

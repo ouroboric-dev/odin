@@ -1,0 +1,19 @@
+# The scripted agent's answers for the toy graph, with the provider's quota used up the first time design runs.
+steps:
+  design:
+    - error: "Claude usage limit reached. Your limit will reset at 3pm."
+      kind: quota
+      usage: { in: 300, out: 20, turns: 1 }
+    - actions: [ { write: { path: design.md, content: "# Design\n" } } ]
+      result: { status: ok, summary: wrote design.md, usage: { in: 1000, out: 100, turns: 2 } }
+  spec:
+    - actions: [ { write: { path: spec.md, content: "# Spec\n" } } ]
+      result: { status: ok, summary: wrote spec.md, usage: { in: 1000, out: 100, turns: 2 } }
+    - actions: [ { write: { path: spec.md, content: "# Spec\n\nUsers: photographers and their clients.\n" } } ]
+      result: { status: ok, summary: named the users in spec.md, usage: { in: 1000, out: 100, turns: 2 } }
+  plan:
+    - actions: [ { write: { path: plan.md, content: "# Plan\n" } } ]
+      result: { status: ok, summary: wrote plan.md, usage: { in: 1000, out: 100, turns: 2 } }
+  build:
+    - actions: [ { write: { path: build.txt, content: "done\n" } } ]
+      result: { status: ok, summary: built it, usage: { in: 2000, out: 400, cache: 1500, turns: 5 } }

@@ -1,0 +1,10 @@
+# The scripted answers for the toy loop graph, for the run that passes at once. The implementer's
+# sessions are steps.build, one per attempt; a reviewer's are steps.build-<reviewer id>.
+steps:
+  build:
+    - actions: [ { write: { path: build.txt, content: "done\n" } } ]
+      result: { status: ok, summary: built it, usage: { in: 2000, out: 400, cache: 1500, turns: 5 } }
+  build-spec:
+    - result: { status: ok, summary: reviewed, report: [], usage: { in: 800, out: 100, turns: 2 } }
+  build-quality:
+    - result: { status: ok, summary: reviewed, report: [], usage: { in: 800, out: 100, turns: 2 } }

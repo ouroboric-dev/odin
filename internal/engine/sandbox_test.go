@@ -289,3 +289,51 @@ func TestAReadOnlyRoleThatChangesTheLeafIsAHardStop(t *testing.T) {
 		t.Errorf("the gate file = %s", gate)
 	}
 }
+
+// Backlog B-017: a sandbox that fails under a command is an infrastructure failure of the node. The
+// run stops failed and resumes; it is neither a failed command nor an abort of ygg.
+func TestASandboxThatFailsUnderACommandFailsTheNodeAndAResumeGoesOn(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("ygg refuses to prepare a sandbox as root: the sandbox's user is the operator's own")
+	}
+	r, fake := startSandboxed(t, buildNodes+"  - { id: check, kind: exec, run: [\"true\"], repo: repos/app }\n", buildScript)
+	broken := true
+	fake.Fail = func(c gungnir.Cmd) error {
+		if broken && c.Argv[0] == "true" {
+			return errors.New("podman couldn't run true in the sandbox (exit 125): the container may be gone")
+		}
+		return nil
+	}
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "container may be gone") {
+		t.Fatalf("Advance() = %+v, %v; want a failed run that says why", out, err)
+	}
+	if len(fake.Downs) != 1 {
+		t.Error("the sandbox of a failed run was left up")
+	}
+	broken = false
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Errorf("the resume: %+v, %v; want done", out, err)
+	}
+}
+
+func TestAProgramThatCannotStartOnTheHostIsAFailedCommand(t *testing.T) {
+	r := start(t, "key-points", "", "  - { id: x, kind: exec, run: [no-such-program-anywhere], repo: repos/app }\n", "steps: {}\n")
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "exit status 127") {
+		t.Fatalf("Advance() = %+v, %v; want a failed node, like a shell's command not found", out, err)
+	}
+	log, _ := os.ReadFile(filepath.Join(r.Dir, "logs", "x-1.log"))
+	if !strings.Contains(string(log), "no-such-program-anywhere") {
+		t.Errorf("the log = %q; it should say what could not start", log)
+	}
+}
+
+func TestACommandOnTheHostTakesNoEnvironmentOfItsOwn(t *testing.T) {
+	r := start(t, "key-points", "", oneNode, "steps: {}\n")
+	_, err := hostRunner{r: r, node: "x", dir: t.TempDir()}.Run(context.Background(),
+		gungnir.Cmd{Argv: []string{"true"}, Env: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "x"}})
+	if err == nil {
+		t.Error("a credential reached the host through a command's environment")
+	}
+}

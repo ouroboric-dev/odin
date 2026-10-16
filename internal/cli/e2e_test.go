@@ -22,7 +22,19 @@ func TestMain(m *testing.M) {
 	if os.Getenv("YGG_E2E_MAIN") == "1" {
 		os.Exit(Main(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 	}
-	os.Exit(m.Run())
+	os.Exit(withStateFolder(m))
+}
+
+// withStateFolder points the operator's state folder, where the spend journal defaults to, at a
+// folder of the test's own, so no test writes under the real HOME. A ygg the tests start inherits it.
+func withStateFolder(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "ygg-state-")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+	os.Setenv("XDG_STATE_HOME", dir)
+	return m.Run()
 }
 
 // walk starts the toy run and approves every stop. It returns the gates it stopped at, in order.
@@ -230,4 +242,74 @@ func TestToyGraphEndToEnd(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestARunThatReachesItsCapStopsAtBudgetCapAndOnlyApproveIsOffered(t *testing.T) {
+	dir, config := project(t, "script.yaml", "budget:\n  per_run: { tokens: 2500, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\n")
+	code, out, _ := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	id := runID(t, dir)
+	if code != ExitStopped {
+		t.Fatalf("run: exit %d, %q", code, out)
+	}
+	code, out, errOut := ygg(t, "approve", id, "design-gate", "--project", dir)
+	if code != ExitStopped || !strings.Contains(out, "stopped at the hard approval point budget-cap") ||
+		!strings.Contains(out, "ygg approve "+id+" build") || strings.Contains(out, "ygg reject") || !strings.Contains(out, "no rejection") {
+		t.Fatalf("approve: exit %d:\n%s%s\nwant a stop at budget-cap that offers approve only", code, out, errOut)
+	}
+	if code, _, errOut := ygg(t, "reject", id, "build", "--reason", "no", "--project", dir); code != ExitRefused || !strings.Contains(errOut, "takes approve") {
+		t.Errorf("reject: exit %d, %q", code, errOut)
+	}
+	code, out, _ = ygg(t, "status", id, "--project", dir)
+	if code != ExitDone || !strings.Contains(out, "waiting:  build (budget-cap)") || !strings.Contains(out, "usage:    3000 tokens in") {
+		t.Errorf("status: exit %d:\n%s", code, out)
+	}
+	// Raise the cap, approve, and the run goes on to the end (the design gate is behind it).
+	b, _ := os.ReadFile(config)
+	os.WriteFile(config, []byte(strings.Replace(string(b), "tokens: 2500", "tokens: 50000", 1)), 0o644)
+	code, out, errOut = ygg(t, "approve", id, "build", "--project", dir)
+	for code == ExitStopped {
+		s, _ := run.LoadState(run.Dir(dir, id))
+		code, out, errOut = ygg(t, "approve", id, s.Pending, "--project", dir)
+	}
+	if code != ExitDone {
+		t.Errorf("after the cap was raised: exit %d:\n%s%s", code, out, errOut)
+	}
+}
+
+func TestAUsedUpQuotaPausesTheRunWithExitCode4AndResumeGoesOn(t *testing.T) {
+	dir, config := project(t, "script-quota.yaml", "")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	if code != ExitPaused || ExitPaused != 4 || !strings.Contains(errOut, "paused") || !strings.Contains(errOut, "usage limit reached") || !strings.Contains(errOut, "ygg resume") {
+		t.Fatalf("run: exit %d:\n%s%s\nwant exit 4 and a message that says why and how to resume", code, out, errOut)
+	}
+	id := runID(t, dir)
+	code, out, _ = ygg(t, "status", id, "--project", dir)
+	if code != ExitDone || !strings.Contains(out, "status:   paused") || !strings.Contains(out, "paused:   at design since") || !strings.Contains(out, "usage limit reached") {
+		t.Errorf("status: exit %d:\n%s", code, out)
+	}
+	if code, _, errOut := ygg(t, "approve", id, "design", "--project", dir); code != ExitRefused {
+		t.Errorf("approve of a paused run: exit %d, %q; it waits for the provider, not for a decision", code, errOut)
+	}
+	code, out, errOut = ygg(t, "resume", id, "--project", dir)
+	if code != ExitStopped || !strings.Contains(out, "stopped at approval point design-gate") {
+		t.Errorf("resume: exit %d:\n%s%s; want the run to go on to the design gate", code, out, errOut)
+	}
+	if _, out, _ = ygg(t, "status", id, "--project", dir); strings.Contains(out, "paused:") {
+		t.Errorf("status still says paused:\n%s", out)
+	}
+}
+
+func TestStatusShowsHowMuchOfTheCapsTheRunAndTheDayHaveUsed(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	id := runID(t, dir)
+	_, out, _ := ygg(t, "status", id, "--project", dir)
+	if !strings.Contains(out, "caps:     this run 1100 of 100000 tokens, 2 of 100 turns; today 1100 of 200000 tokens, 2 of 200 turns") {
+		t.Errorf("status:\n%s", out)
+	}
+	// A config that can't be read adds nothing to status; the rest still shows.
+	os.WriteFile(config, []byte("not: [valid"), 0o644)
+	if code, out, _ := ygg(t, "status", id, "--project", dir); code != ExitDone || strings.Contains(out, "caps:") || !strings.Contains(out, "usage:") {
+		t.Errorf("status with a broken config: exit %d:\n%s", code, out)
+	}
 }
