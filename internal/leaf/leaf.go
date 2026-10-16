@@ -195,16 +195,56 @@ func (l *Leaf) checkGitFile() error {
 	return nil
 }
 
+// restoreGitFile puts back the .git file git made. A .git that is not a regular file (a directory,
+// a symlink, a named pipe) is a *PolicyError and stays as it is: Odin never reads or writes through
+// it. The new file is created in the leaf and renamed over .git, so the restore replaces the name
+// and never writes to a file a link shares.
 func (l *Leaf) restoreGitFile() error {
 	rel, err := filepath.Rel(l.Dir(), l.repo.GitDir)
 	if err != nil {
 		return err
 	}
 	p := filepath.Join(l.Dir(), ".git")
-	if st, err := os.Lstat(p); err == nil && st.IsDir() {
-		return &PolicyError{"the leaf's .git is a directory"}
+	if st, err := os.Lstat(p); err == nil && !st.Mode().IsRegular() {
+		return &PolicyError{fmt.Sprintf("the leaf's .git is %s, not the file git made; remove it, and Odin puts the file back", kind(st.Mode()))}
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
-	return os.WriteFile(p, []byte("gitdir: "+rel+"\n"), 0o644)
+	f, err := os.CreateTemp(l.Dir(), ".git.ygg-*")
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString("gitdir: " + rel + "\n")
+	if err == nil {
+		err = f.Chmod(0o644)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(f.Name(), p)
+	}
+	if err != nil {
+		os.Remove(f.Name())
+	}
+	return err
+}
+
+// kind names a file type that is not a regular file.
+func kind(m fs.FileMode) string {
+	switch {
+	case m.IsDir():
+		return "a directory"
+	case m&fs.ModeSymlink != 0:
+		return "a symlink"
+	case m&fs.ModeNamedPipe != 0:
+		return "a named pipe"
+	case m&fs.ModeSocket != 0:
+		return "a socket"
+	case m&fs.ModeDevice != 0:
+		return "a device"
+	}
+	return "not a regular file"
 }
 
 // checkNested refuses any .git below the leaf's top level: an agent can build a repository from

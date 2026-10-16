@@ -108,6 +108,80 @@ func TestCheckpointRefusesAChangedGitFile(t *testing.T) {
 	}
 }
 
+// A .git that is a link is refused, and restoring the .git file never writes to what it points at.
+func TestRestoringAGitFileNeverWritesThroughASymlink(t *testing.T) {
+	restores := map[string]func(l *Leaf, cp string) error{
+		"Reset": func(l *Leaf, cp string) error { return l.Reset(ctx, "ygg/run1", cp) },
+		"Save": func(l *Leaf, cp string) error {
+			_, err := l.Save(ctx, "refs/ygg/run1/discarded/1", cp, "save")
+			return err
+		},
+	}
+	for name, restore := range restores {
+		t.Run(name, func(t *testing.T) {
+			l := api(t)
+			cp, _ := l.Head(ctx)
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("not the leaf's\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			p := filepath.Join(l.Dir(), ".git")
+			if err := os.Remove(p); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, p); err != nil {
+				t.Fatal(err)
+			}
+			if err := restore(l, cp); !IsPolicy(err) {
+				t.Errorf("%s() with a symlinked .git = %v, want a *PolicyError", name, err)
+			}
+			if b, _ := os.ReadFile(outside); string(b) != "not the leaf's\n" {
+				t.Errorf("%s() wrote through the symlink: the target holds %q", name, b)
+			}
+			if st, err := os.Lstat(p); err != nil || st.Mode()&os.ModeSymlink == 0 {
+				t.Errorf("%s() replaced the symlink, which is the evidence: %v", name, err)
+			}
+		})
+	}
+	t.Run("hard link", func(t *testing.T) {
+		l := api(t)
+		cp, _ := l.Head(ctx)
+		p := filepath.Join(l.Dir(), ".git")
+		other := filepath.Join(filepath.Dir(l.Dir()), "linked")
+		if err := os.WriteFile(other, []byte("not the leaf's\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(other, p); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Reset(ctx, "ygg/run1", cp); err != nil {
+			t.Fatalf("Reset() with a hard-linked .git = %v", err)
+		}
+		if b, _ := os.ReadFile(other); string(b) != "not the leaf's\n" {
+			t.Errorf("Reset() wrote through the hard link: the other name holds %q", b)
+		}
+		if _, _, err := l.Checkpoint(ctx, "after the reset"); err != nil {
+			t.Errorf("the reset didn't restore the leaf's .git: %v", err)
+		}
+	})
+	t.Run("missing", func(t *testing.T) {
+		l := api(t)
+		cp, _ := l.Head(ctx)
+		if err := os.Remove(filepath.Join(l.Dir(), ".git")); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Reset(ctx, "ygg/run1", cp); err != nil {
+			t.Fatalf("Reset() with no .git = %v", err)
+		}
+		if _, _, err := l.Checkpoint(ctx, "after the reset"); err != nil {
+			t.Errorf("the reset didn't restore the leaf's .git: %v", err)
+		}
+	})
+}
+
 func TestResetGoesBackToTheCheckpoint(t *testing.T) {
 	l := api(t)
 	write(t, l, ".gitignore", "build/\n")
