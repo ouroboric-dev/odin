@@ -1,11 +1,13 @@
 github.com/dlclark/regexp2 v1.11.0 h1:G/nrcoOa7ZXlpoa/91N3X7mM3r8eIlMBBJZvsz/mxKI=
 github.com/dlclark/regexp2 v1.11.0/go.mod h1:DHkYz0B9wPfa6wondMfaivmHpzrQ3v9q8cnmRbL6yW8=
-github.com/ouroboric-dev/gleipnir v0.0.0-20261016183926-76530262d915 h1:iks8zwT5ukYkEh89RhVj+nvJwcJTB0YWUWW2R0oTOEQ=
-github.com/ouroboric-dev/gleipnir v0.0.0-20261016183926-76530262d915/go.mod h1:IIKL0KgZHRYi6HV2b1qUTukL/Y5w0S2EAZjoyGZbA/k=
-github.com/ouroboric-dev/gungnir v0.0.0-20261016183606-768edab1e4a0 h1:w7LyhCIa3pYnM9t+/BZ8tUvZJU2qV4CLPXfRbLh0gGM=
-github.com/ouroboric-dev/gungnir v0.0.0-20261016183606-768edab1e4a0/go.mod h1:NEj+bRbIgN2QLv8AbnDF4CAn9IYV0m/8i4j25unu10s=
+github.com/ouroboric-dev/gleipnir v0.0.0-20261016222255-01b53f7d153b h1:V6aXDGwpgNHse16zIClmecvi7r5OdCXvBxEDpF+MqGU=
+github.com/ouroboric-dev/gleipnir v0.0.0-20261016222255-01b53f7d153b/go.mod h1:O/jmB//9UHhW8cYaJS40PZWoWEE9fg+7fQdPJ+zGXgg=
+github.com/ouroboric-dev/gungnir v0.0.0-20261016221231-d32b9b24c1fb h1:Mes/M1tpGOrs0F4eNuTdGNbzAtsuQdD08vqVYLPRKgQ=
+github.com/ouroboric-dev/gungnir v0.0.0-20261016221231-d32b9b24c1fb/go.mod h1:NEj+bRbIgN2QLv8AbnDF4CAn9IYV0m/8i4j25unu10s=
 github.com/ouroboric-dev/havamal v0.0.0-20261016183637-e7b4e47b4785 h1:pE5v9ES/EPArdNoSH0NPDlDHf4vgG80S+KJV4O0w3HM=
 github.com/ouroboric-dev/havamal v0.0.0-20261016183637-e7b4e47b4785/go.mod h1:wGR2yR184wSq86n1p4tPv/nqgq3O8+JLw7b5Rw6+BPo=
+github.com/ouroboric-dev/jormungandr v0.0.0-20261016222257-dce7111b25de h1:o8Pt8SFH5G/F6tB/MKnc8ccNdOoC/JZZwianEo7eF9c=
+github.com/ouroboric-dev/jormungandr v0.0.0-20261016222257-dce7111b25de/go.mod h1:Y6OR269yNboh3Mh50QksBKfiKmjloJtlfQXKzsZdgDE=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 h1:1EYB5IzjZawrrnELUi78f9fPu57HuXjmddZPjrls/28=
 github.com/santhosh-tekuri/jsonschema/v6 v6.0.3/go.mod h1:JXeL+ps8p7/KNMjDQk3TCwPpBy0wYklyWTfbkIzdIFU=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
