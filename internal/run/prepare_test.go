@@ -157,3 +157,26 @@ func TestRunJSONRecordsTheSkillSetAndAResumeNeedsTheSameSkills(t *testing.T) {
 		t.Errorf("Open() with the skill gone = %v, want a refusal", err)
 	}
 }
+
+func TestTheSmokeRealmPreparesWithBothRealAdapters(t *testing.T) {
+	smoke, err := filepath.Abs("../../testdata/smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(smoke, "factory.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(t.TempDir(), "factory.yaml")
+	if err := os.WriteFile(cfg, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Prepare(ctx, Options{Project: treetest.Project(t), Config: cfg, Realm: smoke})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Agents["implementer"].Name() != "claude-code" || s.Agents["reviewer"].Name() != "opencode" ||
+		strings.Join(s.Sandbox.Egress, ",") != "api.anthropic.com,openrouter.ai" {
+		t.Errorf("agents %v, egress %v", s.Agents, s.Sandbox.Egress)
+	}
+}
