@@ -45,37 +45,38 @@ type RoleRecord struct {
 
 // State is run.json. Odin is its only writer.
 type State struct {
-	Schema       string                `json:"schema"`
-	ID           string                `json:"id"`
-	Status       Status                `json:"status"`
-	Mode         gungnir.Mode          `json:"mode"`
-	Realm        string                `json:"realm"`
-	RealmVersion string                `json:"realm_version"`
-	RealmDir     string                `json:"realm_dir"`
-	GraphVersion string                `json:"graph_version"`
-	GraphSHA256  string                `json:"graph_sha256"`
-	ConfigPath   string                `json:"config_path"`
-	ConfigSHA256 string                `json:"config_sha256"`
-	Brief        string                `json:"brief,omitempty"`
-	BriefSHA256  string                `json:"brief_sha256,omitempty"`
-	Roles        map[string]RoleRecord `json:"roles"`
-	Root         string                `json:"root"`                   // the tree's root: the project, or an umbrella above it
-	ProjectPath  string                `json:"project"`                // the project's path from the root
-	Leaves       map[string]LeafRecord `json:"leaves"`                 // leaf path from the project: the run's branch and checkpoint in it
-	Position     int                   `json:"position"`               // index of the next node to run
-	Attempts     map[string]int        `json:"attempts"`               // node id: attempts started
-	Pending      string                `json:"pending,omitempty"`      // the node waiting for a decision
-	PendingGate  gungnir.Gate          `json:"pending_gate,omitempty"` // the approval point it waits at
-	Reasons      map[string]string     `json:"reasons,omitempty"`      // node id: rejection reason for its next attempt
-	Summaries    map[string]string     `json:"summaries,omitempty"`    // node id: its last result
-	Waived       map[string]bool       `json:"waived,omitempty"`       // pointer node id: shrink-guard approved for its next move
-	Skills       skills.Record         `json:"skills"`                 // every skill the graph names, with the set's hash (spec §5.1)
-	Usage        gungnir.Usage         `json:"usage"`
-	Ledger       ledger.Anchor         `json:"ledger"`
-	Error        string                `json:"error,omitempty"`
-	Exec         *ExecProcess          `json:"exec,omitempty"` // the exec node running now, if any
-	Created      time.Time             `json:"created"`
-	Updated      time.Time             `json:"updated"`
+	Schema       string                 `json:"schema"`
+	ID           string                 `json:"id"`
+	Status       Status                 `json:"status"`
+	Mode         gungnir.Mode           `json:"mode"`
+	Realm        string                 `json:"realm"`
+	RealmVersion string                 `json:"realm_version"`
+	RealmDir     string                 `json:"realm_dir"`
+	GraphVersion string                 `json:"graph_version"`
+	GraphSHA256  string                 `json:"graph_sha256"`
+	ConfigPath   string                 `json:"config_path"`
+	ConfigSHA256 string                 `json:"config_sha256"`
+	Brief        string                 `json:"brief,omitempty"`
+	BriefSHA256  string                 `json:"brief_sha256,omitempty"`
+	Roles        map[string]RoleRecord  `json:"roles"`
+	Root         string                 `json:"root"`                   // the tree's root: the project, or an umbrella above it
+	ProjectPath  string                 `json:"project"`                // the project's path from the root
+	Leaves       map[string]LeafRecord  `json:"leaves"`                 // leaf path from the project: the run's branch and checkpoint in it
+	Position     int                    `json:"position"`               // index of the next node to run
+	Attempts     map[string]int         `json:"attempts"`               // node id: attempts started
+	Pending      string                 `json:"pending,omitempty"`      // the node waiting for a decision
+	PendingGate  gungnir.Gate           `json:"pending_gate,omitempty"` // the approval point it waits at
+	Reasons      map[string]string      `json:"reasons,omitempty"`      // node id: rejection reason for its next attempt
+	Summaries    map[string]string      `json:"summaries,omitempty"`    // node id: its last result
+	Waived       map[string]bool        `json:"waived,omitempty"`       // pointer node id: shrink-guard approved for its next move
+	Skills       skills.Record          `json:"skills"`                 // every skill the graph names, with the set's hash (spec §5.1)
+	Sandboxes    map[string]gungnir.Env `json:"sandboxes,omitempty"`    // leaf path: its sandbox, while one is up, so a leftover can be stopped
+	Usage        gungnir.Usage          `json:"usage"`
+	Ledger       ledger.Anchor          `json:"ledger"`
+	Error        string                 `json:"error,omitempty"`
+	Exec         *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
+	Created      time.Time              `json:"created"`
+	Updated      time.Time              `json:"updated"`
 }
 
 // LeafRecord is where a run stands in one leaf (spec §4.3).

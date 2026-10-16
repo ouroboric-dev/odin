@@ -27,12 +27,18 @@ import (
 
 // Options say what to run.
 type Options struct {
-	Project string            // the project umbrella (L1), inside an instance tree
-	Config  string            // factory.yaml
-	Realm   string            // the directory that holds pack.yaml
-	Brief   string            // optional
-	Mode    gungnir.Mode      // "" means the config's mode
-	Libs    *skills.Libraries // tests only: skill libraries to use in place of the pinned and private ones
+	Project string       // the project umbrella (L1), inside an instance tree
+	Config  string       // factory.yaml
+	Realm   string       // the directory that holds pack.yaml
+	Brief   string       // optional
+	Mode    gungnir.Mode // "" means the config's mode
+	Hooks   Hooks        // tests only
+}
+
+// Hooks replace parts of a run in tests: the skill libraries, and the sandbox driver.
+type Hooks struct {
+	Libs       *skills.Libraries
+	NewSandbox NewSandbox
 }
 
 // Setup is everything a run needs, loaded and checked.
@@ -52,6 +58,7 @@ type Setup struct {
 	Libs         skills.Libraries         // where the graph's skills come from
 	Skills       skills.Record            // every skill the graph names, with the set's hash
 	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
+	newSandbox   NewSandbox
 
 	Root        string               // the tree's root: the project, or an umbrella above it
 	ProjectPath string               // the project's path from the root
@@ -107,10 +114,11 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
+	s.newSandbox = o.Hooks.NewSandbox
 	if err := s.prepareSandbox(); err != nil {
 		return nil, err
 	}
-	if err := s.prepareSkills(o.Libs); err != nil {
+	if err := s.prepareSkills(o.Hooks.Libs); err != nil {
 		return nil, err
 	}
 	if o.Brief != "" {
@@ -222,6 +230,7 @@ type Run struct {
 	unlock  func()
 	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
 	Saved   []string        // one note per leaf whose discarded changes Open saved to a ref before resetting it
+	Sandbox gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
 }
 
 // Branch is the branch a run works on in every leaf.
@@ -347,6 +356,11 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		os.RemoveAll(dir) // the run's own new directory: nothing ran
 		return nil, err
 	}
+	if err := r.openSandbox(setup.newSandbox); err != nil {
+		r.Close()
+		os.RemoveAll(dir)
+		return nil, err
+	}
 	if err := r.begin(ctx); err != nil {
 		r.State.Status, r.State.Error = StatusFailed, err.Error()
 		r.Log(gungnir.Event{Name: gungnir.EventRunFailed, Result: r.State.Error})
@@ -459,6 +473,11 @@ func (r *Run) createLeaf(ctx context.Context, p string) error {
 // leaves reset to their checkpoints, since its node restarts from scratch (spec §4.3). mode
 // switches the run's mode at this pause ("" keeps it); a switch is logged.
 func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, error) {
+	return OpenWith(ctx, project, id, mode, Hooks{})
+}
+
+// OpenWith is Open with parts replaced, for tests.
+func OpenWith(ctx context.Context, project, id string, mode gungnir.Mode, h Hooks) (*Run, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("%q is not a run id", id)
 	}
@@ -474,7 +493,7 @@ func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, err
 	if err != nil {
 		return nil, err
 	}
-	r, err := open(ctx, project, dir, mode)
+	r, err := open(ctx, project, dir, mode, h)
 	if err != nil {
 		unlock()
 		return nil, err
@@ -483,7 +502,7 @@ func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, err
 	return r, nil
 }
 
-func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, error) {
+func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) (*Run, error) {
 	s, err := LoadState(dir)
 	if err != nil {
 		return nil, err
@@ -491,7 +510,7 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 	if mode == "" {
 		mode = s.Mode
 	}
-	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Brief: s.Brief, Mode: mode})
+	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Brief: s.Brief, Mode: mode, Hooks: h})
 	if err != nil {
 		return nil, err
 	}
@@ -522,6 +541,15 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 		s.Exec = nil
 	}
 	r := &Run{Project: setup.Project.Dir, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
+	if err := r.openSandbox(setup.newSandbox); err != nil {
+		l.Close()
+		return nil, err
+	}
+	// A ygg that was killed leaves its sandboxes up: stop them before the run goes on.
+	if err := r.DownSandboxes(ctx); err != nil {
+		l.Close()
+		return nil, fmt.Errorf("stopping the sandboxes an earlier ygg left; ygg doctor can stop them: %w", err)
+	}
 	if err := r.restoreLeaves(ctx); err != nil {
 		l.Close()
 		return nil, err

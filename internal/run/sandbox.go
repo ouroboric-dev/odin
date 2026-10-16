@@ -1,0 +1,95 @@
+package run
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"path/filepath"
+	"slices"
+
+	"github.com/ouroboric-dev/gleipnir/sandbox"
+	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/odin/internal/tree"
+)
+
+// NewSandbox builds the sandbox driver of a run. dir is where it keeps its configuration, inside
+// the run's own directory. Tests replace it with a fake.
+type NewSandbox func(s *SandboxSetup, dir string) (gungnir.Sandbox, error)
+
+// defaultSandbox is the devcontainer driver on the engine factory.yaml names.
+func defaultSandbox(s *SandboxSetup, dir string) (gungnir.Sandbox, error) {
+	return sandbox.New(s.Engine, s.Config, dir)
+}
+
+// openSandbox gives the run its driver, when its config has a sandbox section.
+func (r *Run) openSandbox(open NewSandbox) error {
+	if r.Setup.Sandbox == nil {
+		return nil
+	}
+	if open == nil {
+		open = defaultSandbox
+	}
+	var err error
+	r.Sandbox, err = open(r.Setup.Sandbox, filepath.Join(r.Dir, "sandbox"))
+	return err
+}
+
+// Runner returns what runs commands in repo's sandbox, starting the sandbox the first time. It
+// returns nil when the run has no sandbox, or repo is an umbrella: Odin's own generators run on the
+// host. A sandbox is started once per run and leaf, and Advance stops it again when it leaves.
+func (r *Run) Runner(ctx context.Context, repo string) (gungnir.Runner, error) {
+	if r.Sandbox == nil || !r.Setup.isLeaf(repo) {
+		return nil, nil
+	}
+	if env, ok := r.State.Sandboxes[repo]; ok {
+		return gungnir.Bind(r.Sandbox, env), nil
+	}
+	nodes, err := tree.Resolve(ctx, r.Setup.Root, filepath.Join(r.Setup.ProjectPath, repo))
+	if err != nil {
+		return nil, err
+	}
+	parent, leaf := nodes[len(nodes)-2], nodes[len(nodes)-1]
+	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: repo, Parent: parent.Dir, Leaf: leaf.Dir,
+		GitDir: leaf.GitDir, Egress: r.Setup.Sandbox.Egress})
+	if err != nil {
+		return nil, err
+	}
+	if r.State.Sandboxes == nil {
+		r.State.Sandboxes = map[string]gungnir.Env{}
+	}
+	// Recorded before anything runs in it: a ygg that dies from here on leaves a container the next
+	// resume, and doctor, can find and stop.
+	r.State.Sandboxes[repo] = env
+	if err := r.Log(gungnir.Event{Name: gungnir.EventSandboxUp, Note: fmt.Sprintf("%s: container %.12s", repo, env.Container)}); err != nil {
+		return nil, err
+	}
+	if err := r.Save(); err != nil {
+		return nil, err
+	}
+	return gungnir.Bind(r.Sandbox, env), nil
+}
+
+// DownSandboxes stops every sandbox this process or an earlier one started for the run, and clears
+// the record of each one it stopped. A sandbox that won't stop stays recorded, for doctor.
+func (r *Run) DownSandboxes(ctx context.Context) error {
+	if r.Sandbox == nil || len(r.State.Sandboxes) == 0 {
+		return nil
+	}
+	var errs []error
+	for _, repo := range slices.Sorted(maps.Keys(r.State.Sandboxes)) {
+		env := r.State.Sandboxes[repo]
+		if err := r.Sandbox.Down(ctx, env); err != nil {
+			errs = append(errs, fmt.Errorf("stopping the sandbox of %s: %w", repo, err))
+			continue
+		}
+		delete(r.State.Sandboxes, repo)
+		if err := r.Log(gungnir.Event{Name: gungnir.EventSandboxDown, Note: repo}); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := r.Save(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}

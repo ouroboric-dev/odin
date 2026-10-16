@@ -155,7 +155,7 @@ func TestRunJSONRecordsTheSkillSetAndAResumeNeedsTheSameSkills(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
 	cfg := writeConfig(t, t.TempDir(), scriptedRoles+fullCaps)
 	realm := realmWithSkills(t, "plain-language")
-	r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: realm, Libs: skillLib(t)})
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: realm, Hooks: Hooks{Libs: skillLib(t)}})
 	if err != nil {
 		t.Fatal(err)
 	}
