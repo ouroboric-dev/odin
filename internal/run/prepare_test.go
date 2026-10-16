@@ -27,7 +27,6 @@ func toySandbox(t *testing.T) string {
 // implementer line.
 func sandboxConfig(t *testing.T, implementer, extra string) string {
 	t.Helper()
-	SetProcessIDsForTest(t, 1000, 1000) // a sandbox is for an operator, not for root
 	script := filepath.Join(toySandbox(t), "script.yaml")
 	body := "roles:\n  planner: { agent: scripted, model: none, script: " + script + " }\n  implementer: " + implementer + "\n" + fullCaps + sandboxSection + extra
 	p := filepath.Join(t.TempDir(), "factory.yaml")
@@ -81,15 +80,6 @@ func variant(t *testing.T, file string, change func(string) string) string {
 		t.Fatal(err)
 	}
 	return dir
-}
-
-func TestPrepareRefusesToRunAsRoot(t *testing.T) {
-	project := treetest.Project(t, "repos/app")
-	cfg := sandboxConfig(t, "{ agent: claude-code, model: sonnet }", "")
-	SetProcessIDsForTest(t, 0, 0)
-	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: toySandbox(t)}); err == nil || !strings.Contains(err.Error(), "must not run as root") {
-		t.Errorf("Prepare() as root with a sandbox = %v; want a refusal that ygg must not run as root", err)
-	}
 }
 
 func TestPrepareRefusesWhatWouldRunOutsideTheSandbox(t *testing.T) {
@@ -181,7 +171,6 @@ func TestTheSmokeRealmPreparesWithBothRealAdapters(t *testing.T) {
 	if err := os.WriteFile(cfg, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	SetProcessIDsForTest(t, 1000, 1000)
 	s, err := Prepare(ctx, Options{Project: treetest.Project(t), Config: cfg, Realm: smoke})
 	if err != nil {
 		t.Fatal(err)

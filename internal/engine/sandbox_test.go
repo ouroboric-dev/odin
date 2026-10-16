@@ -32,7 +32,6 @@ func startSandboxed(t *testing.T, nodes, script string) (*run.Run, *sandboxfake.
 // startSandboxedWith is startSandboxed with other hooks, such as a skill library.
 func startSandboxedWith(t *testing.T, nodes, script string, h run.Hooks) (*run.Run, *sandboxfake.Sandbox) {
 	t.Helper()
-	run.SetProcessIDsForTest(t, 1000, 1000) // a sandbox is for an operator, not for root
 	realm, cfg := t.TempDir(), t.TempDir()
 	project := treetest.Project(t, "repos/app")
 	tmpl := filepath.Join(realm, "t")

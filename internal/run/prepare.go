@@ -22,10 +22,6 @@ type SandboxSetup struct {
 	Egress []string // the model APIs of the roles the graph uses, and the realm's registries
 }
 
-// processIDs reads the user and group the process runs as. A variable so that tests can stand in
-// for an operator when the suite itself runs as root (as in CI); see SetProcessIDsForTest.
-var processIDs = func() (uid, gid int) { return os.Getuid(), os.Getgid() }
-
 // prepareSandbox sets up the sandbox of a run, and refuses a graph that would run outside it.
 func (s *Setup) prepareSandbox() error {
 	if s.Config.Sandbox == nil {
@@ -41,7 +37,7 @@ func (s *Setup) prepareSandbox() error {
 			return fmt.Errorf("node %s runs acceptance checks, which run in the project umbrella and so outside any sandbox; a realm can use them once a sandbox for them exists (Phase 3, decision 11)", n.ID)
 		}
 	}
-	uid, gid := processIDs()
+	uid, gid := os.Getuid(), os.Getgid()
 	if uid == 0 {
 		return fmt.Errorf("ygg must not run as root: the sandbox's user is the operator's own")
 	}
