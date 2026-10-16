@@ -386,7 +386,9 @@ func roles(setup *Setup) map[string]RoleRecord {
 	return roles
 }
 
-// begin creates the leaves the project lacks and starts the run's branch in every leaf.
+// begin creates the leaves the project lacks and starts the run's branch in every leaf that has no
+// record yet. Start runs it, and Open again, so a run whose start failed resumes once the cause is
+// fixed.
 func (r *Run) begin(ctx context.Context) error {
 	s := r.Setup
 	for _, p := range s.Create {
@@ -395,6 +397,9 @@ func (r *Run) begin(ctx context.Context) error {
 		}
 	}
 	for _, p := range s.Leaves() {
+		if _, ok := r.State.Leaves[p]; ok {
+			continue // started already: a resume of a run whose start failed after this leaf
+		}
 		l, err := r.Leaf(p)
 		if err != nil {
 			return err
@@ -516,6 +521,12 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 	if mode != s.Mode {
 		r.changes = append(r.changes, gungnir.Event{Name: gungnir.EventModeChanged, Mode: mode, Looser: mode.Looser(s.Mode)})
 		s.Mode = mode
+	}
+	if s.Status != StatusDone {
+		if err := r.begin(ctx); err != nil {
+			l.Close()
+			return nil, err
+		}
 	}
 	return r, nil
 }

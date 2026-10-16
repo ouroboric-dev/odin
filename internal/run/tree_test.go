@@ -118,6 +118,28 @@ func TestAFailureAfterTheRunStartedIsRecorded(t *testing.T) {
 	if err != nil || s.Status != StatusFailed || !strings.Contains(s.Error, "uncommitted") {
 		t.Errorf("run.json = %+v, %v; want the run recorded as failed, with why", s, err)
 	}
+	// Resuming before the cause is fixed is refused, and the edit stays.
+	if _, err := Open(ctx, project, f.ID, ""); err == nil || !strings.Contains(err.Error(), "uncommitted") {
+		t.Errorf("Open() with the edit still there = %v, want a refusal", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(nodes[1].Dir, "README.md")); string(b) != "a person's edit\n" {
+		t.Errorf("the refused Open touched the edit: %q", b)
+	}
+	// Once the person commits the edit, the resume starts the run's branch the start couldn't.
+	app := git.Repo{GitDir: nodes[1].GitDir, WorkTree: nodes[1].Dir}
+	if _, err := app.Run(ctx, "commit", "-q", "-am", "the person's edit"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(ctx, project, f.ID, "")
+	if err != nil {
+		t.Fatalf("Open() after the cause was fixed = %v", err)
+	}
+	defer r.Close()
+	head, _ := app.Run(ctx, "rev-parse", "HEAD")
+	branch, _ := app.Run(ctx, "rev-parse", "--abbrev-ref", "HEAD")
+	if rec := r.State.Leaves["repos/app"]; rec.Branch != Branch(f.ID) || branch != rec.Branch || rec.Checkpoint != head {
+		t.Errorf("leaf record = %+v; the leaf is on %s at %s; want the run's branch started at the resume", rec, branch, head)
+	}
 }
 
 func TestTheRealmCreatesTheLeavesAProjectLacks(t *testing.T) {

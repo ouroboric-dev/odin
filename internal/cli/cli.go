@@ -127,6 +127,11 @@ func (c *command) run(args []string) int {
 		return ExitRefused
 	}
 	r, err := run.Start(c.ctx, run.Options{Project: f.project, Config: f.config, Realm: f.realm, Brief: f.brief, Mode: mode})
+	var failed *run.Failed
+	if errors.As(err, &failed) { // it started, so run.json records it: fix the cause, then resume
+		fmt.Fprintf(c.err, "Run %s failed: %v\nFix the cause, then run: ygg resume %s\n", failed.ID, failed.Err, failed.ID)
+		return ExitFailed
+	}
 	if err != nil {
 		return c.refuse(err)
 	}

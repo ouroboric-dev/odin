@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/odin/internal/tree"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
@@ -147,5 +148,22 @@ func TestARefusedCommandChangesNothing(t *testing.T) {
 	}
 	if read("run.json") != state || read("ledger.jsonl") != ledger {
 		t.Error("a refused resume of a done run changed run.json or the ledger")
+	}
+}
+
+// A run that fails after it started is recorded as failed and exits 1, with the resume hint
+// (decision 16); a refused start exits 2.
+func TestAFailedStartExitsOne(t *testing.T) {
+	_, config := project(t, "script.yaml", "")
+	dir := treetest.Project(t, "repos/app")
+	if _, err := tree.Resolve(context.Background(), dir, "repos/app"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repos", "app", "README.md"), []byte("a person's edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	if code != ExitFailed || !strings.Contains(errOut, "ygg resume "+runID(t, dir)) {
+		t.Errorf("run with a dirty leaf: exit %d, want %d with the resume hint:\n%s", code, ExitFailed, errOut)
 	}
 }
