@@ -6,7 +6,7 @@ require (
 	github.com/ouroboric-dev/gleipnir v0.0.0-20261016222255-01b53f7d153b
 	github.com/ouroboric-dev/gungnir v0.0.0-20261016221231-d32b9b24c1fb
 	github.com/ouroboric-dev/havamal v0.0.0-20261016183637-e7b4e47b4785
-	github.com/ouroboric-dev/jormungandr v0.0.0-20261016222257-dce7111b25de
+	github.com/ouroboric-dev/jormungandr v0.0.0-20261016225102-4db81eac06c0
 )
 
 require (
