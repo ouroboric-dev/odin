@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -10,7 +11,10 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
+
+var ctx = context.Background()
 
 const (
 	scriptedRoles = "roles:\n  planner: { agent: scripted, model: none, script: SCRIPT }\n  implementer: { agent: scripted, model: none, script: SCRIPT }\n"
@@ -49,8 +53,8 @@ func TestRunRefusesWithoutCompleteCaps(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			project := t.TempDir()
-			_, err := Start(Options{Project: project, Config: writeConfig(t, t.TempDir(), c.config), Realm: toy(t)})
+			project := treetest.Project(t, "repos/app")
+			_, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), c.config), Realm: toy(t)})
 			var ce *schema.CapsError
 			if !errors.As(err, &ce) {
 				t.Fatalf("Start() error = %v, want a *schema.CapsError", err)
@@ -66,23 +70,24 @@ func TestRunRefusesWithoutCompleteCaps(t *testing.T) {
 		})
 	}
 	t.Run("resume refuses in the same cases", func(t *testing.T) {
-		project, cfgDir := t.TempDir(), t.TempDir()
-		r, err := Start(Options{Project: project, Config: writeConfig(t, cfgDir, scriptedRoles+fullCaps), Realm: toy(t)})
+		project := treetest.Project(t, "repos/app")
+		cfgDir := t.TempDir()
+		r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, cfgDir, scriptedRoles+fullCaps), Realm: toy(t)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		id := r.State.ID
 		r.Close()
 		writeConfig(t, cfgDir, scriptedRoles+"budget:\n  per_run: { tokens: 100000, turns: 100 }\n")
-		_, err = Open(project, id, "")
+		_, err = Open(ctx, project, id, "")
 		var ce *schema.CapsError
 		if !errors.As(err, &ce) || !strings.Contains(err.Error(), "budget.per_day") {
 			t.Errorf("Open() error = %v, want a *schema.CapsError naming budget.per_day", err)
 		}
 	})
 	t.Run("complete caps start a run", func(t *testing.T) {
-		project := t.TempDir()
-		r, err := Start(Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+		project := treetest.Project(t, "repos/app")
+		r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
 		if err != nil {
 			t.Fatalf("Start() = %v", err)
 		}

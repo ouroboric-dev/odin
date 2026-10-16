@@ -1,3 +1,8 @@
 name: toy
-version: 0.1.0
+version: 0.3.0
 graph: graph.yaml
+checks:
+  unit: [grep, -q, done, build.txt]          # in the leaf
+  e2e: [grep, -q, done, repos/app/build.txt] # in the project, with the leaf at its new pointer
+leaves:
+  repos/app: { description: the toy app, template: templates/app, first_commit: [LICENSE] }

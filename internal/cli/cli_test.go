@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ouroboric-dev/odin/internal/tree"
+	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
 // ygg runs one command in-process and returns its exit code, stdout and stderr.
@@ -17,16 +20,16 @@ func ygg(t *testing.T, args ...string) (int, string, string) {
 	return code, out.String(), errOut.String()
 }
 
-// project makes a project directory with a factory.yaml for the toy realm. Its roles use script,
-// a file in testdata/toy; extra is added to the config as is.
+// project makes a project umbrella in a fresh instance tree, and a factory.yaml for the toy realm
+// beside it. Its roles use script, a file in testdata/toy; extra is added to the config as is.
 func project(t *testing.T, script, extra string) (dir, config string) {
 	t.Helper()
 	toy, err := filepath.Abs("../../testdata/toy")
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir = t.TempDir()
-	config = filepath.Join(dir, "factory.yaml")
+	dir = treetest.Project(t) // the toy realm creates its leaf, repos/app
+	config = filepath.Join(t.TempDir(), "factory.yaml")
 	s := filepath.Join(toy, script)
 	body := extra + "roles:\n  planner: { agent: scripted, model: none, script: " + s + " }\n" +
 		"  implementer: { agent: scripted, model: none, script: " + s + " }\n"
@@ -85,8 +88,15 @@ func TestRunStopsAndApproveContinues(t *testing.T) {
 	}
 	id := runID(t, dir)
 	code, out, _ = ygg(t, "status", id, "--project", dir)
-	if code != ExitDone || !strings.Contains(out, "waiting:  design-gate") {
+	if code != ExitDone || !strings.Contains(out, "waiting:  design-gate (design)") || !strings.Contains(out, "leaf:     repos/app on ygg/"+id+" at ") {
 		t.Errorf("status: exit %d:\n%s", code, out)
+	}
+	// Each decision takes only its own flag.
+	if code, _, _ := ygg(t, "approve", id, "design-gate", "--project", dir, "--reason", "x"); code != ExitRefused {
+		t.Errorf("approve --reason: exit %d, want %d", code, ExitRefused)
+	}
+	if code, _, _ := ygg(t, "reject", id, "design-gate", "--project", dir, "--note", "x"); code != ExitRefused {
+		t.Errorf("reject --note: exit %d, want %d", code, ExitRefused)
 	}
 	// Flags may follow the positional arguments.
 	if code, out, errOut := ygg(t, "approve", id, "design-gate", "--project", dir, "--note", "fine"); code != ExitDone {
@@ -138,5 +148,23 @@ func TestARefusedCommandChangesNothing(t *testing.T) {
 	}
 	if read("run.json") != state || read("ledger.jsonl") != ledger {
 		t.Error("a refused resume of a done run changed run.json or the ledger")
+	}
+}
+
+// A run that fails after it started is recorded as failed and exits 1, with the resume hint
+// (decision 16); a refused start exits 2.
+func TestAFailedStartExitsOne(t *testing.T) {
+	_, config := project(t, "script.yaml", "")
+	dir := treetest.Project(t, "repos/app")
+	if _, err := tree.Resolve(context.Background(), dir, "repos/app"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repos", "app", "README.md"), []byte("a person's edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	id := runID(t, dir)
+	if code != ExitFailed || !strings.Contains(errOut, "ygg resume "+id) || !strings.Contains(errOut, "refs/ygg/"+id+"/discarded/") {
+		t.Errorf("run with a dirty leaf: exit %d, want %d with the resume hint:\n%s", code, ExitFailed, errOut)
 	}
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -53,10 +54,18 @@ func Advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			err = runExec(ctx, r, n)
 		case schema.KindGate:
 			stop, err = reachGate(r, n)
+		case schema.KindMerge:
+			err = runMerge(ctx, r, n)
+		case schema.KindPointer:
+			err = runPointer(ctx, r, n)
 		}
 		var nf *nodeFailure
 		if errors.As(err, &nf) {
 			return fail(r, n, nf.err)
+		}
+		var hs *hardStop
+		if errors.As(err, &hs) {
+			return stopHard(r, n, hs)
 		}
 		if err != nil {
 			return Outcome{}, err
@@ -120,7 +129,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Log(start); err != nil {
 		return err
 	}
-	task := gungnir.Task{Role: n.Role, Node: n.ID, Attempt: attempt, Prompt: text, Workdir: r.Workspace(),
+	task := gungnir.Task{Role: n.Role, Node: n.ID, Attempt: attempt, Prompt: text, Workdir: r.RepoDir(n.Repo),
 		Model: role.Model, ReadOnly: n.ReadOnly, MaxTurns: n.MaxTurns, Timeout: time.Duration(n.Timeout),
 		TranscriptDir: filepath.Join(r.Dir, "transcripts")}
 	actx, cancel := ctx, context.CancelFunc(func() {})
@@ -150,6 +159,9 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 		}
 		return &nodeFailure{runErr}
 	}
+	if ev.Commit, err = checkpoint(ctx, r, n, attempt); err != nil {
+		return failCheckpoint(r, ev, err)
+	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
 	if err := r.Log(ev); err != nil {
 		return err
@@ -159,10 +171,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	return nil
 }
 
-// runExec runs n's command in the workspace, without a shell. The command gets only PATH, HOME
-// (the workspace) and LANG, so no credential in the operator's environment reaches it. A cancel
-// or timeout kills the command's whole process group (spec §6.2). Phase 3 moves leaf commands
-// into the sandbox.
+// runExec runs n's command in its repo (see command), and checkpoints the leaf it works in.
 func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 	attempt, err := startAttempt(r, n)
 	if err != nil {
@@ -172,40 +181,10 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 		return err
 	}
 	logPath := filepath.Join(r.Dir, "logs", fmt.Sprintf("%s-%d.log", n.ID, attempt))
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return err
-	}
-	out, err := os.Create(logPath)
+	began := time.Now()
+	runErr, err := command(ctx, r, n.ID, n.Run, r.RepoDir(n.Repo), time.Duration(n.Timeout), logPath)
 	if err != nil {
 		return err
-	}
-	defer out.Close()
-	timeout := time.Duration(n.Timeout)
-	if timeout == 0 {
-		timeout = ExecTimeout
-	}
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(cctx, n.Run[0], n.Run[1:]...)
-	cmd.Dir = r.Workspace()
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + r.Workspace(), "LANG=C.UTF-8"}
-	cmd.Stdout, cmd.Stderr = out, out
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = 5 * time.Second
-	began := time.Now()
-	runErr := cmd.Start()
-	if runErr == nil {
-		// Record the group before waiting, so if this ygg dies the next one can stop it (run.Open).
-		pid := cmd.Process.Pid
-		r.State.Exec = &run.ExecProcess{Node: n.ID, PGID: pid, Start: run.ProcStart(pid)}
-		if err := r.Save(); err != nil {
-			syscall.Kill(-pid, syscall.SIGKILL)
-			cmd.Wait()
-			return err
-		}
-		runErr = cmd.Wait()
-		r.State.Exec = nil
 	}
 	result := "exit 0"
 	if runErr != nil {
@@ -215,6 +194,8 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 		DurationMS: time.Since(began).Milliseconds()}
 	if runErr != nil {
 		ev.Name = gungnir.EventNodeFailed
+	} else if ev.Commit, err = checkpoint(ctx, r, n, attempt); err != nil {
+		return failCheckpoint(r, ev, err)
 	}
 	if err := r.Log(ev); err != nil {
 		return err
@@ -224,4 +205,104 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 	}
 	r.State.Summaries[n.ID] = result
 	return nil
+}
+
+// command runs args in dir, without a shell, for node. The command gets only PATH, HOME (the run's
+// own directory, so caches never land in a repo) and LANG, so no credential in the operator's
+// environment reaches it. Its output goes to logPath. A cancel or timeout (ExecTimeout when 0)
+// kills its whole process group (spec §6.2), and run.json records the group while it runs, so a
+// later ygg can stop it if this one dies. cmdErr is the command's failure; err is Odin's. Phase 3
+// moves leaf commands into the sandbox.
+func command(ctx context.Context, r *run.Run, node string, args []string, dir string, timeout time.Duration, logPath string) (cmdErr, err error) {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return nil, err
+	}
+	out, err := os.Create(logPath)
+	if err != nil {
+		return nil, err
+	}
+	defer out.Close()
+	if timeout == 0 {
+		timeout = ExecTimeout
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, args[0], args[1:]...)
+	cmd.Dir = dir
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + r.Home(), "LANG=C.UTF-8"}
+	cmd.Stdout, cmd.Stderr = out, out
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
+	if err := cmd.Start(); err != nil {
+		return err, nil
+	}
+	pid := cmd.Process.Pid
+	r.State.Exec = &run.ExecProcess{Node: node, PGID: pid, Start: run.ProcStart(pid)}
+	if err := r.Save(); err != nil {
+		syscall.Kill(-pid, syscall.SIGKILL)
+		cmd.Wait()
+		return nil, err
+	}
+	cmdErr = cmd.Wait()
+	r.State.Exec = nil
+	return cmdErr, nil
+}
+
+// runChecks runs the pack checks names in dir, in order, for the given attempt of node n, and logs
+// each result. The first failing check is the error.
+func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, dir string) error {
+	for _, c := range names {
+		logPath := filepath.Join(r.Dir, "logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, c))
+		cmdErr, err := command(ctx, r, n.ID, r.Setup.Pack.Checks[c], dir, time.Duration(n.Timeout), logPath)
+		if err != nil {
+			return err
+		}
+		result := c + ": exit 0"
+		if cmdErr != nil {
+			result = c + ": " + cmdErr.Error()
+		}
+		if err := r.Log(gungnir.Event{Name: gungnir.EventCheckResult, Node: n.ID, Attempt: attempt, Result: result}); err != nil {
+			return err
+		}
+		if cmdErr != nil {
+			return fmt.Errorf("check %s failed: %v (output: %s)", c, cmdErr, logPath)
+		}
+	}
+	return nil
+}
+
+// checkpoint commits node n's work in its leaf to the run's branch, and records the commit in
+// run.json: resume resets the leaf to it (spec §4.3). A node that works in an umbrella has no
+// checkpoint; the commit that records an umbrella's change is Odin's own, at a pointer move.
+func checkpoint(ctx context.Context, r *run.Run, n schema.Node, attempt int) (string, error) {
+	rec, ok := r.State.Leaves[n.Repo]
+	if !ok {
+		return "", nil
+	}
+	l, err := r.Leaf(n.Repo)
+	if err != nil {
+		return "", err
+	}
+	head, _, err := l.Checkpoint(ctx, fmt.Sprintf("ygg: run %s, node %s, attempt %d", r.State.ID, n.ID, attempt))
+	if err != nil {
+		return "", err
+	}
+	rec.Checkpoint = head
+	r.State.Leaves[n.Repo] = rec
+	return head, nil
+}
+
+// failCheckpoint logs a node whose work Odin refused to commit, such as a leaf with a planted git
+// repository, and stops the run at the hard approval point policy-violation. A failure of Odin
+// itself stays an error.
+func failCheckpoint(r *run.Run, ev gungnir.Event, err error) error {
+	if !leaf.IsPolicy(err) {
+		return err
+	}
+	ev.Name, ev.Result, ev.Commit = gungnir.EventNodeFailed, err.Error(), ""
+	if lerr := r.Log(ev); lerr != nil {
+		return lerr
+	}
+	return &hardStop{gate: gungnir.GatePolicyViolation, err: err}
 }

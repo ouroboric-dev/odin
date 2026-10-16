@@ -7,7 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/engine"
@@ -28,7 +31,7 @@ const usage = `usage:
   ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
   ygg status  <run-id> [--project <dir>]
-  ygg doctor  [--project <dir>] [--config <factory.yaml>]
+  ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point
 `
 
@@ -58,7 +61,8 @@ type command struct {
 
 // flags holds every flag; each command reads the ones it defines.
 type flags struct {
-	project, config, realm, brief, mode, note, reason string
+	project, config, realm, brief, mode, note, reason, root string
+	set                                                     map[string]bool // the flags given
 }
 
 // parse parses flags that may come before, between or after the positional arguments, and
@@ -85,6 +89,8 @@ func (c *command) parse(name string, args []string, want int, define func(*flag.
 		fmt.Fprintf(c.err, "ygg %s: want %d argument(s), got %d\n%s", name, want, len(pos), usage)
 		return nil, nil, false
 	}
+	f.set = map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { f.set[fl.Name] = true })
 	return f, pos, true
 }
 
@@ -121,7 +127,12 @@ func (c *command) run(args []string) int {
 	if !ok {
 		return ExitRefused
 	}
-	r, err := run.Start(run.Options{Project: f.project, Config: f.config, Realm: f.realm, Brief: f.brief, Mode: mode})
+	r, err := run.Start(c.ctx, run.Options{Project: f.project, Config: f.config, Realm: f.realm, Brief: f.brief, Mode: mode})
+	var failed *run.Failed
+	if errors.As(err, &failed) { // it started, so run.json records it: fix the cause, then resume
+		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", failed.ID, failed.Err, resumeHint(failed.ID))
+		return ExitFailed
+	}
 	if err != nil {
 		return c.refuse(err)
 	}
@@ -130,15 +141,24 @@ func (c *command) run(args []string) int {
 	return c.advance(r)
 }
 
-// open opens a run for resume, approve and reject.
+// resumeHint tells the operator how to go on after a failure, and what a resume does to the leaves.
+func resumeHint(id string) string {
+	return fmt.Sprintf("Fix the cause, then run: ygg resume %s\n"+
+		"A resume puts each leaf back to its last checkpoint; changes made since are saved under refs/ygg/%s/discarded/.\n", id, id)
+}
+
+// open opens a run for resume, approve and reject, and says where Open saved what it discarded.
 func (c *command) open(f *flags, id string) (*run.Run, int) {
 	mode, ok := c.mode(f)
 	if !ok {
 		return nil, ExitRefused
 	}
-	r, err := run.Open(f.project, id, mode)
+	r, err := run.Open(c.ctx, f.project, id, mode)
 	if err != nil {
 		return nil, c.refuse(err)
+	}
+	for _, s := range r.Saved {
+		fmt.Fprintf(c.err, "ygg: %s\n", s)
 	}
 	return r, ExitDone
 }
@@ -163,7 +183,7 @@ func (c *command) resume(args []string) int {
 		}
 		return c.advance(r)
 	}
-	if err := r.Log(gungnir.Event{Name: gungnir.EventRunResumed, Mode: r.State.Mode}); err != nil {
+	if err := r.Log(gungnir.Event{Name: gungnir.EventRunResumed, Mode: r.State.Mode, Note: strings.Join(r.Saved, "; ")}); err != nil {
 		return c.refuse(err)
 	}
 	return c.advance(r)
@@ -171,8 +191,11 @@ func (c *command) resume(args []string) int {
 
 func (c *command) decide(name string, args []string) int {
 	f, pos, ok := c.parse(name, args, 2, func(fs *flag.FlagSet, f *flags) {
-		fs.StringVar(&f.note, "note", "", "a note on the approval")
-		fs.StringVar(&f.reason, "reason", "", "why the work goes back")
+		if name == "approve" {
+			fs.StringVar(&f.note, "note", "", "a note on the approval")
+		} else {
+			fs.StringVar(&f.reason, "reason", "", "why the work goes back")
+		}
 	})
 	if !ok {
 		return ExitRefused
@@ -184,9 +207,9 @@ func (c *command) decide(name string, args []string) int {
 	defer r.Close()
 	var err error
 	if name == "approve" {
-		err = engine.Approve(r, pos[1], f.note)
+		err = engine.Approve(c.ctx, r, pos[1], f.note)
 	} else {
-		err = engine.Reject(r, pos[1], f.reason)
+		err = engine.Reject(c.ctx, r, pos[1], f.reason)
 	}
 	if err != nil {
 		return c.refuse(err)
@@ -215,7 +238,7 @@ func (c *command) advance(r *run.Run) int {
 			id, out.Gate, filepath.Join(r.Dir, "gates"), id, out.Gate, id, out.Gate)
 		return ExitStopped
 	default:
-		fmt.Fprintf(c.err, "Run %s failed: %v\nFix the cause, then run: ygg resume %s\n", id, out.Err, id)
+		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", id, out.Err, resumeHint(id))
 		return ExitFailed
 	}
 }
@@ -244,7 +267,10 @@ func (c *command) status(args []string) int {
 	fmt.Fprintf(c.out, "run:      %s\nstatus:   %s\nmode:     %s\nrealm:    %s %s (graph %s)\nposition: %d\n",
 		s.ID, status, s.Mode, s.Realm, s.RealmVersion, s.GraphVersion, s.Position)
 	if s.Pending != "" {
-		fmt.Fprintf(c.out, "waiting:  %s\n", s.Pending)
+		fmt.Fprintf(c.out, "waiting:  %s (%s)\n", s.Pending, s.PendingGate)
+	}
+	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
+		fmt.Fprintf(c.out, "leaf:     %s on %s at %.12s\n", p, s.Leaves[p].Branch, s.Leaves[p].Checkpoint)
 	}
 	if s.Error != "" {
 		fmt.Fprintf(c.out, "error:    %s\n", s.Error)

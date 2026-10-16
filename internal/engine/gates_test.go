@@ -11,7 +11,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-const gateNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md }\n  - { id: check, kind: exec, run: [test, -s, spec.md] }\n  - { id: spec-gate, kind: gate, gate: spec, reruns: spec }\n"
+const gateNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: check, kind: exec, run: [test, -s, spec.md], repo: repos/app }\n  - { id: spec-gate, kind: gate, gate: spec, reruns: spec }\n"
 
 const gateScript = `steps:
   spec:
@@ -66,10 +66,10 @@ func TestAnAutoPassStillWritesTheGateFile(t *testing.T) {
 func TestApproveMovesPastTheGate(t *testing.T) {
 	r := start(t, "step-by-step", "", gateNodes, gateScript)
 	Advance(context.Background(), r)
-	if err := Approve(r, "design-gate", ""); err == nil {
+	if err := Approve(context.Background(), r, "design-gate", ""); err == nil {
 		t.Error("Approve() of a gate that isn't waiting succeeded")
 	}
-	if err := Approve(r, "spec-gate", "looks right"); err != nil {
+	if err := Approve(context.Background(), r, "spec-gate", "looks right"); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -83,10 +83,10 @@ func TestApproveMovesPastTheGate(t *testing.T) {
 func TestRejectRerunsTheNodeWithTheReason(t *testing.T) {
 	r := start(t, "step-by-step", "", gateNodes, gateScript)
 	Advance(context.Background(), r)
-	if err := Reject(r, "spec-gate", " "); err == nil {
+	if err := Reject(context.Background(), r, "spec-gate", " "); err == nil {
 		t.Error("Reject() without a reason succeeded")
 	}
-	if err := Reject(r, "spec-gate", "Name the users."); err != nil {
+	if err := Reject(context.Background(), r, "spec-gate", "Name the users."); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Advance(context.Background(), r)

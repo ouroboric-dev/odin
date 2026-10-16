@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -85,7 +86,7 @@ func TestToyGraphEndToEnd(t *testing.T) {
 		stops             []string
 	}{
 		{"step-by-step stops at every approval point", "", "step-by-step",
-			[]string{"design-gate", "spec-gate", "plan-gate", "feature-gate"}},
+			[]string{"design-gate", "spec-gate", "plan-gate", "feature-gate", "merge-gate", "pointer-gate"}},
 		{"key-points stops only at design", "", "key-points", []string{"design-gate"}},
 		{"unattended stops at design by default", "", "unattended", []string{"design-gate"}},
 		{"unattended with design: auto never stops", "gates: { design: auto }\n", "unattended", nil},
@@ -103,21 +104,30 @@ func TestToyGraphEndToEnd(t *testing.T) {
 			if got := count(names, "gate_pending"); got != len(m.stops) {
 				t.Errorf("gate_pending = %d, want %d", got, len(m.stops))
 			}
-			if got := count(names, "gate_auto_passed"); got != 4-len(m.stops) {
-				t.Errorf("gate_auto_passed = %d, want %d", got, 4-len(m.stops))
+			if got := count(names, "gate_auto_passed"); got != 6-len(m.stops) {
+				t.Errorf("gate_auto_passed = %d, want %d", got, 6-len(m.stops))
 			}
 			if got := count(names, "gate_approved"); got != len(m.stops) {
 				t.Errorf("gate_approved = %d, want %d", got, len(m.stops))
 			}
 			gates, _ := os.ReadDir(filepath.Join(run.Dir(dir, id), "gates"))
-			if len(gates) != 4 {
-				t.Errorf("%d gate files, want 4 (one per approval point, stopped or not)", len(gates))
+			if len(gates) != 6 {
+				t.Errorf("%d gate files, want 6 (one per approval point, stopped or not)", len(gates))
 			}
 			if names[len(names)-1] != "run_finished" {
 				t.Errorf("the last event is %s, want run_finished", names[len(names)-1])
 			}
-			if b, err := os.ReadFile(filepath.Join(dir, "workspace", "build.txt")); err != nil || string(b) != "done\n" {
-				t.Errorf("workspace/build.txt = %q, %v", b, err)
+			if b, err := os.ReadFile(filepath.Join(dir, "repos", "app", "build.txt")); err != nil || string(b) != "done\n" {
+				t.Errorf("repos/app/build.txt = %q, %v", b, err)
+			}
+			// The run's work landed: the leaf's main holds it, and the project points at it.
+			s, _ := run.LoadState(run.Dir(dir, id))
+			app := s.Leaves["repos/app"]
+			if gitlink, _ := git.Run(context.Background(), dir, "rev-parse", "HEAD:repos/app"); gitlink != app.Checkpoint {
+				t.Errorf("the project points repos/app at %s, want the run's merged commit %s", gitlink, app.Checkpoint)
+			}
+			if count(names, "pointer_moved") != 1 || count(names, "repo_created") != 1 {
+				t.Errorf("pointer_moved %d, repo_created %d; want 1 of each", count(names, "pointer_moved"), count(names, "repo_created"))
 			}
 		})
 	}
@@ -138,7 +148,7 @@ func TestToyGraphEndToEnd(t *testing.T) {
 		if code, _, _ := ygg(t, "approve", id, "spec-gate", "--project", dir); code != ExitDone {
 			t.Errorf("approve: exit %d, want 0", code)
 		}
-		if spec, _ := os.ReadFile(filepath.Join(dir, "workspace", "spec.md")); !strings.Contains(string(spec), "photographers") {
+		if spec, _ := os.ReadFile(filepath.Join(dir, "repos", "app", "spec.md")); !strings.Contains(string(spec), "photographers") {
 			t.Errorf("spec.md = %q, want attempt 2's text", spec)
 		}
 	})
@@ -172,8 +182,20 @@ func TestToyGraphEndToEnd(t *testing.T) {
 		if code != ExitDone || !strings.Contains(out, "interrupted") {
 			t.Errorf("status after the kill: exit %d:\n%s", code, out)
 		}
-		if code, out, errOut := ygg(t, "resume", id, "--project", dir); code != ExitDone {
+		// A person's file in the leaf: the resume resets the leaf, but saves the file first.
+		if err := os.WriteFile(filepath.Join(dir, "repos", "app", "fixed.txt"), []byte("a person's fix\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		code, out, errOut := ygg(t, "resume", id, "--project", dir)
+		if code != ExitDone {
 			t.Fatalf("resume: exit %d:\n%s%s", code, out, errOut)
+		}
+		ref := "refs/ygg/" + id + "/discarded/1"
+		if !strings.Contains(errOut, ref) {
+			t.Errorf("resume doesn't say where the discarded changes went:\n%s", errOut)
+		}
+		if b, _ := os.ReadFile(filepath.Join(run.Dir(dir, id), "ledger.jsonl")); !strings.Contains(string(b), `"event":"run_resumed"`) || !strings.Contains(string(b), ref) {
+			t.Error("the run_resumed line doesn't record the saved ref")
 		}
 		s, _ := run.LoadState(run.Dir(dir, id))
 		if s.Attempts["build"] != 2 || s.Attempts["design"] != 1 {
