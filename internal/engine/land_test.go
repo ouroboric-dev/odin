@@ -14,14 +14,14 @@ import (
 
 var bg = context.Background()
 
-// checks are the pack checks of these tests: unit passes when the agent wrote out.txt, and e2e runs
+// packChecks are the pack checks of these tests: unit passes when the agent wrote out.txt, and e2e runs
 // in the project umbrella.
-const checks = "checks:\n  unit: [test, -f, out.txt]\n  e2e: [test, -f, umbrella.yaml]\n  broken: [\"false\"]\n"
+const packChecks = "checks:\n  unit: [test, -f, out.txt]\n  e2e: [test, -f, umbrella.yaml]\n  broken: [\"false\"]\n"
 
 const build = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
 
 func TestAMergeNodeLandsTheBranchThroughTheGate(t *testing.T) {
-	r := startPack(t, "key-points", "", checks, build+"  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n", okScript)
+	r := startPack(t, "key-points", "", packChecks, build+"  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n", okScript)
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
@@ -41,7 +41,7 @@ func TestAMergeNodeLandsTheBranchThroughTheGate(t *testing.T) {
 }
 
 func TestAMergeNodeFailsWhenTheChecksFail(t *testing.T) {
-	r := startPack(t, "key-points", "", checks, build+"  - { id: merge, kind: merge, repo: repos/app, checks: [broken] }\n", okScript)
+	r := startPack(t, "key-points", "", packChecks, build+"  - { id: merge, kind: merge, repo: repos/app, checks: [broken] }\n", okScript)
 	base := r.State.Leaves["repos/app"].Base
 	out, err := Advance(bg, r)
 	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "check broken") {
@@ -56,7 +56,7 @@ func TestAMergeNodeFailsWhenTheChecksFail(t *testing.T) {
 func TestAPointerNodeMovesTheProjectsPointer(t *testing.T) {
 	nodes := build + "  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +
 		"  - { id: move, kind: pointer, repo: repos/app, checks: [unit], acceptance: [e2e] }\n"
-	r := startPack(t, "key-points", "", checks, nodes, okScript)
+	r := startPack(t, "key-points", "", packChecks, nodes, okScript)
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
@@ -74,7 +74,7 @@ func TestAShrunkGeneratedFileStopsAtTheShrinkGuard(t *testing.T) {
 	nodes := build + "  - { id: index, kind: exec, run: [sh, -c, \"echo '| one |' > REPOS.md\"], repo: . }\n" +
 		"  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +
 		"  - { id: move, kind: pointer, repo: repos/app, generated: [REPOS.md] }\n"
-	r := startPack(t, "unattended", "", checks, nodes, okScript)
+	r := startPack(t, "unattended", "", packChecks, nodes, okScript)
 	if err := os.WriteFile(filepath.Join(r.Project, "REPOS.md"), []byte(strings.Repeat("| row |\n", 10)), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestAPlantedRepositoryStopsAtPolicyViolation(t *testing.T) {
 func TestALeafCheckThatRewritesGitStopsTheRun(t *testing.T) {
 	nodes := build + "  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +
 		"  - { id: move, kind: pointer, repo: repos/app, checks: [rewrite] }\n"
-	r := startPack(t, "unattended", "", checks+"  rewrite: [sh, -c, \"echo 'gitdir: /nonexistent' > .git\"]\n", nodes, okScript)
+	r := startPack(t, "unattended", "", packChecks+"  rewrite: [sh, -c, \"echo 'gitdir: /nonexistent' > .git\"]\n", nodes, okScript)
 	before, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app")
 	out, err := Advance(bg, r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {

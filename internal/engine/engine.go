@@ -7,12 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/ouroboric-dev/gleipnir/checks"
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
@@ -202,86 +201,54 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 	return nil
 }
 
-// command runs args in repo, without a shell, for node. In a leaf of a run with a sandbox it runs in
-// the leaf's sandbox, which holds no credential and no host path but the leaf (spec §6); anywhere
-// else, which is Odin's own generators in an umbrella and the whole of a run without a sandbox, it
-// runs on the host with only PATH, HOME (the run's own directory, so caches never land in a repo)
-// and LANG. Its output goes to logPath. A timeout (ExecTimeout when 0) or a cancel stops it: on the
-// host by killing its whole process group, in the sandbox by killing what it started there (spec
-// §6.2). cmdErr is the command's failure; err is Odin's, and a sandbox that won't start is a
-// *sandboxFailure or a *hardStop.
+// command runs args in repo, without a shell, for node, through the check runner (spec §2.1). In a
+// leaf of a run with a sandbox it runs in the leaf's sandbox, which holds no credential and no host
+// path but the leaf (spec §6); anywhere else, which is Odin's own generators in an umbrella and the
+// whole of a run without a sandbox, it runs on the host with only PATH, HOME (the run's own directory,
+// so caches never land in a repo) and LANG. Its output goes to logPath. A timeout (ExecTimeout when 0)
+// or a cancel stops it: on the host by killing its whole process group, in the sandbox by killing what
+// it started there (spec §6.2). cmdErr is the command's failure. err is Odin's: a sandbox that won't
+// start is a *sandboxFailure or a *hardStop, and one that fails under the command is an infrastructure
+// failure of the node, never a failed command (spec §12; backlog B-017).
 func command(ctx context.Context, r *run.Run, node, repo, dir string, args []string, timeout time.Duration, logPath string) (cmdErr, err error) {
-	if timeout == 0 {
-		timeout = ExecTimeout
-	}
-	runner, err := r.Runner(ctx, repo)
-	if err != nil {
-		return nil, sandboxStart(err)
-	}
-	if runner != nil {
-		return inSandbox(ctx, runner, args, timeout, logPath)
-	}
-	return onHost(ctx, r, node, args, dir, timeout, logPath)
-}
-
-// inSandbox runs args through runner, with no environment of its own.
-func inSandbox(ctx context.Context, runner gungnir.Runner, args []string, timeout time.Duration, logPath string) (cmdErr, err error) {
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return nil, err
-	}
-	out, err := os.Create(logPath)
-	if err != nil {
-		return nil, err
-	}
-	defer out.Close()
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	res, err := runner.Run(cctx, gungnir.Cmd{Argv: args, Stdout: out, Stderr: out})
+	res, err := runCheck(ctx, r, node, repo, dir, checks.Spec{Name: node, Argv: args, Timeout: orDefault(timeout)}, logPath)
 	switch {
-	case err != nil && errors.Is(cctx.Err(), context.DeadlineExceeded):
-		return fmt.Errorf("timed out after %s", timeout), nil
-	case err != nil && ctx.Err() == nil:
-		return nil, err
 	case err != nil:
-		return nil, ctx.Err()
-	case res.ExitCode != 0:
+		return nil, err
+	case res.TimedOut:
+		return fmt.Errorf("timed out after %s", orDefault(timeout)), nil
+	case !res.Passed:
 		return fmt.Errorf("exit status %d", res.ExitCode), nil
 	}
 	return nil, nil
 }
 
-// onHost runs args in dir on the host, in its own process group.
-func onHost(ctx context.Context, r *run.Run, node string, args []string, dir string, timeout time.Duration, logPath string) (cmdErr, err error) {
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return nil, err
+func orDefault(timeout time.Duration) time.Duration {
+	if timeout == 0 {
+		return ExecTimeout
 	}
-	out, err := os.Create(logPath)
+	return timeout
+}
+
+// runCheck runs one command through the check runner: in repo's sandbox when it has one, on the host
+// otherwise. A failure of the sandbox, or of the log, fails the node; a context that ended is the
+// context's error.
+func runCheck(ctx context.Context, r *run.Run, node, repo, dir string, spec checks.Spec, logPath string) (checks.Result, error) {
+	runner, err := r.Runner(ctx, repo)
 	if err != nil {
-		return nil, err
+		return checks.Result{}, sandboxStart(err)
 	}
-	defer out.Close()
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(cctx, args[0], args[1:]...)
-	cmd.Dir = dir
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + r.Home(), "LANG=C.UTF-8"}
-	cmd.Stdout, cmd.Stderr = out, out
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = 5 * time.Second
-	if err := cmd.Start(); err != nil {
-		return err, nil
+	if runner == nil {
+		runner = hostRunner{r: r, node: node, dir: dir}
 	}
-	pid := cmd.Process.Pid
-	r.State.Exec = &run.ExecProcess{Node: node, PGID: pid, Start: run.ProcStart(pid)}
-	if err := r.Save(); err != nil {
-		syscall.Kill(-pid, syscall.SIGKILL)
-		cmd.Wait()
-		return nil, err
+	res, err := checks.Run(ctx, runner, spec, logPath)
+	switch {
+	case err == nil:
+		return res, nil
+	case ctx.Err() != nil:
+		return checks.Result{}, ctx.Err()
 	}
-	cmdErr = cmd.Wait()
-	r.State.Exec = nil
-	return cmdErr, nil
+	return checks.Result{}, &nodeFailure{fmt.Errorf("the sandbox or its log failed while %s ran: %w", spec.Argv[0], err)}
 }
 
 // runChecks runs the pack checks names in order, for the given attempt of node n, and logs each
