@@ -92,3 +92,21 @@ func TestOpenRefusesWhenItCantTellALeftoverGroupIsTheRuns(t *testing.T) {
 		t.Error("Open() killed a group it couldn't tell was the run's")
 	}
 }
+
+func TestDoctorsExportsFindAndStopALeftoverGroup(t *testing.T) {
+	project, id := startToy(t)
+	pgid, child := leftover(t, project, id, "sleep 30 & echo $! > pid; wait")
+	s, err := LoadState(Dir(project, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !LeftoverProcess(s.Exec) {
+		t.Fatal("LeftoverProcess() = false for a group that is running")
+	}
+	if err := StopLeftoverProcess(s.Exec); err != nil {
+		t.Fatal(err)
+	}
+	if LeftoverProcess(s.Exec) || alive(pgid) || alive(child) {
+		t.Error("the group is still running after StopLeftoverProcess")
+	}
+}

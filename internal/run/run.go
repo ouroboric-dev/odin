@@ -627,6 +627,13 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 	return nil
 }
 
+// LeftoverProcess reports whether the exec node run.json recorded still has processes running.
+func LeftoverProcess(p *ExecProcess) bool { return groupAlive(p.PGID) }
+
+// StopLeftoverProcess stops the process group of an exec node that outlived its ygg, as a resume
+// does, and says why when it can't.
+func StopLeftoverProcess(p *ExecProcess) error { return stopLeftover(p) }
+
 // stopLeftover stops the process group of an exec node that outlived its ygg process (killed, or
 // its terminal closed), so the node never runs again beside its old copy. It kills the group only
 // when the group's leader is the process run.json recorded. A group it can't tell is the run's is
