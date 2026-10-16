@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -129,8 +130,9 @@ func turnsFor(node int, left int64) int {
 }
 
 // nodeError turns the error of a session into what the engine does with it, for a node that is not
-// in a loop: a budget cap that is reached is a hard stop at budget-cap, and everything that is the
-// session's own, an agent failure, retries that ran out or an infrastructure failure, fails the node.
+// in a loop: a budget cap that is reached is a hard stop at budget-cap, a used-up quota pauses the run,
+// and everything else that is the session's own, an agent failure, retries that ran out or an
+// infrastructure failure, fails the node.
 // An error of Odin's own stays as it is.
 func nodeError(err error) error {
 	var af *jormungandr.AgentFailure
@@ -139,8 +141,11 @@ func nodeError(err error) error {
 	if c, ok := jormungandr.IsCap(err); ok {
 		return &hardStop{gate: gungnir.GateBudgetCap, err: c}
 	}
+	if errors.As(err, &q) {
+		return &pause{q}
+	}
 	switch {
-	case errors.As(err, &af), errors.As(err, &ex), errors.As(err, &q):
+	case errors.As(err, &af), errors.As(err, &ex):
 		return &nodeFailure{err}
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return &nodeFailure{err} // the run was interrupted: it stops failed, and a resume starts the node again
@@ -148,4 +153,21 @@ func nodeError(err error) error {
 		return &nodeFailure{err}
 	}
 	return err
+}
+
+// pause is a node that ended because the provider's quota is used up: the run waits, resumable, and
+// says why (spec §12).
+type pause struct{ q *jormungandr.QuotaError }
+
+func (p *pause) Error() string { return p.q.Error() }
+
+// pauseRun saves the run as paused at node n. Nothing is lost: the node starts again from the last
+// checkpoint when the operator resumes the run.
+func pauseRun(r *run.Run, n schema.Node, p *pause) (Outcome, error) {
+	s := r.State
+	s.Status, s.Paused = run.StatusPaused, &run.Pause{Node: n.ID, Reason: p.q.Reason, Since: time.Now().UTC()}
+	if err := r.Log(gungnir.Event{Name: gungnir.EventRunPaused, Node: n.ID, Attempt: s.Attempts[n.ID], Result: p.q.Reason}.WithUsage(s.Usage)); err != nil {
+		return Outcome{}, err
+	}
+	return Outcome{Status: run.StatusPaused, Err: p.q}, r.Save()
 }

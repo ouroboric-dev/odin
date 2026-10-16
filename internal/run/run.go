@@ -640,7 +640,7 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 	if s.Status == StatusDone || Quarantines(s.PendingGate) {
 		return nil
 	}
-	restart := s.Status == StatusRunning || s.Status == StatusFailed
+	restart := s.Status == StatusRunning || s.Status == StatusFailed || s.Status == StatusPaused
 	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
 		rec := s.Leaves[p]
 		l, err := r.Leaf(p)

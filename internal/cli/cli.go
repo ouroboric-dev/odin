@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/engine"
@@ -23,6 +24,7 @@ const (
 	ExitFailed  = 1 // a node failed; fix the cause, then resume
 	ExitRefused = 2 // bad usage or config: nothing ran
 	ExitStopped = 3 // the run waits at an approval point
+	ExitPaused  = 4 // the run waits for the provider's quota; resume it once the quota is back
 )
 
 const usage = `usage:
@@ -33,7 +35,7 @@ const usage = `usage:
   ygg status  <run-id> [--project <dir>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
   ygg sandbox build --realm <dir> [--config <factory.yaml>]
-exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point
+exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused: the provider's quota is used up
 `
 
 // Main runs one ygg command and returns its exit code.
@@ -247,6 +249,10 @@ func (c *command) advance(r *run.Run) int {
 				id, r.State.PendingGate, filepath.Join(r.Dir, "gates"), id, out.Gate)
 		}
 		return ExitStopped
+	case run.StatusPaused:
+		fmt.Fprintf(c.err, "Run %s paused: %v\nNothing is lost. Once the provider's quota is back, run: ygg resume %s\n"+
+			"A resume starts the node again from its last checkpoint.\n", id, out.Err, id)
+		return ExitPaused
 	default:
 		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", id, out.Err, resumeHint(id))
 		return ExitFailed
@@ -281,6 +287,9 @@ func (c *command) status(args []string) int {
 	}
 	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
 		fmt.Fprintf(c.out, "leaf:     %s on %s at %.12s\n", p, s.Leaves[p].Branch, s.Leaves[p].Checkpoint)
+	}
+	if s.Paused != nil {
+		fmt.Fprintf(c.out, "paused:   at %s since %s: %s\n", s.Paused.Node, s.Paused.Since.Format(time.RFC3339), s.Paused.Reason)
 	}
 	if s.Error != "" {
 		fmt.Fprintf(c.out, "error:    %s\n", s.Error)

@@ -34,6 +34,7 @@ const (
 	StatusRunning Status = "running" // a process is walking the graph, or died while it was
 	StatusStopped Status = "stopped" // waiting at an approval point
 	StatusFailed  Status = "failed"  // a node failed; resume re-runs it
+	StatusPaused  Status = "paused"  // the provider's quota is used up; resume re-runs the node once it is back
 	StatusDone    Status = "done"
 )
 
@@ -72,11 +73,19 @@ type State struct {
 	Skills       skills.Record          `json:"skills"`                 // every skill the graph names, with the set's hash (spec §5.1)
 	Sandboxes    map[string]gungnir.Env `json:"sandboxes,omitempty"`    // leaf path: its sandbox, while one is up, so a leftover can be stopped
 	Usage        gungnir.Usage          `json:"usage"`
+	Paused       *Pause                 `json:"paused,omitempty"` // why the run is paused
 	Ledger       ledger.Anchor          `json:"ledger"`
 	Error        string                 `json:"error,omitempty"`
 	Exec         *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
 	Created      time.Time              `json:"created"`
 	Updated      time.Time              `json:"updated"`
+}
+
+// Pause is why a run waits for the provider (spec §12).
+type Pause struct {
+	Node   string    `json:"node"`
+	Reason string    `json:"reason"`
+	Since  time.Time `json:"since"`
 }
 
 // LeafRecord is where a run stands in one leaf (spec §4.3).

@@ -52,7 +52,7 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 	if s.Pending != "" {
 		return Outcome{Status: run.StatusStopped, Gate: s.Pending}, nil
 	}
-	s.Status, s.Error = run.StatusRunning, ""
+	s.Status, s.Error, s.Paused = run.StatusRunning, "", nil
 	if err := r.Save(); err != nil {
 		return Outcome{}, err
 	}
@@ -80,6 +80,10 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		var hs *hardStop
 		if errors.As(err, &hs) {
 			return stopHard(r, n, hs)
+		}
+		var p *pause
+		if errors.As(err, &p) {
+			return pauseRun(r, n, p)
 		}
 		if err != nil {
 			return Outcome{}, err

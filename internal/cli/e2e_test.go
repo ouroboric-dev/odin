@@ -275,3 +275,26 @@ func TestARunThatReachesItsCapStopsAtBudgetCapAndOnlyApproveIsOffered(t *testing
 		t.Errorf("after the cap was raised: exit %d:\n%s%s", code, out, errOut)
 	}
 }
+
+func TestAUsedUpQuotaPausesTheRunWithExitCode4AndResumeGoesOn(t *testing.T) {
+	dir, config := project(t, "script-quota.yaml", "")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	if code != ExitPaused || ExitPaused != 4 || !strings.Contains(errOut, "paused") || !strings.Contains(errOut, "usage limit reached") || !strings.Contains(errOut, "ygg resume") {
+		t.Fatalf("run: exit %d:\n%s%s\nwant exit 4 and a message that says why and how to resume", code, out, errOut)
+	}
+	id := runID(t, dir)
+	code, out, _ = ygg(t, "status", id, "--project", dir)
+	if code != ExitDone || !strings.Contains(out, "status:   paused") || !strings.Contains(out, "paused:   at design since") || !strings.Contains(out, "usage limit reached") {
+		t.Errorf("status: exit %d:\n%s", code, out)
+	}
+	if code, _, errOut := ygg(t, "approve", id, "design", "--project", dir); code != ExitRefused {
+		t.Errorf("approve of a paused run: exit %d, %q; it waits for the provider, not for a decision", code, errOut)
+	}
+	code, out, errOut = ygg(t, "resume", id, "--project", dir)
+	if code != ExitStopped || !strings.Contains(out, "stopped at approval point design-gate") {
+		t.Errorf("resume: exit %d:\n%s%s; want the run to go on to the design gate", code, out, errOut)
+	}
+	if _, out, _ = ygg(t, "status", id, "--project", dir); strings.Contains(out, "paused:") {
+		t.Errorf("status still says paused:\n%s", out)
+	}
+}
