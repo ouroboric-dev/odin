@@ -28,6 +28,10 @@ jobs:
       - name: vet
         run: go vet ./...
       - name: test
-        run: go test -race ./...
+        # As a non-root user: the sandbox code refuses to run as root.
+        run: |
+          useradd -m ci
+          chown -R ci:ci "$GITHUB_WORKSPACE"
+          su ci -c 'GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOCACHE=/tmp/gocache go test -race ./...'
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
