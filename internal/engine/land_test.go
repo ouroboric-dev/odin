@@ -140,3 +140,20 @@ func TestAPlantedRepositoryStopsAtPolicyViolation(t *testing.T) {
 	}
 	reopened.Close()
 }
+
+// Review focus 1: leaf code, here a pointer node's check, rewrites the leaf's .git file. Host git
+// in the parent never reads that file, and the rewrite stops the run at policy-violation before
+// anything lands; the pointer stays where it was.
+func TestALeafCheckThatRewritesGitStopsTheRun(t *testing.T) {
+	nodes := build + "  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +
+		"  - { id: move, kind: pointer, repo: repos/app, checks: [rewrite] }\n"
+	r := startPack(t, "unattended", "", checks+"  rewrite: [sh, -c, \"echo 'gitdir: /nonexistent' > .git\"]\n", nodes, okScript)
+	before, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app")
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
+		t.Errorf("Advance() = %+v, %v (pending %s); want a stop at policy-violation", out, err, r.State.PendingGate)
+	}
+	if after, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app"); after != before {
+		t.Error("the pointer moved although a check rewrote the leaf's .git")
+	}
+}

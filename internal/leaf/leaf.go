@@ -135,6 +135,16 @@ func (l *Leaf) Save(ctx context.Context, ref, since, msg string) (saved bool, er
 	return true, nil
 }
 
+// Guard refuses a leaf that breaks a sandbox rule — a rewritten .git file, or a planted git
+// repository below its top level — without committing anything. A merge gate's or pointer move's
+// checks run leaf code, so Odin re-checks the leaf before it runs parent git on it (decision 3, 9).
+func (l *Leaf) Guard() error {
+	if err := l.checkGitFile(); err != nil {
+		return err
+	}
+	return l.checkNested()
+}
+
 // Reset puts the leaf back to commit sha on branch: the branch is moved to sha and checked out,
 // changes and untracked files are removed, and the .git file is restored. Ignored files stay: they
 // are never committed, and may be a person's own (.env, node_modules). Save first what a person may

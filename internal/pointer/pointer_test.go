@@ -159,3 +159,20 @@ func TestMoveRefusesOtherStagedChanges(t *testing.T) {
 		t.Errorf("the person's staged change was touched: %q", staged)
 	}
 }
+
+// Leaf code can rewrite the leaf's .git file. The parent's git must never read it (decision 3): a
+// rewritten .git is refused as a policy violation, and the pointer stays.
+func TestMoveRefusesARewrittenGitFile(t *testing.T) {
+	_, parent, spec := landed(t)
+	before := gitlink(t, parent.Dir, "repos/api")
+	spec.Check = func(context.Context) error {
+		return os.WriteFile(filepath.Join(spec.Leaf.Dir(), ".git"), []byte("gitdir: /nonexistent\n"), 0o644)
+	}
+	_, err := Move(ctx, spec)
+	if !leaf.IsPolicy(err) {
+		t.Fatalf("Move() = %v, want a leaf policy violation", err)
+	}
+	if got := gitlink(t, parent.Dir, "repos/api"); got != before {
+		t.Error("the pointer moved although the leaf's .git was rewritten")
+	}
+}

@@ -110,7 +110,9 @@ func TestAHookInTheLeafsGitDirNeverRuns(t *testing.T) {
 
 func TestARewrittenGitFileStopsTheRun(t *testing.T) {
 	evil := t.TempDir()
-	dir, id, code := escape(t, "    - actions: [ { write: { path: .git, content: \"gitdir: "+evil+"\\n\" } } ]\n"+ok)
+	// Attempt 1 rewrites .git; attempt 2, after the approval, does the design as the toy does.
+	dir, id, code := escape(t, "    - actions: [ { write: { path: .git, content: \"gitdir: "+evil+"\\n\" } } ]\n"+ok+
+		"    - actions: [ { write: { path: design.md, content: \"# Design\\n\" } } ]\n"+ok)
 	if code != ExitStopped {
 		t.Fatalf("exit %d, want %d: a stop at policy-violation", code, ExitStopped)
 	}
@@ -120,6 +122,14 @@ func TestARewrittenGitFileStopsTheRun(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(evil); len(entries) != 0 {
 		t.Error("git wrote to the git dir the agent planted")
+	}
+	verifies(t, dir, id)
+	// Approving the stop puts the leaf back to its checkpoint and runs the node again (decision 9).
+	if code, out, errOut := ygg(t, "approve", id, "design", "--project", dir); code != ExitDone {
+		t.Fatalf("approve: exit %d, want %d:\n%s%s", code, ExitDone, out, errOut)
+	}
+	if entries, _ := os.ReadDir(evil); len(entries) != 0 {
+		t.Error("git wrote to the planted git dir during the approval")
 	}
 	verifies(t, dir, id)
 }

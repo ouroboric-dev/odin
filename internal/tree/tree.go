@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -164,11 +165,16 @@ func child(ctx context.Context, parent Node, p string, checkout bool) (Node, err
 	if err := git.CheckURL(url); err != nil {
 		return Node{}, fmt.Errorf("%s: submodule %s: %w", filepath.Join(parent.Dir, ".gitmodules"), p, err)
 	}
-	st, err := git.Run(ctx, parent.Dir, "submodule", "status", "--", p)
-	if err != nil {
+	gitDir := filepath.Join(parent.GitDir, "modules", name)
+	// "present" is Odin's own fact: the submodule's git dir, which the parent holds, exists. Never
+	// `git submodule status`, which runs git inside the leaf and so reads the leaf's own .git file,
+	// which the leaf's code can rewrite (decision 3).
+	present := true
+	if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); errors.Is(err, fs.ErrNotExist) {
+		present = false
+	} else if err != nil {
 		return Node{}, err
 	}
-	present := !strings.HasPrefix(st, "-")
 	if !present && checkout {
 		// Only this submodule, and not recursively (spec §3.3 rules 5 and 6).
 		if _, err := git.Run(ctx, parent.Dir, "submodule", "update", "--init", "--", p); err != nil {
@@ -177,7 +183,7 @@ func child(ctx context.Context, parent Node, p string, checkout bool) (Node, err
 		present = true
 	}
 	n := Node{Path: filepath.Join(parent.Path, p), Dir: filepath.Join(parent.Dir, p),
-		GitDir: filepath.Join(parent.GitDir, "modules", name), Kind: rec.Kind, Owner: rec.Owner,
+		GitDir: gitDir, Kind: rec.Kind, Owner: rec.Owner,
 		Visibility: rec.Visibility, Present: present}
 	if present && rec.Kind == schema.ChildUmbrella {
 		if n.Umbrella, err = schema.LoadUmbrella(n.Dir); err != nil {

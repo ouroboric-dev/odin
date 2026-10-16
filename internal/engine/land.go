@@ -9,6 +9,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/merge"
 	"github.com/ouroboric-dev/odin/internal/pointer"
@@ -96,6 +97,9 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	var se *shrink.Error
 	if errors.As(moveErr, &se) {
 		return &hardStop{gate: gungnir.GateShrinkGuard, err: moveErr}
+	}
+	if leaf.IsPolicy(moveErr) { // a check rewrote the leaf's .git or planted a repository
+		return &hardStop{gate: gungnir.GatePolicyViolation, err: moveErr}
 	}
 	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt,
 		DurationMS: time.Since(began).Milliseconds()}

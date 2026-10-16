@@ -77,6 +77,12 @@ func Move(ctx context.Context, s Spec) (Result, error) {
 	if err := s.Acceptance(ctx); err != nil {
 		return res, &Refused{Why: "acceptance", Err: err}
 	}
+	// The checks and acceptance tests ran leaf code. Re-check the leaf before any parent git touches
+	// it, and record the pointer below with update-index, never a git that reads the leaf's .git file
+	// (decision 3).
+	if err := s.Leaf.Guard(); err != nil {
+		return res, err
+	}
 	if !s.SkipShrink {
 		for _, f := range s.Generated {
 			prev, _ := git.Run(ctx, p, "show", "HEAD:"+f) // a file new in this move has no rows
@@ -89,13 +95,35 @@ func Move(ctx context.Context, s Spec) (Result, error) {
 			}
 		}
 	}
-	paths := append([]string{s.Child}, s.Generated...)
-	if _, err := git.Run(ctx, p, append([]string{"add", "-A", "--"}, paths...)...); err != nil {
+	// Record the pointer and commit through plumbing only: update-index writes the gitlink straight
+	// into the index, and write-tree/commit-tree/update-ref build the commit from the index. No step
+	// starts a git inside the leaf, so the leaf's .git file is never read. s.To is Odin's own fact,
+	// not whatever the leaf's HEAD or .git now says. The earlier staged-changes check leaves nothing
+	// else in the index, so the commit holds only the pointer and the generated files.
+	head, err := git.Run(ctx, p, "rev-parse", "HEAD")
+	if err != nil {
 		return res, err
 	}
-	if _, err := git.Run(ctx, p, append([]string{"commit", "-q", "-m", s.Message, "--"}, paths...)...); err != nil {
+	if _, err := git.Run(ctx, p, "update-index", "--cacheinfo", "160000,"+s.To+","+s.Child); err != nil {
 		return res, err
 	}
-	res.Commit, err = git.Run(ctx, p, "rev-parse", "HEAD")
-	return res, err
+	if len(s.Generated) > 0 {
+		if _, err := git.Run(ctx, p, append([]string{"add", "--"}, s.Generated...)...); err != nil {
+			return res, err
+		}
+	}
+	treeSHA, err := git.Run(ctx, p, "write-tree")
+	if err != nil {
+		return res, err
+	}
+	commit, err := git.Run(ctx, p, "commit-tree", treeSHA, "-p", head, "-m", s.Message)
+	if err != nil {
+		return res, err
+	}
+	// update-ref with the old value moves the umbrella's branch only if it hasn't moved meanwhile.
+	if _, err := git.Run(ctx, p, "update-ref", "-m", s.Message, "HEAD", commit, head); err != nil {
+		return res, err
+	}
+	res.Commit = commit
+	return res, nil
 }
