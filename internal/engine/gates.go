@@ -167,8 +167,8 @@ func Approvable(r *run.Run) bool {
 }
 
 // Reject sends reason back (spec §7.2). At a gate it goes into the node the gate re-runs: Advance
-// re-runs it with the reason in its prompt, then reaches the gate again; when that node is a loop,
-// the loop starts over. At a loop that gave up (spec §7.3) the reason goes to the loop's implementer,
+// re-runs it with the reason in its prompt, then reaches the gate again; every loop from that node up
+// to the gate starts over. At a loop that gave up (spec §7.3) the reason goes to the loop's implementer,
 // and the loop gets a full set of attempts again, with its findings. A hard stop a node raised takes
 // no rejection: approve it, or start a new run to drop the work.
 func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
@@ -194,9 +194,14 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 	} else {
 		target := n.Reruns
 		s.Reasons[target] = reason
+		gate := s.Position
 		s.Position = g.Index(target)
-		if g.Nodes[s.Position].Kind == schema.KindLoop {
-			delete(s.Loops, target) // the work goes back to the start of a new loop
+		// Every loop from the target up to the gate starts over: the work under a loop that passed changes
+		// when a node before it runs again (review I2).
+		for _, m := range g.Nodes[s.Position:gate] {
+			if m.Kind == schema.KindLoop {
+				delete(s.Loops, m.ID)
+			}
 		}
 	}
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
