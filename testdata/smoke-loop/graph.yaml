@@ -1,0 +1,21 @@
+# The smoke graph for the loop (spec §13): a real implementer and a real read-only reviewer in a bounded
+# loop, with one check, in a sandbox; then the gates and the merge. The implementer writes hello.txt, the
+# check looks for the word, and the reviewer reports its findings as JSON. It costs a few cents. Run it
+# with a factory.yaml whose implementer is claude-code and whose reviewer is opencode.
+name: smoke-loop
+version: 0.1.0
+nodes:
+  - id: hello
+    kind: loop
+    repo: repos/app
+    role: implementer
+    prompt: prompts/hello.md
+    attempts: 2
+    max_turns: 8
+    timeout: 5m
+    checks: [unit]
+    reviewers:
+      - { id: review, role: reviewer, prompt: prompts/review.md, max_turns: 6, timeout: 5m }
+  - { id: feature-gate, kind: gate, gate: feature }
+  - { id: merge-gate, kind: gate, gate: merge }
+  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }

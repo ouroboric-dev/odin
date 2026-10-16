@@ -151,3 +151,30 @@ func TestALoopsStateSurvivesInRunJSON(t *testing.T) {
 		t.Error("the maps a state loads with are nil; the engine writes to them")
 	}
 }
+
+func TestTheLoopSmokeRealmPreparesWithBothRealAdapters(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("ygg refuses to prepare a sandbox as root: the sandbox's user is the operator's own")
+	}
+	smoke, err := filepath.Abs("../../testdata/smoke-loop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(smoke, "factory.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(t.TempDir(), "factory.yaml")
+	if err := os.WriteFile(cfg, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Prepare(ctx, Options{Project: treetest.Project(t), Config: cfg, Realm: smoke})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := s.Graph.Nodes[0]
+	if n.Kind != "loop" || s.Agents["implementer"].Name() != "claude-code" || s.Agents["reviewer"].Name() != "opencode" ||
+		strings.Join(s.Sandbox.Egress, ",") != "api.anthropic.com,openrouter.ai" || len(n.Reviewers) != 1 || n.Attempts != 2 {
+		t.Errorf("node %+v, agents %v, egress %v", n, s.Agents, s.Sandbox.Egress)
+	}
+}

@@ -1,0 +1,15 @@
+# An example factory.yaml for the loop smoke run. Copy it, set the engine and the mounts for your machine,
+# and the caps you want; the factory ships no defaults. The credentials come from the environment:
+# CLAUDE_CODE_OAUTH_TOKEN and OPENROUTER_API_KEY, never from this file.
+mode: unattended
+privacy: strict
+roles:
+  implementer: { agent: claude-code, model: sonnet }
+  reviewer: { agent: opencode, model: openrouter/deepseek/deepseek-v4-flash }
+budget:
+  per_run: { tokens: 400000, turns: 40, usd: 2 }
+  per_day: { tokens: 1000000, turns: 100, usd: 5 }
+sandbox:
+  engine: unix:///mnt/wsl/podman-sockets/podman-machine-default/podman-user.sock
+  mounts:
+    - { host: /home/OPERATOR/ygg, engine: /mnt/wsl/ygg-bind }
