@@ -237,9 +237,15 @@ func (c *command) advance(r *run.Run) int {
 		fmt.Fprintf(c.out, "Run %s is done.\n", id)
 		return ExitDone
 	case run.StatusStopped:
-		fmt.Fprintf(c.out, "Run %s stopped at approval point %s. Read %s, then run one of:\n"+
-			"  ygg approve %s %s [--note \"...\"]\n  ygg reject %s %s --reason \"...\"\n",
-			id, out.Gate, filepath.Join(r.Dir, "gates"), id, out.Gate, id, out.Gate)
+		if engine.Rejectable(r) {
+			fmt.Fprintf(c.out, "Run %s stopped at approval point %s. Read %s, then run one of:\n"+
+				"  ygg approve %s %s [--note \"...\"]\n  ygg reject %s %s --reason \"...\"\n",
+				id, out.Gate, filepath.Join(r.Dir, "gates"), id, out.Gate, id, out.Gate)
+		} else {
+			fmt.Fprintf(c.out, "Run %s stopped at the hard approval point %s. Read %s, then run:\n"+
+				"  ygg approve %s %s [--note \"...\"]\nA hard stop takes no rejection: to drop the work, start a new run.\n",
+				id, r.State.PendingGate, filepath.Join(r.Dir, "gates"), id, out.Gate)
+		}
 		return ExitStopped
 	default:
 		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", id, out.Err, resumeHint(id))

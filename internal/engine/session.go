@@ -31,17 +31,19 @@ func startSession(r *run.Run, key string) (int, error) {
 	return r.State.Attempts[key], r.Save()
 }
 
-// session runs one agent session the way spec §12 says. What the session used is counted whether it succeeded or not (backlog B-019, B-020), in
+// session runs one agent session the way spec §12 says. A budget cap that is reached stops it before
+// it starts. What the session used is counted whether it succeeded or not (backlog B-019, B-020), in
 // the day's journal and the run's usage. A failure that is not the agent's, a 429 or a crash at start,
 // is retried with a backoff, not as a loop attempt. It returns the result of the session that
 // succeeded and the ledger event for it, which the caller completes and logs. Any error is one of
-// jormungandr's: a used-up quota, retries that ran out, an agent failure, or an infrastructure
+// jormungandr's: a cap, a used-up quota, retries that ran out, an agent failure, or an infrastructure
 // failure; or an error of Odin's own.
 func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, gungnir.Event, error) {
 	role := r.Setup.Config.Roles[sp.role]
 	var fatal error // an error of Odin's own, which must never read as a failure of the agent
 	var done gungnir.Event
-	retrier := jormungandr.Retrier{Backoff: r.Setup.Backoff, Sleep: r.Setup.Sleep,
+	meter := r.Meter()
+	retrier := jormungandr.Retrier{Backoff: r.Setup.Backoff, Meter: meter, Sleep: r.Setup.Sleep,
 		OnRetry: func(try int, wait time.Duration, why string) error {
 			return r.Log(gungnir.Event{Name: gungnir.EventRetry, Node: sp.key, Attempt: r.State.Attempts[sp.key],
 				Note: fmt.Sprintf("try %d failed for a reason that is not the agent's; it runs again in %s: %s", try, wait, why)})
@@ -67,7 +69,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 			return stop(sandboxStart(err))
 		}
 		task := gungnir.Task{Role: sp.role, Node: sp.key, Attempt: attempt, Prompt: sp.text, Workdir: r.RepoDir(sp.repo),
-			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: sp.maxTurns, Timeout: sp.timeout,
+			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turnsFor(sp.maxTurns, meter.RemainingTurns()), Timeout: sp.timeout,
 			TranscriptDir: filepath.Join(r.Dir, "transcripts"), Sandbox: runner}
 		actx, cancel := ctx, context.CancelFunc(func() {})
 		if task.Timeout > 0 {
@@ -117,14 +119,26 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 	return res, done, err
 }
 
+// turnsFor bounds a session's turns by what the caps still allow, so one session can't run far past
+// a cap that is checked only between sessions. 0 means the adapter's own limit.
+func turnsFor(node int, left int64) int {
+	if node > 0 && int64(node) <= left {
+		return node
+	}
+	return int(min(left, 1<<30))
+}
+
 // nodeError turns the error of a session into what the engine does with it, for a node that is not
-// in a loop: everything that is the session's own, an agent failure, retries that ran out or an
-// infrastructure failure, fails the node.
+// in a loop: a budget cap that is reached is a hard stop at budget-cap, and everything that is the
+// session's own, an agent failure, retries that ran out or an infrastructure failure, fails the node.
 // An error of Odin's own stays as it is.
 func nodeError(err error) error {
 	var af *jormungandr.AgentFailure
 	var ex *jormungandr.ExhaustedError
 	var q *jormungandr.QuotaError
+	if c, ok := jormungandr.IsCap(err); ok {
+		return &hardStop{gate: gungnir.GateBudgetCap, err: c}
+	}
 	switch {
 	case errors.As(err, &af), errors.As(err, &ex), errors.As(err, &q):
 		return &nodeFailure{err}

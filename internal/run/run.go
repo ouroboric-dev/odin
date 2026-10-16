@@ -263,6 +263,11 @@ type Run struct {
 	Sandbox gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
 }
 
+// Meter returns the budget of this run: its caps against its own usage and the day's journal.
+func (r *Run) Meter() *budget.Meter {
+	return &budget.Meter{Run: &r.State.Usage, Caps: r.Setup.Config.Budget, USD: r.Setup.Config.PaysPerToken(), Journal: r.Setup.Journal}
+}
+
 // Spend counts what a session used, whether or not it succeeded: in the day's journal first, so a
 // crash between the two leaves the spend counted twice at worst, and then in the run's usage. The
 // caller saves run.json. A usage of nothing is not recorded.

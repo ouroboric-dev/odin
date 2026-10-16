@@ -125,6 +125,13 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 	return r.Save()
 }
 
+// Rejectable reports whether the run's pending stop takes a rejection: a gate node does. A hard stop
+// that a node raised takes approve only, or a new run (spec §7.2).
+func Rejectable(r *run.Run) bool {
+	s := r.State
+	return s.Pending != "" && s.Position < len(r.Setup.Graph.Nodes) && r.Setup.Graph.Nodes[s.Position].Kind == schema.KindGate
+}
+
 // Reject sends reason back into the node the gate re-runs (spec §7.2). Advance re-runs it with
 // the reason in its prompt, then reaches the gate again. A hard stop a node raised takes no
 // rejection: approve it, or start a new run to drop the work.
@@ -134,7 +141,7 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 	}
 	s := r.State
 	g := r.Setup.Graph
-	if n := g.Nodes[s.Position]; n.Kind != schema.KindGate {
+	if !Rejectable(r) {
 		return fmt.Errorf("%s stopped at the hard approval point %s, which takes approve; to drop the work, start a new run", gateID, s.PendingGate)
 	}
 	if strings.TrimSpace(reason) == "" {
@@ -171,9 +178,13 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Time: %s\n\n## Why\n\n%v\n\n", s.ID, s.Mode,
 		time.Now().UTC().Format(time.RFC3339), h.err)
 	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
-	if run.Quarantines(h.gate) {
+	switch {
+	case run.Quarantines(h.gate):
 		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again; what the node wrote is not saved.\n", n.Repo, n.ID)
-	} else {
+	case h.gate == gungnir.GateBudgetCap:
+		fmt.Fprintf(&b, "Nothing is lost: the work so far is committed and the run can go on. Approving does not lift a cap that is still reached. "+
+			"Raise the cap in factory.yaml (budget: per_run or per_day), or wait until the day's spend starts over, and then approve: the run goes on with %s.\n", n.ID)
+	default:
 		b.WriteString("Approving lands this move with the generated files as they are.\n")
 	}
 	b.WriteString("A hard stop takes no rejection: to drop the work, start a new run.\n")

@@ -243,3 +243,35 @@ func TestToyGraphEndToEnd(t *testing.T) {
 		}
 	})
 }
+
+func TestARunThatReachesItsCapStopsAtBudgetCapAndOnlyApproveIsOffered(t *testing.T) {
+	dir, config := project(t, "script.yaml", "budget:\n  per_run: { tokens: 2500, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\n")
+	code, out, _ := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	id := runID(t, dir)
+	if code != ExitStopped {
+		t.Fatalf("run: exit %d, %q", code, out)
+	}
+	code, out, errOut := ygg(t, "approve", id, "design-gate", "--project", dir)
+	if code != ExitStopped || !strings.Contains(out, "stopped at the hard approval point budget-cap") ||
+		!strings.Contains(out, "ygg approve "+id+" build") || strings.Contains(out, "ygg reject") || !strings.Contains(out, "no rejection") {
+		t.Fatalf("approve: exit %d:\n%s%s\nwant a stop at budget-cap that offers approve only", code, out, errOut)
+	}
+	if code, _, errOut := ygg(t, "reject", id, "build", "--reason", "no", "--project", dir); code != ExitRefused || !strings.Contains(errOut, "takes approve") {
+		t.Errorf("reject: exit %d, %q", code, errOut)
+	}
+	code, out, _ = ygg(t, "status", id, "--project", dir)
+	if code != ExitDone || !strings.Contains(out, "waiting:  build (budget-cap)") || !strings.Contains(out, "usage:    3000 tokens in") {
+		t.Errorf("status: exit %d:\n%s", code, out)
+	}
+	// Raise the cap, approve, and the run goes on to the end (the design gate is behind it).
+	b, _ := os.ReadFile(config)
+	os.WriteFile(config, []byte(strings.Replace(string(b), "tokens: 2500", "tokens: 50000", 1)), 0o644)
+	code, out, errOut = ygg(t, "approve", id, "build", "--project", dir)
+	for code == ExitStopped {
+		s, _ := run.LoadState(run.Dir(dir, id))
+		code, out, errOut = ygg(t, "approve", id, s.Pending, "--project", dir)
+	}
+	if code != ExitDone {
+		t.Errorf("after the cap was raised: exit %d:\n%s%s", code, out, errOut)
+	}
+}
