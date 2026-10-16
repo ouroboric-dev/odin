@@ -1,0 +1,10 @@
+name: toy-sandbox
+version: 0.1.0
+graph: graph.yaml
+checks:
+  unit: [grep, -q, done, build.txt] # in the leaf's sandbox
+leaves:
+  repos/app: { description: the toy app, template: templates/app, first_commit: [LICENSE] }
+sandbox:
+  stack: docker.io/library/golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514
+  egress: [proxy.golang.org, sum.golang.org]

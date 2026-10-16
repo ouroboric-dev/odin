@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ouroboric-dev/gleipnir/skills"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
@@ -68,6 +69,7 @@ type State struct {
 	Reasons      map[string]string     `json:"reasons,omitempty"`      // node id: rejection reason for its next attempt
 	Summaries    map[string]string     `json:"summaries,omitempty"`    // node id: its last result
 	Waived       map[string]bool       `json:"waived,omitempty"`       // pointer node id: shrink-guard approved for its next move
+	Skills       skills.Record         `json:"skills"`                 // every skill the graph names, with the set's hash (spec §5.1)
 	Usage        gungnir.Usage         `json:"usage"`
 	Ledger       ledger.Anchor         `json:"ledger"`
 	Error        string                `json:"error,omitempty"`

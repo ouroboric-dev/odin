@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ouroboric-dev/gleipnir/skills"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/agents"
@@ -26,11 +27,12 @@ import (
 
 // Options say what to run.
 type Options struct {
-	Project string       // the project umbrella (L1), inside an instance tree
-	Config  string       // factory.yaml
-	Realm   string       // the directory that holds pack.yaml
-	Brief   string       // optional
-	Mode    gungnir.Mode // "" means the config's mode
+	Project string            // the project umbrella (L1), inside an instance tree
+	Config  string            // factory.yaml
+	Realm   string            // the directory that holds pack.yaml
+	Brief   string            // optional
+	Mode    gungnir.Mode      // "" means the config's mode
+	Libs    *skills.Libraries // tests only: skill libraries to use in place of the pinned and private ones
 }
 
 // Setup is everything a run needs, loaded and checked.
@@ -47,6 +49,9 @@ type Setup struct {
 	BriefSHA256  string
 	Mode         gungnir.Mode
 	Agents       map[string]gungnir.Agent // role: adapter, for every role the graph uses
+	Libs         skills.Libraries         // where the graph's skills come from
+	Skills       skills.Record            // every skill the graph names, with the set's hash
+	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
 
 	Root        string               // the tree's root: the project, or an umbrella above it
 	ProjectPath string               // the project's path from the root
@@ -101,6 +106,12 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		if err := s.checkNode(ctx, graphPath, n); err != nil {
 			return nil, err
 		}
+	}
+	if err := s.prepareSandbox(); err != nil {
+		return nil, err
+	}
+	if err := s.prepareSkills(o.Libs); err != nil {
+		return nil, err
 	}
 	if o.Brief != "" {
 		if s.Brief, err = filepath.Abs(o.Brief); err != nil {
@@ -175,7 +186,7 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
 	}
 	var err error
-	if s.Agents[n.Role], err = agents.New(role, filepath.Dir(s.ConfigPath)); err != nil {
+	if s.Agents[n.Role], err = agents.New(role, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy}); err != nil {
 		return fmt.Errorf("role %s: %w", n.Role, err)
 	}
 	return nil
@@ -363,7 +374,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Realm: setup.Pack.Name, RealmVersion: setup.Pack.Version, RealmDir: setup.RealmDir,
 		GraphVersion: setup.Graph.Version, GraphSHA256: setup.GraphSHA256,
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
-		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup),
+		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
 		Waived: map[string]bool{}, Created: now, Updated: now,
@@ -489,6 +500,9 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode) (*Run, er
 	}
 	if setup.BriefSHA256 != s.BriefSHA256 {
 		return nil, errors.New("the brief changed since the run started; a brief is frozen, so start a new run")
+	}
+	if setup.Skills.Hash != s.Skills.Hash {
+		return nil, errors.New("the skills the graph names changed since the run started, so results would not compare; start a new run")
 	}
 	if setup.Root != s.Root || setup.ProjectPath != s.ProjectPath {
 		return nil, fmt.Errorf("the run belongs to %s in %s, not this project", s.ProjectPath, s.Root)
