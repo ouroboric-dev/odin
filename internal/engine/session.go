@@ -21,6 +21,7 @@ type sessionSpec struct {
 	repo     string
 	text     string // the whole prompt
 	readOnly bool
+	before   string // a read-only session's snapshot of the leaf before it ran
 	maxTurns int
 	timeout  time.Duration
 }
@@ -46,6 +47,12 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 	meter := r.Meter()
 	retrier := jormungandr.Retrier{Backoff: r.Setup.Backoff, Meter: meter, Sleep: r.Setup.Sleep,
 		OnRetry: func(try int, wait time.Duration, why string) error {
+			// A read-only session's leaf is compared first: the reset would hide what it changed (review I1).
+			if sp.readOnly {
+				if err := readOnly(context.WithoutCancel(ctx), r, sp.repo, sp.role, sp.before); err != nil {
+					return err
+				}
+			}
 			// The failed try may have left half its work in the leaf: the retry starts from the checkpoint.
 			if _, ok := r.State.Leaves[sp.repo]; ok {
 				if err := r.DiscardWork(ctx, sp.repo); err != nil {

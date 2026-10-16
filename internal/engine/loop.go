@@ -191,13 +191,11 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if err != nil {
 		return "", err
 	}
-	res, ev, err := session(ctx, r, sessionSpec{key: n.SessionKey(rv), role: rv.Role, repo: n.Repo, text: text, readOnly: true,
-		maxTurns: rv.MaxTurns, timeout: time.Duration(rv.Timeout)})
-	if err != nil {
+	sp := sessionSpec{key: n.SessionKey(rv), role: rv.Role, repo: n.Repo, text: text, readOnly: true, before: before,
+		maxTurns: rv.MaxTurns, timeout: time.Duration(rv.Timeout)}
+	res, ev, err := session(ctx, r, sp)
+	if err := checkReadOnly(ctx, r, sp, ev, err); err != nil {
 		return "", err
-	}
-	if err := readOnly(ctx, r, n.Repo, rv.Role, before); err != nil {
-		return "", failCheckpoint(r, ev, err)
 	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
 	return res.Output, r.Log(ev)

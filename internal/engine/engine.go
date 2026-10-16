@@ -155,15 +155,11 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 			return err
 		}
 	}
-	res, ev, err := session(ctx, r, sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, readOnly: n.ReadOnly,
-		maxTurns: n.MaxTurns, timeout: time.Duration(n.Timeout)})
-	if err != nil {
+	sp := sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, readOnly: n.ReadOnly, before: before,
+		maxTurns: n.MaxTurns, timeout: time.Duration(n.Timeout)}
+	res, ev, err := session(ctx, r, sp)
+	if err := checkReadOnly(ctx, r, sp, ev, err); err != nil {
 		return nodeError(err)
-	}
-	if n.ReadOnly {
-		if err := readOnly(ctx, r, n.Repo, n.Role, before); err != nil {
-			return failCheckpoint(r, ev, err)
-		}
 	}
 	if ev.Commit, err = checkpoint(ctx, r, n, ev.Attempt); err != nil {
 		return failCheckpoint(r, ev, err)
@@ -396,6 +392,22 @@ func readOnly(ctx context.Context, r *run.Run, repo, role, before string) error 
 		}
 	}
 	return &hardStop{gate: gungnir.GatePolicyViolation, err: &leaf.PolicyError{Reason: "the read-only role " + role + " changed the leaf:\n" + strings.Join(changed, "\n")}}
+}
+
+// checkReadOnly is what follows a session: for a read-only one, readOnly runs whatever the session
+// returned, since a session that failed may have changed the leaf too (review I1). A change, or an
+// error of the check, takes precedence over the session's error, which is returned otherwise.
+func checkReadOnly(ctx context.Context, r *run.Run, sp sessionSpec, ev gungnir.Event, sessionErr error) error {
+	if !sp.readOnly {
+		return sessionErr
+	}
+	if err := readOnly(context.WithoutCancel(ctx), r, sp.repo, sp.role, sp.before); err != nil {
+		if sessionErr != nil { // the session's event is not returned for a failure: name the session that failed
+			ev = gungnir.Event{Node: sp.key, Attempt: r.State.Attempts[sp.key], Role: sp.role}
+		}
+		return failCheckpoint(r, ev, err)
+	}
+	return sessionErr
 }
 
 // sandboxFailure is a sandbox that wouldn't start: an infrastructure failure, so the run stops

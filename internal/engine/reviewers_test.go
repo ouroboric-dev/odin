@@ -117,3 +117,45 @@ func TestAReadOnlyRoleThatWritesAnIgnoredFileIsAHardStop(t *testing.T) {
 		t.Errorf("Advance() = %+v, %v, gate %s; want a stop at policy-violation", out, err, r.State.PendingGate)
 	}
 }
+
+// Review I1: a read-only session that changed the leaf and then failed is checked all the same.
+func TestAReviewerThatWritesAnIgnoredFileAndFailsAsAnAgentIsAHardStop(t *testing.T) {
+	script := "steps:\n  build:\n    - actions: [ " + write(".gitignore", "*.log") + ", " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+		"  build-spec:\n    - actions: [ " + write("notes.log", "I was here") + " ]\n      error: the session timed out\n" +
+		"    - result: { status: ok, report: [] }\n"
+	r := startReview(t, "unattended", script)
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
+		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at policy-violation", out, err, r.State.PendingGate)
+	}
+	if r.State.Attempts["build-spec"] != 1 {
+		t.Errorf("reviewer sessions %d; the reviewer must not be asked again over a changed leaf", r.State.Attempts["build-spec"])
+	}
+}
+
+func TestAReadOnlyRoleThatWritesAnIgnoredFileAndFailsIsAHardStop(t *testing.T) {
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: look, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true }\n"
+	script := "steps:\n  a:\n    - actions: [ " + write(".gitignore", "*.log") + " ]\n      result: { status: ok }\n" +
+		"  look:\n    - actions: [ " + write("notes.log", "I was here") + " ]\n      error: the session timed out\n"
+	r := start(t, "key-points", "", nodes, script)
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
+		t.Errorf("Advance() = %+v, %v, gate %s; want a stop at policy-violation", out, err, r.State.PendingGate)
+	}
+}
+
+// A retry resets the leaf: a read-only session's leaf is compared before that, or the reset hides what it wrote.
+func TestAReviewerThatWritesAFileAndFailsTransientlyIsAHardStop(t *testing.T) {
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+		"  build-spec:\n    - actions: [ " + write("notes.txt", "I was here") + " ]\n      error: HTTP 529 overloaded\n      kind: transient\n" +
+		"    - result: { status: ok, report: [] }\n"
+	w := &waits{}
+	r := startWith(t, setup{mode: "unattended", pack: unitCheck, nodes: reviewLoop, script: script, hooks: hooks(w)})
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
+		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at policy-violation", out, err, r.State.PendingGate)
+	}
+	if _, err := os.Stat(filepath.Join(r.RepoDir("repos/app"), "notes.txt")); err != nil {
+		t.Error("the leaf was reset; a quarantine keeps what the reader wrote, for investigation")
+	}
+}
