@@ -130,6 +130,14 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 		return err
 	}
 	text := string(prompt)
+	// Skills load explicitly, the ones this node names, and no others (spec §5.1).
+	skillText, err := r.Setup.Libs.Load(n.Skills)
+	if err != nil {
+		return err
+	}
+	if skillText != "" {
+		text += "\n\n" + skillText
+	}
 	if r.Setup.BriefText != "" {
 		text += "\n\n## Brief\n\n" + r.Setup.BriefText
 	}
@@ -142,9 +150,13 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Log(start); err != nil {
 		return err
 	}
+	runner, err := r.Runner(ctx, n.Repo)
+	if err != nil {
+		return sandboxStart(err)
+	}
 	task := gungnir.Task{Role: n.Role, Node: n.ID, Attempt: attempt, Prompt: text, Workdir: r.RepoDir(n.Repo),
 		Model: role.Model, ReadOnly: n.ReadOnly, MaxTurns: n.MaxTurns, Timeout: time.Duration(n.Timeout),
-		TranscriptDir: filepath.Join(r.Dir, "transcripts")}
+		TranscriptDir: filepath.Join(r.Dir, "transcripts"), Sandbox: runner}
 	actx, cancel := ctx, context.CancelFunc(func() {})
 	if task.Timeout > 0 {
 		actx, cancel = context.WithTimeout(ctx, task.Timeout)
@@ -159,6 +171,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 			// Only a well-formed result's usage counts; a malformed one is never trusted.
 			s.Usage = s.Usage.Add(res.Usage)
 			ev = ev.WithUsage(res.Usage)
+			ev.Provider, ev.CLIVersion = res.Provider, res.CLIVersion
 			if res.Status != gungnir.StatusOK {
 				runErr = fmt.Errorf("the agent reported %s: %s", res.Status, res.Summary)
 			}

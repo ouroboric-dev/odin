@@ -14,6 +14,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
+	"github.com/ouroboric-dev/odin/internal/skillfake"
 	"github.com/ouroboric-dev/odin/internal/tree"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
@@ -24,6 +25,12 @@ const sandboxPack = "checks:\n  unit: [grep, -q, done, build.txt]\n  junk: [sh, 
 
 // startSandboxed starts a run whose leaf commands go through a fake sandbox.
 func startSandboxed(t *testing.T, nodes, script string) (*run.Run, *sandboxfake.Sandbox) {
+	t.Helper()
+	return startSandboxedWith(t, nodes, script, run.Hooks{})
+}
+
+// startSandboxedWith is startSandboxed with other hooks, such as a skill library.
+func startSandboxedWith(t *testing.T, nodes, script string, h run.Hooks) (*run.Run, *sandboxfake.Sandbox) {
 	t.Helper()
 	realm, cfg := t.TempDir(), t.TempDir()
 	project := treetest.Project(t, "repos/app")
@@ -45,8 +52,8 @@ func startSandboxed(t *testing.T, nodes, script string) (*run.Run, *sandboxfake.
 		}
 	}
 	fake := &sandboxfake.Sandbox{}
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm,
-		Hooks: run.Hooks{NewSandbox: func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return fake, nil }}})
+	h.NewSandbox = func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return fake, nil }
+	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm, Hooks: h})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +153,7 @@ func TestASandboxThatBreaksTheRulesIsAHardStopAndOneThatWontStartAFailure(t *tes
 	r2, fake2 := startSandboxed(t, buildNodes+"  - { id: check, kind: exec, run: [\"true\"], repo: repos/app }\n", buildScript)
 	fake2.UpErr = errors.New("podman: connection refused")
 	out, err = Advance(context.Background(), r2)
-	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "the sandbox didn't start") || r2.State.Attempts["check"] != 1 {
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "the sandbox didn't start") || r2.State.Attempts["a"] != 1 {
 		t.Errorf("an engine that is down: %+v, %v; want a failed run, one attempt, no retry loop", out, err)
 	}
 }
@@ -160,5 +167,44 @@ func TestACommandThatRunsTooLongIsStoppedInTheSandbox(t *testing.T) {
 	}
 	if len(fake.Downs) != 1 {
 		t.Error("the sandbox of a failed run was left up")
+	}
+}
+
+func TestAnAgentSessionGetsTheSandboxItsSkillsAndReportsItsProvider(t *testing.T) {
+	script := "steps:\n  a:\n    - actions:\n        - run: { argv: [touch, from-the-agent.txt] }\n        - write: { path: build.txt, content: \"done\\n\" }\n" +
+		"      result: { status: ok, summary: built, provider: anthropic, cli_version: 2.1.284, usage: { in: 10, out: 5, turns: 1, cost_usd: 0.01 } }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, skills: [plain-language] }\n"
+	r, fake := startSandboxedWith(t, nodes, script, run.Hooks{Libs: skillfake.Libraries(t, "plain-language", "Use short words.")})
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if len(fake.Execs) != 1 || fake.Execs[0].Argv[0] != "touch" {
+		t.Errorf("the agent's command went %+v; want one, through the sandbox", fake.Execs)
+	}
+	if _, err := os.Stat(filepath.Join(r.RepoDir("repos/app"), "from-the-agent.txt")); err != nil {
+		t.Errorf("the sandbox didn't act on the leaf: %v", err)
+	}
+	tr, _ := os.ReadFile(filepath.Join(r.Dir, "transcripts", "a-1.json"))
+	if !strings.Contains(string(tr), "Do the work.") || !strings.Contains(string(tr), "### plain-language") || !strings.Contains(string(tr), "Use short words.") {
+		t.Errorf("the prompt = %s; want the node's prompt and its skill", tr)
+	}
+	text := ledgerText(t, r)
+	for _, want := range []string{`"gen_ai.provider.name":"anthropic"`, `"ygg.agent.cli_version":"2.1.284"`, `"event":"sandbox_up"`, `"event":"sandbox_down"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the ledger lacks %s", want)
+		}
+	}
+}
+
+func TestAnAgentThatNamesNoSkillsLoadsNone(t *testing.T) {
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	r, _ := startSandboxedWith(t, nodes, buildScript, run.Hooks{Libs: skillfake.Libraries(t, "plain-language", "Use short words.")})
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	tr, _ := os.ReadFile(filepath.Join(r.Dir, "transcripts", "a-1.json"))
+	if strings.Contains(string(tr), "plain-language") {
+		t.Errorf("a skill the node didn't name reached the prompt: %s", tr)
 	}
 }

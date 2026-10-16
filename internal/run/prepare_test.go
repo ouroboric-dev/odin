@@ -5,11 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"testing/fstest"
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gleipnir/skills"
-	"github.com/ouroboric-dev/havamal"
+	"github.com/ouroboric-dev/odin/internal/skillfake"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
@@ -110,19 +109,7 @@ func TestPrepareRefusesWhatWouldRunOutsideTheSandbox(t *testing.T) {
 }
 
 func skillLib(t *testing.T) *skills.Libraries {
-	t.Helper()
-	text := "---\nname: plain-language\ndescription: Write plainly.\n---\nUse short words.\n"
-	fsys := fstest.MapFS{"skills/.gitkeep": {}, "skills/plain-language/SKILL.md": {Data: []byte(text)}, "skills/plain-language/LICENSE": {Data: []byte("MIT\n")}}
-	lock := &havamal.Lock{Skills: []havamal.Entry{{Name: "plain-language", Licence: "MIT",
-		Upstream: &havamal.Upstream{Repo: "https://github.com/example/w", Path: "p", Commit: strings.Repeat("a", 40)},
-		Files:    []havamal.File{{Path: "LICENSE", SHA256: havamal.Sum([]byte("MIT\n"))}, {Path: "SKILL.md", SHA256: havamal.Sum([]byte(text))}}}}}
-	b, _ := lock.Marshal()
-	fsys["skills.lock"] = &fstest.MapFile{Data: b}
-	lib, err := havamal.Open(fsys)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &skills.Libraries{Pinned: lib}
+	return skillfake.Libraries(t, "plain-language", "Use short words.")
 }
 
 // realmWithSkills copies the toy realm and names skills on its design node.

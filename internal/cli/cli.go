@@ -228,6 +228,9 @@ func (c *command) advance(r *run.Run) int {
 		return ExitFailed
 	}
 	id := r.State.ID
+	for _, w := range out.Warn {
+		fmt.Fprintf(c.err, "ygg: warning: %s\nygg: ygg doctor finds and stops what is left.\n", w)
+	}
 	switch out.Status {
 	case run.StatusDone:
 		fmt.Fprintf(c.out, "Run %s is done.\n", id)
