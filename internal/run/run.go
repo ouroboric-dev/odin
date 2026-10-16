@@ -229,7 +229,7 @@ type Run struct {
 	Ledger  *ledger.Ledger
 	unlock  func()
 	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
-	Saved   []string        // one note per leaf whose discarded changes Open saved to a ref before resetting it
+	Saved   []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
 	Sandbox gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
 }
 
@@ -583,8 +583,9 @@ func Quarantines(g gungnir.Gate) bool {
 
 // restoreLeaves puts every leaf back to its checkpoint when the run's node restarts (interrupted
 // or failed), and otherwise refuses a leaf that changed while the run waited: Odin never discards
-// work it didn't make. A run stopped at policy-violation is quarantined: its leaves stay as they
-// are for investigation, and only approving the stop resets them (spec §12).
+// work it didn't make. In a run with a sandbox, the working tree a node left is discarded unsaved,
+// since no scan has seen it (decision 12). A run stopped at policy-violation is quarantined: its
+// leaves stay as they are for investigation, and only approving the stop resets them (spec §12).
 func (r *Run) restoreLeaves(ctx context.Context) error {
 	s := r.State
 	if s.Status == StatusDone || Quarantines(s.PendingGate) {
@@ -601,7 +602,16 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 			// Odin never discards work it didn't make: save what the reset removes first.
 			saved, _ := l.Git(ctx, "for-each-ref", "--format=%(refname)", "refs/ygg/"+s.ID+"/discarded/")
 			ref := fmt.Sprintf("refs/ygg/%s/discarded/%d", s.ID, strings.Count(saved, "\n")+min(len(saved), 1)+1)
-			if ok, err := l.Save(ctx, ref, rec.Checkpoint, "ygg: run "+s.ID+", what resetting "+p+" to its checkpoint discarded"); err != nil {
+			msg := "ygg: run " + s.ID + ", what resetting " + p + " to its checkpoint discarded"
+			if r.Sandbox != nil {
+				// A node's work in a sandbox is scanned for secrets only at its checkpoint, so what it
+				// left is discarded, never put in git (decision 12). Commits are already in git: kept.
+				if err := r.discardUnscanned(ctx, l, p, ref, rec, msg); err != nil {
+					return err
+				}
+				continue
+			}
+			if ok, err := l.Save(ctx, ref, rec.Checkpoint, msg); err != nil {
 				return fmt.Errorf("saving %s before resetting it to its checkpoint: %w", p, err)
 			} else if ok {
 				r.Saved = append(r.Saved, fmt.Sprintf("%s: the changes since its checkpoint are saved as %s (git -C %s show --stat %s)", p, ref, r.RepoDir(p), ref))
@@ -623,6 +633,34 @@ func (r *Run) restoreLeaves(ctx context.Context) error {
 			return fmt.Errorf("the leaf %s changed while the run waited: it is at %s, with %d uncommitted changes, and the run's checkpoint is %s; put it back, or start a new run",
 				p, head, strings.Count(st, "\n")+min(len(st), 1), rec.Checkpoint)
 		}
+	}
+	return nil
+}
+
+// discardUnscanned resets a leaf with a sandbox to its checkpoint without saving its working tree,
+// which no scan has seen: only commits on the run's branch past the checkpoint, already in git, are
+// kept at ref. The run notes what it discarded.
+func (r *Run) discardUnscanned(ctx context.Context, l *leaf.Leaf, p, ref string, rec LeafRecord, msg string) error {
+	st, err := l.Git(ctx, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	kept, err := l.KeepCommits(ctx, ref, rec.Checkpoint, msg)
+	if err != nil {
+		return fmt.Errorf("keeping the commits of %s before resetting it to its checkpoint: %w", p, err)
+	}
+	if err := l.Reset(ctx, rec.Branch, rec.Checkpoint); err != nil {
+		return fmt.Errorf("resetting %s to its checkpoint: %w", p, err)
+	}
+	var notes []string
+	if st != "" {
+		notes = append(notes, "the uncommitted changes since its checkpoint are discarded and not saved: they ran in the sandbox and were never scanned for secrets")
+	}
+	if kept {
+		notes = append(notes, fmt.Sprintf("the commits on its branch past the checkpoint are kept as %s (git -C %s log %s)", ref, r.RepoDir(p), ref))
+	}
+	if len(notes) > 0 {
+		r.Saved = append(r.Saved, p+": "+strings.Join(notes, "; "))
 	}
 	return nil
 }

@@ -1,8 +1,10 @@
 package run
 
 import (
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,6 +116,49 @@ func TestResumeStopsASandboxAKilledYggLeft(t *testing.T) {
 	defer r2.Close()
 	if len(fake.Downs) != 1 || len(r2.State.Sandboxes) != 0 {
 		t.Errorf("the leftover sandbox was not stopped: downs %d, recorded %v", len(fake.Downs), r2.State.Sandboxes)
+	}
+}
+
+// A resume after an interrupted node in a leaf with a sandbox discards the node's work without
+// putting it in git: it was never scanned for secrets (decision 12). Commits a person made on the
+// run's branch are already in git, and stay reachable from a ref.
+func TestResumeNeverSavesUnscannedWorkToARef(t *testing.T) {
+	r, _, project, h := startSandboxed(t)
+	id, app := r.State.ID, r.RepoDir("repos/app")
+	l, err := r.Leaf("repos/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app, "by-hand.txt"), []byte("a person's commit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commit, _, err := l.Checkpoint(ctx, "a person's commit after the checkpoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	unscanned := "an interrupted node's unscanned work\n"
+	if err := os.WriteFile(filepath.Join(app, "half-done.txt"), []byte(unscanned), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err = OpenWith(ctx, project, id, "", h)
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	defer r.Close()
+	if _, err := os.Stat(filepath.Join(app, "half-done.txt")); err == nil {
+		t.Error("Open() kept an interrupted node's work; the node restarts from its checkpoint")
+	}
+	blob := fmt.Sprintf("%x", sha1.Sum([]byte(fmt.Sprintf("blob %d\x00%s", len(unscanned), unscanned))))
+	if _, err := l.Git(ctx, "cat-file", "-e", blob); err == nil {
+		t.Error("the unscanned work is in the leaf's git objects")
+	}
+	refs, _ := l.Git(ctx, "for-each-ref", "--format=%(refname) %(objectname)", "refs/ygg/"+id+"/discarded/")
+	if refs != "refs/ygg/"+id+"/discarded/1 "+commit {
+		t.Errorf("the discarded refs are %q, want one at the person's commit %s and nothing else", refs, commit)
+	}
+	if len(r.Saved) != 1 || !strings.Contains(r.Saved[0], "not saved") || !strings.Contains(r.Saved[0], "refs/ygg/"+id+"/discarded/1") {
+		t.Errorf("Saved = %q, want a note that the work was discarded unsaved, naming the ref of the commit", r.Saved)
 	}
 }
 

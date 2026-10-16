@@ -137,6 +137,22 @@ func (l *Leaf) Save(ctx context.Context, ref, since, msg string) (saved bool, er
 	return true, nil
 }
 
+// KeepCommits is Save without the working tree, for a leaf whose uncommitted work must not go into
+// git (it was never scanned for secrets): when the branch has moved past since, it creates ref
+// (which must not exist) at the branch head, so the commits a reset to since drops stay reachable.
+// It writes no object. kept is false when the branch is at since.
+func (l *Leaf) KeepCommits(ctx context.Context, ref, since, msg string) (kept bool, err error) {
+	head, err := l.Head(ctx)
+	if err != nil || head == since {
+		return false, err
+	}
+	// An empty old value: create the ref, never overwrite one.
+	if _, err := l.repo.Run(ctx, "update-ref", "-m", msg, ref, head, ""); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Guard refuses a leaf that breaks a sandbox rule — a rewritten .git file, or a planted git
 // repository below its top level — without committing anything. A merge gate's or pointer move's
 // checks run leaf code, so Odin re-checks the leaf before it runs parent git on it (decision 3, 9).
