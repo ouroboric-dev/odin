@@ -74,6 +74,7 @@ type State struct {
 	Sandboxes    map[string]gungnir.Env `json:"sandboxes,omitempty"`    // leaf path: its sandbox, while one is up, so a leftover can be stopped
 	Usage        gungnir.Usage          `json:"usage"`
 	Paused       *Pause                 `json:"paused,omitempty"` // why the run is paused
+	Warned       map[string]bool        `json:"warned,omitempty"` // the budget warnings already given, so each comes once
 	Ledger       ledger.Anchor          `json:"ledger"`
 	Error        string                 `json:"error,omitempty"`
 	Exec         *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
@@ -177,6 +178,9 @@ func LoadState(dir string) (*State, error) {
 	}
 	if s.Waived == nil {
 		s.Waived = map[string]bool{}
+	}
+	if s.Warned == nil {
+		s.Warned = map[string]bool{}
 	}
 	if s.Leaves == nil {
 		s.Leaves = map[string]LeafRecord{}

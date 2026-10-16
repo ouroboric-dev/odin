@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
@@ -56,5 +57,33 @@ func TestDoctorWarnsWhenAPublicUmbrellaListsAPrivateChild(t *testing.T) {
 	}
 	if strings.Contains(out, "config") {
 		t.Errorf("doctor --root alone checked a config:\n%s", out)
+	}
+}
+
+func TestDoctorChecksTheSpendJournal(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	if code != ExitDone || !strings.Contains(out, "OK    budget: this run 0 of 100000 tokens, 0 of 100 turns; today 0 of 200000 tokens, 0 of 200 turns (journal ") {
+		t.Errorf("doctor: exit %d:\n%s", code, out)
+	}
+	// A journal that can't be read is an error: the day's cap can't be checked.
+	journal := filepath.Join(t.TempDir(), "spend")
+	os.MkdirAll(journal, 0o700)
+	os.WriteFile(filepath.Join(journal, time.Now().Format("2006-01-02")+".jsonl"), []byte("not json\nnot json\n"), 0o600)
+	b, _ := os.ReadFile(config)
+	os.WriteFile(config, append(b, []byte("  journal: "+journal+"\n")...), 0o644)
+	code, out, _ = ygg(t, "doctor", "--project", dir, "--config", config)
+	if code != ExitFailed || !strings.Contains(out, "ERROR budget: ") || !strings.Contains(out, ".jsonl:1 is not a spend entry") {
+		t.Errorf("doctor with a broken journal: exit %d:\n%s", code, out)
+	}
+	// A journal folder that can't be written to is an error too.
+	if os.Getuid() != 0 {
+		locked := filepath.Join(t.TempDir(), "locked")
+		os.MkdirAll(locked, 0o500)
+		b, _ = os.ReadFile(config)
+		os.WriteFile(config, []byte(strings.Replace(string(b), "  journal: "+journal, "  journal: "+filepath.Join(locked, "spend"), 1)), 0o644)
+		if code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config); code != ExitFailed || !strings.Contains(out, "ERROR budget: the spend journal can't be made") {
+			t.Errorf("doctor with a folder it can't write: exit %d:\n%s", code, out)
+		}
 	}
 }

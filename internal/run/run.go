@@ -149,19 +149,28 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 // prepareBudget says where the spend journal is, and the retry policy. The journal's folder is made
 // at the first session, not here: Prepare writes nothing.
 func (s *Setup) prepareBudget(h Hooks) error {
-	dir := s.Config.Budget.Journal
-	if dir == "" {
-		var err error
-		if dir, err = budget.DefaultDir(os.Getenv, os.UserHomeDir); err != nil {
-			return fmt.Errorf("%s: %w", s.ConfigPath, err)
-		}
+	var err error
+	if s.Journal, err = BudgetJournal(s.Config, h.Now); err != nil {
+		return fmt.Errorf("%s: %w", s.ConfigPath, err)
 	}
-	s.Journal = &budget.Journal{Dir: dir, Now: h.Now}
 	s.Backoff, s.Sleep = jormungandr.DefaultBackoff, h.Sleep
 	if h.Backoff != nil {
 		s.Backoff = *h.Backoff
 	}
 	return nil
+}
+
+// BudgetJournal returns the spend journal of a config: the folder it names, or the operator's state
+// folder. now is the clock of a test; nil is the real one.
+func BudgetJournal(cfg *schema.Factory, now func() time.Time) (*budget.Journal, error) {
+	dir := cfg.Budget.Journal
+	if dir == "" {
+		var err error
+		if dir, err = budget.DefaultDir(os.Getenv, os.UserHomeDir); err != nil {
+			return nil, err
+		}
+	}
+	return &budget.Journal{Dir: dir, Now: now}, nil
 }
 
 // findProject places the project in the instance tree: Odin runs on nothing outside it, because a
@@ -440,7 +449,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
-		Waived: map[string]bool{}, Created: now, Updated: now,
+		Waived: map[string]bool{}, Warned: map[string]bool{}, Created: now, Updated: now,
 	}}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256}); err != nil {
 		r.Close()

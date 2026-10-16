@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/engine"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -297,5 +299,39 @@ func (c *command) status(args []string) int {
 	u := s.Usage
 	fmt.Fprintf(c.out, "usage:    %d tokens in, %d out, %d from cache; %d turns; $%.4f\n",
 		u.InTok, u.OutTok, u.CacheTok, u.Turns, u.CostUSD)
+	if line := capsLine(s); line != "" {
+		fmt.Fprintf(c.out, "caps:     %s\n", line)
+	}
 	return ExitDone
+}
+
+// capsLine says how much of the caps the run and the day have used, from the run's config as it is now.
+// It is empty when the config can't be read: status then says nothing about caps, rather than guess.
+func capsLine(s *run.State) string {
+	cfg, err := schema.LoadFactory(s.ConfigPath)
+	if err != nil {
+		return ""
+	}
+	j, err := run.BudgetJournal(cfg, nil)
+	if err != nil {
+		return ""
+	}
+	m := &budget.Meter{Run: &s.Usage, Caps: cfg.Budget, USD: cfg.PaysPerToken(), Journal: j}
+	day, err := m.Today()
+	if err != nil {
+		return "the day's spend can't be read: " + err.Error()
+	}
+	return describeCaps(cfg, s.Usage, day)
+}
+
+// describeCaps is the run's and the day's use of each cap, in words.
+func describeCaps(cfg *schema.Factory, runUse, dayUse gungnir.Usage) string {
+	one := func(c schema.Cap, u gungnir.Usage) string {
+		out := fmt.Sprintf("%d of %d tokens, %d of %d turns", u.CapTokens(), c.Tokens, u.Turns, c.Turns)
+		if cfg.PaysPerToken() {
+			out += fmt.Sprintf(", $%.4f of $%.4f", u.CostUSD, c.USD)
+		}
+		return out
+	}
+	return "this run " + one(cfg.Budget.PerRun, runUse) + "; today " + one(cfg.Budget.PerDay, dayUse)
 }

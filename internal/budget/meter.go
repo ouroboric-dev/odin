@@ -23,7 +23,7 @@ func (m *Meter) Check() *gungnir.CapError {
 	if hit := m.Caps.PerRun.Reached(gungnir.CapRun, *m.Run, m.USD); hit != nil {
 		return hit
 	}
-	day, err := m.Journal.Day(m.Journal.now())
+	day, err := m.Journal.Today()
 	if err != nil {
 		return &gungnir.CapError{Scope: gungnir.CapDay, Dimension: gungnir.CapJournal, Note: err.Error()}
 	}
@@ -31,7 +31,7 @@ func (m *Meter) Check() *gungnir.CapError {
 }
 
 // Today returns what the journal holds for today.
-func (m *Meter) Today() (gungnir.Usage, error) { return m.Journal.Day(m.Journal.now()) }
+func (m *Meter) Today() (gungnir.Usage, error) { return m.Journal.Today() }
 
 // RemainingTurns returns how many turns the caps still allow: the lesser of the run's and the
 // day's, and never below zero. It bounds the turns of a session, so one session can't run far past a

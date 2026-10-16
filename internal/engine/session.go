@@ -95,6 +95,9 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 		if err := r.Spend(sp.key, spent); err != nil {
 			return stop(err)
 		}
+		if err := warnBudget(r, sp.key); err != nil {
+			return stop(err)
+		}
 		ev = ev.WithUsage(spent)
 		ev.DurationMS = time.Since(began).Milliseconds()
 		if runErr == nil {
@@ -170,4 +173,28 @@ func pauseRun(r *run.Run, n schema.Node, p *pause) (Outcome, error) {
 		return Outcome{}, err
 	}
 	return Outcome{Status: run.StatusPaused, Err: p.q}, r.Save()
+}
+
+// nearCap is the share of a cap at which the ledger gets a warning (spec §10.1).
+const nearCap = 0.8
+
+// warnBudget logs a budget_warning for each cap that is at least 80% used and not yet reached, once
+// per run for a run's cap, and once per day for the day's.
+func warnBudget(r *run.Run, node string) error {
+	m := r.Meter()
+	for _, n := range m.Near(nearCap) {
+		key := string(n.Scope) + "/" + string(n.Dimension)
+		if n.Scope == gungnir.CapDay {
+			key += "/" + r.Setup.Journal.Date()
+		}
+		if r.State.Warned[key] {
+			continue
+		}
+		r.State.Warned[key] = true
+		note := fmt.Sprintf("the per-%s %s cap is %.0f%% used: %.4g of %.4g", n.Scope, n.Dimension, 100*n.Used/n.Limit, n.Used, n.Limit)
+		if err := r.Log(gungnir.Event{Name: gungnir.EventBudgetWarning, Node: node, Note: note}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

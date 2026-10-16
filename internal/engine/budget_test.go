@@ -193,3 +193,23 @@ func TestASessionIsGivenOnlyTheTurnsTheCapsStillAllow(t *testing.T) {
 		t.Errorf("max turns given = %v, want a:10 b:2 c:7", turns)
 	}
 }
+
+func TestTheLedgerWarnsOnceWhenACapIsEightyPercentUsed(t *testing.T) {
+	script := `steps:
+  a: [ { result: { status: ok, usage: { in: 70, out: 10, turns: 1 } } } ]
+  b: [ { result: { status: ok, usage: { in: 5, out: 0, turns: 1 } } } ]
+  c: [ { result: { status: ok, usage: { in: 4, out: 0, turns: 1 } } } ]
+`
+	nodes := twoNodes + "  - { id: c, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	r := startWith(t, setup{nodes: nodes, script: script, budget: caps(100, 100, 200000, 200)})
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	text := ledgerText(t, r)
+	if n := strings.Count(text, `"event":"budget_warning"`); n != 1 || !strings.Contains(text, "per-run tokens cap is 80% used: 80 of 100") {
+		t.Errorf("want one warning, at the session that took the tokens to 80 of 100 (%d found):\n%s", n, text)
+	}
+	if !r.State.Warned["run/tokens"] {
+		t.Errorf("warned = %v; the warning must be remembered, so a resume doesn't repeat it", r.State.Warned)
+	}
+}

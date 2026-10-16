@@ -24,6 +24,8 @@ func ygg(t *testing.T, args ...string) (int, string, string) {
 // beside it. Its roles use script, a file in testdata/toy; extra is added to the config as is.
 func project(t *testing.T, script, extra string) (dir, config string) {
 	t.Helper()
+	// Each test has a spend journal of its own, so what one spends never counts against another's day.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	toy, err := filepath.Abs("../../testdata/toy")
 	if err != nil {
 		t.Fatal(err)

@@ -63,6 +63,12 @@ func (j *Journal) loc() *time.Location {
 	return time.Local
 }
 
+// Today adds up the usage recorded today.
+func (j *Journal) Today() (gungnir.Usage, error) { return j.Day(j.now()) }
+
+// Date names the day of now, such as 2026-10-16, in the operator's zone.
+func (j *Journal) Date() string { return j.now().In(j.loc()).Format("2006-01-02") }
+
 // File returns the journal file of the day t falls in.
 func (j *Journal) File(t time.Time) string {
 	return filepath.Join(j.Dir, t.In(j.loc()).Format("2006-01-02")+".jsonl")

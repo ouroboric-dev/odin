@@ -298,3 +298,18 @@ func TestAUsedUpQuotaPausesTheRunWithExitCode4AndResumeGoesOn(t *testing.T) {
 		t.Errorf("status still says paused:\n%s", out)
 	}
 }
+
+func TestStatusShowsHowMuchOfTheCapsTheRunAndTheDayHaveUsed(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	id := runID(t, dir)
+	_, out, _ := ygg(t, "status", id, "--project", dir)
+	if !strings.Contains(out, "caps:     this run 1100 of 100000 tokens, 2 of 100 turns; today 1100 of 200000 tokens, 2 of 200 turns") {
+		t.Errorf("status:\n%s", out)
+	}
+	// A config that can't be read adds nothing to status; the rest still shows.
+	os.WriteFile(config, []byte("not: [valid"), 0o644)
+	if code, out, _ := ygg(t, "status", id, "--project", dir); code != ExitDone || strings.Contains(out, "caps:") || !strings.Contains(out, "usage:") {
+		t.Errorf("status with a broken config: exit %d:\n%s", code, out)
+	}
+}
