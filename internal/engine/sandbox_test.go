@@ -91,6 +91,9 @@ func TestLeafCommandsRunInTheSandboxAndUmbrellaCommandsOnTheHost(t *testing.T) {
 	if len(fake.Ups) != 1 || len(fake.Downs) != 1 {
 		t.Errorf("ups %d, downs %d; want one sandbox, stopped when Advance returned", len(fake.Ups), len(fake.Downs))
 	}
+	if fake.Scans != 2 {
+		t.Errorf("%d secret scans, want one before each of the two checkpoints (the agent's and the exec's)", fake.Scans)
+	}
 	if b, _ := os.ReadFile(filepath.Join(r.Dir, "logs", "check-1.log")); len(b) != 0 {
 		t.Errorf("the log of a quiet check = %q", b)
 	}
@@ -206,5 +209,79 @@ func TestAnAgentThatNamesNoSkillsLoadsNone(t *testing.T) {
 	tr, _ := os.ReadFile(filepath.Join(r.Dir, "transcripts", "a-1.json"))
 	if strings.Contains(string(tr), "plain-language") {
 		t.Errorf("a skill the node didn't name reached the prompt: %s", tr)
+	}
+}
+
+const secretReport = `[{"RuleID":"aws-access-token","File":"/config/prod.env","StartLine":3,"Secret":"REDACTED","Match":"REDACTED"}]`
+
+func TestASecretInAnAgentsWorkStopsTheRunBeforeAnythingIsCommitted(t *testing.T) {
+	script := buildScript + "    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built again }\n"
+	r, fake := startSandboxed(t, buildNodes, script)
+	fake.Scan.Exit, fake.Scan.Report = 7, secretReport
+	before := r.State.Leaves["repos/app"].Checkpoint
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateRealSecrets {
+		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at real-secrets-or-user-data", out, err, r.State.PendingGate)
+	}
+	if got := r.State.Leaves["repos/app"].Checkpoint; got != before {
+		t.Errorf("the checkpoint moved to %s: a secret was committed", got)
+	}
+	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "a-1.md"))
+	if !strings.Contains(string(gate), "config/prod.env:3 (aws-access-token)") || strings.Contains(string(gate), "REDACTED") {
+		t.Errorf("the gate file = %s; want the rule, file and line, and no secret", gate)
+	}
+	// The leaf stays as the node left it, for the person to look at.
+	if _, err := os.Stat(filepath.Join(r.RepoDir("repos/app"), "build.txt")); err != nil {
+		t.Error("the quarantined leaf lost the agent's file")
+	}
+	// Opening the run again, as a resume or an approve does, leaves the quarantined leaf as it is.
+	id := r.State.ID
+	r.Close()
+	again, err := run.OpenWith(context.Background(), r.Project, id, "", run.Hooks{NewSandbox: func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return fake, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { again.Close() })
+	if _, err := os.Stat(filepath.Join(again.RepoDir("repos/app"), "build.txt")); err != nil {
+		t.Error("opening the run reset a leaf that was kept for the person to look at")
+	}
+	r = again
+	// Approving puts the leaf back, without saving the secret anywhere, and runs the node again.
+	fake.Scan.Exit, fake.Scan.Report = 0, ""
+	if err := Approve(context.Background(), r, "a", "false positive: a test key"); err != nil {
+		t.Fatal(err)
+	}
+	if refs, _ := git.Run(context.Background(), r.RepoDir("repos/app"), "-c", "safe.directory=*", "--git-dir="+r.Setup.Repos["repos/app"].GitDir, "for-each-ref", "refs/ygg/"); refs != "" {
+		t.Errorf("approving saved the discarded work in %q: a secret would be in a ref", refs)
+	}
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Errorf("the second Advance() = %+v, %v", out, err)
+	}
+}
+
+func TestAScanThatCannotRunIsNeverACleanTree(t *testing.T) {
+	r, fake := startSandboxed(t, buildNodes, buildScript)
+	fake.Scan.Exit = 3
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "the secret scan failed") {
+		t.Fatalf("Advance() = %+v, %v; want a failed node", out, err)
+	}
+	if r.State.Leaves["repos/app"].Checkpoint != r.State.Leaves["repos/app"].Base {
+		t.Error("a checkpoint was committed without a scan")
+	}
+}
+
+func TestAReadOnlyRoleThatChangesTheLeafIsAHardStop(t *testing.T) {
+	r, _ := startSandboxed(t, "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true }\n", buildScript)
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
+		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at policy-violation", out, err, r.State.PendingGate)
+	}
+	if got := r.State.Leaves["repos/app"].Checkpoint; got != r.State.Leaves["repos/app"].Base {
+		t.Error("a read-only role's change was committed")
+	}
+	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "a-1.md"))
+	if !strings.Contains(string(gate), "read-only role planner changed the leaf") {
+		t.Errorf("the gate file = %s", gate)
 	}
 }

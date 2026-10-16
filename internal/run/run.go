@@ -574,13 +574,20 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	return r, nil
 }
 
+// Quarantines reports whether a run stopped at gate keeps its leaves as they are for investigation:
+// a sandbox rule broken, or a secret in what the node wrote (spec §12). Only approving the stop
+// puts the leaf back, and what it held is not saved: a secret must not land in a ref.
+func Quarantines(g gungnir.Gate) bool {
+	return g == gungnir.GatePolicyViolation || g == gungnir.GateRealSecrets
+}
+
 // restoreLeaves puts every leaf back to its checkpoint when the run's node restarts (interrupted
 // or failed), and otherwise refuses a leaf that changed while the run waited: Odin never discards
 // work it didn't make. A run stopped at policy-violation is quarantined: its leaves stay as they
 // are for investigation, and only approving the stop resets them (spec §12).
 func (r *Run) restoreLeaves(ctx context.Context) error {
 	s := r.State
-	if s.Status == StatusDone || s.PendingGate == gungnir.GatePolicyViolation {
+	if s.Status == StatusDone || Quarantines(s.PendingGate) {
 		return nil
 	}
 	restart := s.Status == StatusRunning || s.Status == StatusFailed

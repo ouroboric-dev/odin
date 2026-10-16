@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
+	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/leaf"
@@ -185,6 +186,11 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 		}
 		return &nodeFailure{runErr}
 	}
+	if n.ReadOnly {
+		if err := readOnly(ctx, r, n); err != nil {
+			return failCheckpoint(r, ev, err)
+		}
+	}
 	if ev.Commit, err = checkpoint(ctx, r, n, attempt); err != nil {
 		return failCheckpoint(r, ev, err)
 	}
@@ -352,6 +358,9 @@ func checkpoint(ctx context.Context, r *run.Run, n schema.Node, attempt int) (st
 	if err != nil {
 		return "", err
 	}
+	if err := scanForSecrets(ctx, r, n.Repo); err != nil {
+		return "", err
+	}
 	head, _, err := l.Checkpoint(ctx, fmt.Sprintf("ygg: run %s, node %s, attempt %d", r.State.ID, n.ID, attempt))
 	if err != nil {
 		return "", err
@@ -365,14 +374,63 @@ func checkpoint(ctx context.Context, r *run.Run, n schema.Node, attempt int) (st
 // repository, and stops the run at the hard approval point policy-violation. A failure of Odin
 // itself stays an error.
 func failCheckpoint(r *run.Run, ev gungnir.Event, err error) error {
-	if !leaf.IsPolicy(err) {
+	var hs *hardStop
+	var nf *nodeFailure
+	switch {
+	case errors.As(err, &hs), errors.As(err, &nf):
+	case leaf.IsPolicy(err):
+		hs = &hardStop{gate: gungnir.GatePolicyViolation, err: err}
+	default:
 		return err
 	}
 	ev.Name, ev.Result, ev.Commit = gungnir.EventNodeFailed, err.Error(), ""
 	if lerr := r.Log(ev); lerr != nil {
 		return lerr
 	}
-	return &hardStop{gate: gungnir.GatePolicyViolation, err: err}
+	if hs != nil {
+		return hs
+	}
+	return nf
+}
+
+// scanForSecrets looks for secrets in what a checkpoint would commit, in the leaf's sandbox (spec
+// §14). A run without a sandbox has nowhere to run the scanner, and only scripted agents. Secrets
+// are a hard stop at real-secrets-or-user-data, with nothing committed; a scan that couldn't run
+// fails the node, because no answer is never "clean".
+func scanForSecrets(ctx context.Context, r *run.Run, repo string) error {
+	runner, err := r.Runner(ctx, repo)
+	if err != nil {
+		return sandboxStart(err)
+	}
+	if runner == nil {
+		return nil
+	}
+	err = scan.Run(ctx, runner)
+	var found *scan.FoundError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &found):
+		return &hardStop{gate: gungnir.GateRealSecrets, err: err}
+	}
+	return &nodeFailure{err}
+}
+
+// readOnly refuses a read-only agent that changed the leaf: the tool flags and the adapter's
+// settings keep such a role to read and search tools, and this is the check that doesn't trust them.
+func readOnly(ctx context.Context, r *run.Run, n schema.Node) error {
+	l, err := r.Leaf(n.Repo)
+	if err != nil {
+		return err
+	}
+	st, err := l.Git(ctx, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if st != "" {
+		return &hardStop{gate: gungnir.GatePolicyViolation, err: &leaf.PolicyError{Reason: "the read-only role " + n.Role + " changed the leaf:\n" + st}}
+	}
+	return nil
 }
 
 // sandboxFailure is a sandbox that wouldn't start: an infrastructure failure, so the run stops

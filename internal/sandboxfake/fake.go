@@ -20,9 +20,16 @@ type Sandbox struct {
 	mu    sync.Mutex
 	Ups   []gungnir.SandboxSpec
 	Downs []gungnir.Env
-	Execs []gungnir.Cmd
+	Execs []gungnir.Cmd // every command but the secret scan
+	Scans int           // how many secret scans ran
 	// UpErr, if set, is what Up returns.
 	UpErr error
+	// Scan is how the secret scan ends. The zero value is a clean tree. Exit 7 with a gitleaks
+	// report in Report means secrets were found.
+	Scan struct {
+		Exit   int
+		Report string
+	}
 	// Intercept, if set, sees every command first. A true handled result is the command's result.
 	Intercept func(gungnir.Cmd) (res gungnir.ExecResult, handled bool)
 }
@@ -45,9 +52,18 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 		return gungnir.ExecResult{}, err
 	}
 	s.mu.Lock()
-	s.Execs = append(s.Execs, c)
-	hook := s.Intercept
+	hook, scan := s.Intercept, s.Scan
+	isScan := len(c.Argv) == 2 && c.Argv[0] == "bash" && c.Argv[1] == "-s" // the secret scan: gitleaks isn't on the host
+	if isScan {
+		s.Scans++
+	} else {
+		s.Execs = append(s.Execs, c)
+	}
 	s.mu.Unlock()
+	if isScan {
+		c.Stdout.Write([]byte(scan.Report))
+		return gungnir.ExecResult{ExitCode: scan.Exit}, nil
+	}
 	if hook != nil {
 		if res, ok := hook(c); ok {
 			return res, nil
