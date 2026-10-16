@@ -17,7 +17,9 @@ import (
 	"github.com/ouroboric-dev/gleipnir/skills"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/agents"
+	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
@@ -35,10 +37,14 @@ type Options struct {
 	Hooks   Hooks        // tests only
 }
 
-// Hooks replace parts of a run in tests: the skill libraries, and the sandbox driver.
+// Hooks replace parts of a run in tests: the skill libraries, the sandbox driver, the clock that
+// decides which day a session's spend belongs to, and the retry policy with its wait.
 type Hooks struct {
 	Libs       *skills.Libraries
 	NewSandbox NewSandbox
+	Now        func() time.Time
+	Backoff    *jormungandr.Backoff
+	Sleep      func(ctx context.Context, d time.Duration) error
 }
 
 // Setup is everything a run needs, loaded and checked.
@@ -59,6 +65,9 @@ type Setup struct {
 	Skills       skills.Record            // every skill the graph names, with the set's hash
 	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
 	newSandbox   NewSandbox
+	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
+	Backoff      jormungandr.Backoff
+	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
 
 	Root        string               // the tree's root: the project, or an umbrella above it
 	ProjectPath string               // the project's path from the root
@@ -114,6 +123,9 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
+	if err := s.prepareBudget(o.Hooks); err != nil {
+		return nil, err
+	}
 	s.newSandbox = o.Hooks.NewSandbox
 	if err := s.prepareSandbox(); err != nil {
 		return nil, err
@@ -132,6 +144,24 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		s.BriefText, s.BriefSHA256 = string(b), sum(b)
 	}
 	return s, nil
+}
+
+// prepareBudget says where the spend journal is, and the retry policy. The journal's folder is made
+// at the first session, not here: Prepare writes nothing.
+func (s *Setup) prepareBudget(h Hooks) error {
+	dir := s.Config.Budget.Journal
+	if dir == "" {
+		var err error
+		if dir, err = budget.DefaultDir(os.Getenv, os.UserHomeDir); err != nil {
+			return fmt.Errorf("%s: %w", s.ConfigPath, err)
+		}
+	}
+	s.Journal = &budget.Journal{Dir: dir, Now: h.Now}
+	s.Backoff, s.Sleep = jormungandr.DefaultBackoff, h.Sleep
+	if h.Backoff != nil {
+		s.Backoff = *h.Backoff
+	}
+	return nil
 }
 
 // findProject places the project in the instance tree: Odin runs on nothing outside it, because a
@@ -231,6 +261,20 @@ type Run struct {
 	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
 	Saved   []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
 	Sandbox gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
+}
+
+// Spend counts what a session used, whether or not it succeeded: in the day's journal first, so a
+// crash between the two leaves the spend counted twice at worst, and then in the run's usage. The
+// caller saves run.json. A usage of nothing is not recorded.
+func (r *Run) Spend(node string, u gungnir.Usage) error {
+	if u == (gungnir.Usage{}) {
+		return nil
+	}
+	if err := r.Setup.Journal.Append(budget.Entry{Run: r.State.ID, Project: r.Project, Node: node, Usage: u}); err != nil {
+		return fmt.Errorf("recording the spend in %s: %w", r.Setup.Journal.Dir, err)
+	}
+	r.State.Usage = r.State.Usage.Add(u)
+	return nil
 }
 
 // Branch is the branch a run works on in every leaf.

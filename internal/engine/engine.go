@@ -121,11 +121,6 @@ func startAttempt(r *run.Run, n schema.Node) (int, error) {
 
 func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
-	attempt, err := startAttempt(r, n)
-	if err != nil {
-		return err
-	}
-	role := r.Setup.Config.Roles[n.Role]
 	prompt, err := os.ReadFile(filepath.Join(r.Setup.RealmDir, n.Prompt))
 	if err != nil {
 		return err
@@ -145,53 +140,17 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if reason := s.Reasons[n.ID]; reason != "" {
 		text += "\n\n## Rejected at the approval point\n\n" + reason + "\n"
 	}
-	ev := gungnir.Event{Node: n.ID, Attempt: attempt, Role: n.Role, Adapter: role.Agent, Model: role.Model}
-	start := ev
-	start.Name = gungnir.EventNodeStarted
-	if err := r.Log(start); err != nil {
-		return err
-	}
-	runner, err := r.Runner(ctx, n.Repo)
+	res, ev, err := session(ctx, r, sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, readOnly: n.ReadOnly,
+		maxTurns: n.MaxTurns, timeout: time.Duration(n.Timeout)})
 	if err != nil {
-		return sandboxStart(err)
-	}
-	task := gungnir.Task{Role: n.Role, Node: n.ID, Attempt: attempt, Prompt: text, Workdir: r.RepoDir(n.Repo),
-		Model: role.Model, ReadOnly: n.ReadOnly, MaxTurns: n.MaxTurns, Timeout: time.Duration(n.Timeout),
-		TranscriptDir: filepath.Join(r.Dir, "transcripts"), Sandbox: runner}
-	actx, cancel := ctx, context.CancelFunc(func() {})
-	if task.Timeout > 0 {
-		actx, cancel = context.WithTimeout(ctx, task.Timeout)
-	}
-	began := time.Now()
-	res, runErr := r.Setup.Agents[n.Role].Run(actx, task)
-	cancel()
-	if runErr == nil {
-		if err := res.Validate(); err != nil {
-			runErr = fmt.Errorf("the agent's result is malformed: %w", err)
-		} else {
-			// Only a well-formed result's usage counts; a malformed one is never trusted.
-			s.Usage = s.Usage.Add(res.Usage)
-			ev = ev.WithUsage(res.Usage)
-			ev.Provider, ev.CLIVersion = res.Provider, res.CLIVersion
-			if res.Status != gungnir.StatusOK {
-				runErr = fmt.Errorf("the agent reported %s: %s", res.Status, res.Summary)
-			}
-		}
-	}
-	ev.DurationMS = time.Since(began).Milliseconds()
-	if runErr != nil {
-		ev.Name, ev.Result = gungnir.EventNodeFailed, runErr.Error()
-		if err := r.Log(ev); err != nil {
-			return err
-		}
-		return &nodeFailure{runErr}
+		return nodeError(err)
 	}
 	if n.ReadOnly {
 		if err := readOnly(ctx, r, n); err != nil {
 			return failCheckpoint(r, ev, err)
 		}
 	}
-	if ev.Commit, err = checkpoint(ctx, r, n, attempt); err != nil {
+	if ev.Commit, err = checkpoint(ctx, r, n, ev.Attempt); err != nil {
 		return failCheckpoint(r, ev, err)
 	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary

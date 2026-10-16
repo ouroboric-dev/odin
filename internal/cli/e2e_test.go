@@ -22,7 +22,19 @@ func TestMain(m *testing.M) {
 	if os.Getenv("YGG_E2E_MAIN") == "1" {
 		os.Exit(Main(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 	}
-	os.Exit(m.Run())
+	os.Exit(withStateFolder(m))
+}
+
+// withStateFolder points the operator's state folder, where the spend journal defaults to, at a
+// folder of the test's own, so no test writes under the real HOME. A ygg the tests start inherits it.
+func withStateFolder(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "ygg-state-")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+	os.Setenv("XDG_STATE_HOME", dir)
+	return m.Run()
 }
 
 // walk starts the toy run and approves every stop. It returns the gates it stopped at, in order.
