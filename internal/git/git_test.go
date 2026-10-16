@@ -85,6 +85,9 @@ func TestTheOperatorsGitSettingsNeverApply(t *testing.T) {
 	hook(t, filepath.Join(home, "hooks", "pre-commit"), marker)
 	write(t, filepath.Join(home, ".gitconfig"), "[core]\n\thooksPath = "+filepath.Join(home, "hooks")+
 		"\n[commit]\n\tgpgsign = true\n[user]\n\tname = Operator\n[status]\n\tshowUntrackedFiles = no\n")
+	// Git reads these two from $XDG_CONFIG_HOME/git even with no global config file.
+	write(t, filepath.Join(home, "git", "ignore"), "new.txt\n")
+	write(t, filepath.Join(home, "git", "attributes"), "new.txt operator-attr\n")
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
 	t.Setenv("GIT_DIR", "/nonexistent")
@@ -98,7 +101,10 @@ func TestTheOperatorsGitSettingsNeverApply(t *testing.T) {
 	}
 	write(t, filepath.Join(dir, "new.txt"), "new\n")
 	if st, _ := Run(ctx, dir, "status", "--porcelain"); !strings.Contains(st, "new.txt") {
-		t.Errorf("git status hides an untracked file (%q): the operator's status.showUntrackedFiles applied", st)
+		t.Errorf("git status hides an untracked file (%q): the operator's status.showUntrackedFiles or global excludes applied", st)
+	}
+	if attr, _ := Run(ctx, dir, "check-attr", "operator-attr", "--", "new.txt"); !strings.HasSuffix(attr, ": unspecified") {
+		t.Errorf("check-attr = %q: the operator's global attributes file applied", attr)
 	}
 }
 

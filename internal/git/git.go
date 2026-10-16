@@ -25,6 +25,8 @@ const (
 var safe = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "core.fsmonitor=false",
+	"-c", "core.excludesFile=/dev/null", // git reads $XDG_CONFIG_HOME/git/ignore even without a global config
+	"-c", "core.attributesFile=/dev/null", // and $XDG_CONFIG_HOME/git/attributes
 	"-c", "protocol.allow=never",
 	"-c", "protocol.https.allow=always",
 	"-c", "protocol.ssh.allow=always",
