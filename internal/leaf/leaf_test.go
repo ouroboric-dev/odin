@@ -205,3 +205,31 @@ func TestStartBranchRefusesALeafWithChanges(t *testing.T) {
 		t.Errorf("the hand edit is gone: %q", out)
 	}
 }
+
+func TestTidyRemovesWhatChecksWroteAndKeepsIgnoredFilesAndEvidence(t *testing.T) {
+	l := api(t)
+	write(t, l, ".gitignore", ".env\n")
+	if _, _, err := l.Checkpoint(ctx, "ignore"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, l, "junk.txt", "scratch\n")
+	write(t, l, ".gitignore", "changed by a check\n")
+	write(t, l, ".env", "KEEP=1\n")
+	if err := l.Tidy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := l.Git(ctx, "status", "--porcelain"); st != "" {
+		t.Errorf("after Tidy: %q", st)
+	}
+	if _, err := os.Stat(filepath.Join(l.Dir(), ".env")); err != nil {
+		t.Error("Tidy removed an ignored file, which may be a person's own")
+	}
+	write(t, l, "vendor/x/.git/HEAD", "ref: refs/heads/main\n")
+	write(t, l, "junk.txt", "again\n")
+	if err := l.Tidy(ctx); !IsPolicy(err) {
+		t.Errorf("Tidy with a planted repository = %v, want a *PolicyError", err)
+	}
+	if _, err := os.Stat(filepath.Join(l.Dir(), "vendor/x/.git/HEAD")); err != nil {
+		t.Error("Tidy erased the planted repository, which is the evidence")
+	}
+}

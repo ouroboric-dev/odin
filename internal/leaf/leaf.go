@@ -145,6 +145,20 @@ func (l *Leaf) Guard() error {
 	return l.checkNested()
 }
 
+// Tidy puts the leaf's working tree back to the commit it has checked out, after a node's checks ran
+// there: what a check wrote is removed, ignored files stay. A rewritten .git file or a planted
+// repository is a *PolicyError, and nothing is touched, so a clean can't erase the evidence.
+func (l *Leaf) Tidy(ctx context.Context) error {
+	if err := l.Guard(); err != nil {
+		return err
+	}
+	if _, err := l.repo.Run(ctx, "reset", "-q", "--hard", "HEAD"); err != nil {
+		return err
+	}
+	_, err := l.repo.Run(ctx, "clean", "-q", "-ffd")
+	return err
+}
+
 // Reset puts the leaf back to commit sha on branch: the branch is moved to sha and checked out,
 // changes and untracked files are removed, and the .git file is restored. Ignored files stay: they
 // are never committed, and may be a person's own (.env, node_modules). Save first what a person may

@@ -61,12 +61,12 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = c.Stdin, c.Stdout, c.Stderr
 	err := cmd.Run()
+	if ctx.Err() != nil { // like the real driver: a command stopped by its context is the context's error
+		return gungnir.ExecResult{}, ctx.Err()
+	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return gungnir.ExecResult{ExitCode: ee.ExitCode()}, nil
-	}
-	if ctx.Err() != nil {
-		return gungnir.ExecResult{}, ctx.Err()
 	}
 	return gungnir.ExecResult{}, err
 }
