@@ -303,7 +303,7 @@ func (c *command) status(args []string) int {
 			line = fmt.Sprintf("passed in attempt %d, %d finding(s) open", l.State.Attempt, len(l.State.Book.Open()))
 		}
 		if l.Escalation != nil {
-			line = fmt.Sprintf("gave up after %d attempt(s) (%s), %d finding(s) open", l.State.Limit, l.Escalation.Reason, len(l.State.Book.Open()))
+			line = fmt.Sprintf("gave up in attempt %d (%s), %d finding(s) open", min(l.State.Attempt, l.State.Limit), l.Escalation.Reason, len(l.State.Book.Open()))
 		}
 		fmt.Fprintf(c.out, "loop:     %s: %s\n", id, line)
 	}
