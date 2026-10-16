@@ -24,6 +24,9 @@ type sessionSpec struct {
 	before   string // a read-only session's snapshot of the leaf before it ran
 	maxTurns int
 	timeout  time.Duration
+	// started, when set, runs once, when the first try starts: after the meter let it, so a stop for
+	// a cap or a quota before the session logs nothing that says it started (review I5).
+	started func() error
 }
 
 // startSession counts a new session under key and saves it before the session runs, so a session
@@ -66,6 +69,12 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 		stop := func(err error) (gungnir.Result, error) {
 			fatal = err
 			return gungnir.Result{}, &gungnir.SessionError{Kind: gungnir.FailureInfra, Err: err}
+		}
+		if sp.started != nil {
+			if err := sp.started(); err != nil {
+				return stop(err)
+			}
+			sp.started = nil
 		}
 		attempt, err := startSession(r, sp.key)
 		if err != nil {

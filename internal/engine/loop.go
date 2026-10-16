@@ -110,12 +110,12 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 		return err
 	}
 	text += "\n\n" + jormungandr.Feedback(in.Open, in.LastFailure, r.State.Reasons[n.ID])
-	if err := r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: attempt,
-		Result: fmt.Sprintf("attempt %d of %d starts with %d finding(s) open", attempt, l.st.Limit, len(in.Open))}); err != nil {
-		return err
+	started := func() error {
+		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: attempt,
+			Result: fmt.Sprintf("attempt %d of %d starts with %d finding(s) open", attempt, l.st.Limit, len(in.Open))})
 	}
 	res, ev, err := session(ctx, r, sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text,
-		maxTurns: n.MaxTurns, timeout: time.Duration(n.Timeout)})
+		maxTurns: n.MaxTurns, timeout: time.Duration(n.Timeout), started: started})
 	if err != nil {
 		var af *jormungandr.AgentFailure
 		if errors.As(err, &af) {

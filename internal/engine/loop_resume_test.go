@@ -142,3 +142,26 @@ func TestACheckThatPlantsARepositoryInTheLeafStopsTheRunAtPolicyViolationAndTheL
 		t.Errorf("Advance() = %+v, %v; a quarantined run is never resumed on its own", out, err)
 	}
 }
+
+// Review I5: a stop for a cap before the implementer's session doesn't log the attempt as started.
+func TestACapBetweenTwoAttemptsLogsTheAttemptStartOnce(t *testing.T) {
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 } }\n" +
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 } }\n"
+	r := startWith(t, setup{mode: "unattended", pack: unitCheck, nodes: loopNode, script: script, budget: caps(110, 100, 200000, 200)})
+	if out, err := Advance(context.Background(), r); err != nil || r.State.PendingGate != gungnir.GateBudgetCap {
+		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at budget-cap in attempt 2", out, err, r.State.PendingGate)
+	}
+	if n := strings.Count(ledgerText(t, r), "attempt 2 of 3 starts"); n != 0 {
+		t.Errorf("the ledger says attempt 2 started %d time(s) before its session could start", n)
+	}
+	r = raiseCap(t, r, "tokens: 110", "tokens: 1000")
+	if err := Approve(context.Background(), r, "build", "raised it"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if n := strings.Count(ledgerText(t, r), "attempt 2 of 3 starts"); n != 1 {
+		t.Errorf("the ledger says attempt 2 started %d time(s); want once", n)
+	}
+}
