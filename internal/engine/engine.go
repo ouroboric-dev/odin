@@ -145,13 +145,19 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if reason := s.Reasons[n.ID]; reason != "" {
 		text += "\n\n## Rejected at the approval point\n\n" + reason + "\n"
 	}
+	var before string
+	if n.ReadOnly {
+		if before, err = snapshot(ctx, r, n.Repo); err != nil {
+			return err
+		}
+	}
 	res, ev, err := session(ctx, r, sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, readOnly: n.ReadOnly,
 		maxTurns: n.MaxTurns, timeout: time.Duration(n.Timeout)})
 	if err != nil {
 		return nodeError(err)
 	}
 	if n.ReadOnly {
-		if err := readOnly(ctx, r, n); err != nil {
+		if err := readOnly(ctx, r, n.Repo, n.Role, before); err != nil {
 			return failCheckpoint(r, ev, err)
 		}
 	}
@@ -354,21 +360,38 @@ func scanForSecrets(ctx context.Context, r *run.Run, l *leaf.Leaf, repo string) 
 	return &nodeFailure{err}
 }
 
-// readOnly refuses a read-only agent that changed the leaf: the tool flags and the adapter's
-// settings keep such a role to read and search tools, and this is the check that doesn't trust them.
-func readOnly(ctx context.Context, r *run.Run, n schema.Node) error {
-	l, err := r.Leaf(n.Repo)
+// snapshot lists what a leaf holds beyond its last commit, one line for each file: changed files,
+// untracked files and ignored files too (backlog B-018). A read-only role gets no write tool, but a
+// file it wrote that .gitignore names would not show in an ordinary status.
+func snapshot(ctx context.Context, r *run.Run, repo string) (string, error) {
+	l, err := r.Leaf(repo)
+	if err != nil {
+		return "", err
+	}
+	return l.Git(ctx, "status", "--porcelain", "--ignored", "-uall")
+}
+
+// readOnly refuses a read-only agent that changed the leaf: the tool flags and the adapter's settings
+// keep such a role to read and search tools, and this is the check that doesn't trust them. before is
+// what snapshot said before the session, since an ignored file an earlier check left is not the
+// reader's doing. A file that appeared, or went, is a hard stop at policy-violation.
+func readOnly(ctx context.Context, r *run.Run, repo, role, before string) error {
+	after, err := snapshot(ctx, r, repo)
 	if err != nil {
 		return err
 	}
-	st, err := l.Git(ctx, "status", "--porcelain")
-	if err != nil {
-		return err
+	if after == before {
+		return nil
 	}
-	if st != "" {
-		return &hardStop{gate: gungnir.GatePolicyViolation, err: &leaf.PolicyError{Reason: "the read-only role " + n.Role + " changed the leaf:\n" + st}}
+	var changed []string
+	for _, side := range []struct{ from, other, mark string }{{after, before, "+ "}, {before, after, "- "}} {
+		for _, line := range strings.Split(side.from, "\n") {
+			if line != "" && !strings.Contains("\n"+side.other+"\n", "\n"+line+"\n") {
+				changed = append(changed, side.mark+line)
+			}
+		}
 	}
-	return nil
+	return &hardStop{gate: gungnir.GatePolicyViolation, err: &leaf.PolicyError{Reason: "the read-only role " + role + " changed the leaf:\n" + strings.Join(changed, "\n")}}
 }
 
 // sandboxFailure is a sandbox that wouldn't start: an infrastructure failure, so the run stops

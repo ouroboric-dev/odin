@@ -160,9 +160,36 @@ func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormun
 	return out, nil
 }
 
-// Review is the next task's: a loop with reviewers does not run yet.
-func (l *loopSteps) Review(context.Context, int, string, []gungnir.Finding, []string) (string, error) {
-	return "", errors.New("reviewers are not run yet")
+// Review runs one read-only reviewer on the committed work and returns its whole answer, which
+// Jormungandr reads. The reviewer is told what it reported before and which checks passed. Whatever
+// it changed in the leaf, an ignored file too, is a hard stop at policy-violation.
+func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, open []gungnir.Finding, passed []string) (string, error) {
+	r, n := l.r, l.n
+	var rv schema.Reviewer
+	for _, c := range n.Reviewers {
+		if c.ID == reviewer {
+			rv = c
+		}
+	}
+	text, err := l.prompt(rv.Prompt, rv.Skills)
+	if err != nil {
+		return "", err
+	}
+	text += "\n\n" + jormungandr.ReviewRequest(rv.ID, open, passed)
+	before, err := snapshot(ctx, r, n.Repo)
+	if err != nil {
+		return "", err
+	}
+	res, ev, err := session(ctx, r, sessionSpec{key: n.SessionKey(rv), role: rv.Role, repo: n.Repo, text: text, readOnly: true,
+		maxTurns: rv.MaxTurns, timeout: time.Duration(rv.Timeout)})
+	if err != nil {
+		return "", err
+	}
+	if err := readOnly(ctx, r, n.Repo, rv.Role, before); err != nil {
+		return "", failCheckpoint(r, ev, err)
+	}
+	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
+	return res.Output, r.Log(ev)
 }
 
 // Record writes the changes to the findings to the ledger (spec §10.1): when each was raised, how
