@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/tree"
@@ -105,6 +107,58 @@ func TestCheckpointRefusesAChangedGitFile(t *testing.T) {
 	entries, _ := os.ReadDir(evil)
 	if len(entries) != 0 {
 		t.Error("git wrote to the planted git dir")
+	}
+}
+
+// A .git that is not a regular file is refused before Odin reads it: a link, even to a file that
+// names the right git dir, or a named pipe, which would block the read.
+func TestAGitFileThatIsNotARegularFileIsAPolicyViolation(t *testing.T) {
+	plant := map[string]func(t *testing.T, l *Leaf, p string){
+		"symlink": func(t *testing.T, l *Leaf, p string) {
+			right := filepath.Join(t.TempDir(), "gitfile")
+			if err := os.WriteFile(right, []byte("gitdir: "+l.repo.GitDir+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(right, p); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"named pipe": func(t *testing.T, l *Leaf, p string) {
+			if err := syscall.Mkfifo(p, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	checks := map[string]func(l *Leaf) error{
+		"Checkpoint": func(l *Leaf) error { _, _, err := l.Checkpoint(ctx, "after a .git swap"); return err },
+		"Guard":      func(l *Leaf) error { return l.Guard() },
+	}
+	for what, plant := range plant {
+		for name, check := range checks {
+			t.Run(what+"/"+name, func(t *testing.T) {
+				l := api(t)
+				before, _ := l.Head(ctx)
+				write(t, l, "new.txt", "work\n")
+				p := filepath.Join(l.Dir(), ".git")
+				if err := os.Remove(p); err != nil {
+					t.Fatal(err)
+				}
+				plant(t, l, p)
+				done := make(chan error, 1)
+				go func() { done <- check(l) }()
+				select {
+				case err := <-done:
+					if !IsPolicy(err) {
+						t.Errorf("%s() with a .git that is a %s = %v, want a *PolicyError", name, what, err)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatalf("%s() with a .git that is a %s did not return", name, what)
+				}
+				if after, _ := l.Rev(ctx, "ygg/run1"); after != before {
+					t.Errorf("%s() committed", name)
+				}
+			})
+		}
 	}
 }
 

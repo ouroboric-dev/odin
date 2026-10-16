@@ -7,10 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/git"
@@ -174,11 +176,35 @@ func (l *Leaf) Reset(ctx context.Context, branch, sha string) error {
 	return err
 }
 
-// checkGitFile refuses a leaf whose .git no longer points at the git dir Odin holds for it.
+// maxGitFile bounds what Odin reads of a leaf's .git file: git writes one short line.
+const maxGitFile = 4096
+
+// checkGitFile refuses a leaf whose .git no longer points at the git dir Odin holds for it. A .git
+// that is not a regular file (a link, a named pipe) is refused before it is opened, and the file is
+// opened without following a link or waiting on a pipe, then read only up to maxGitFile.
 func (l *Leaf) checkGitFile() error {
-	b, err := os.ReadFile(filepath.Join(l.Dir(), ".git"))
+	p := filepath.Join(l.Dir(), ".git")
+	st, err := os.Lstat(p)
 	if err != nil {
 		return &PolicyError{fmt.Sprintf("the leaf's .git is not the file git made: %v", err)}
+	}
+	if !st.Mode().IsRegular() {
+		return &PolicyError{fmt.Sprintf("the leaf's .git is %s, not the file git made", kind(st.Mode()))}
+	}
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return &PolicyError{fmt.Sprintf("the leaf's .git is not the file git made: %v", err)}
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return &PolicyError{"the leaf's .git is not the file git made"}
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxGitFile+1))
+	if err != nil {
+		return &PolicyError{fmt.Sprintf("the leaf's .git is not the file git made: %v", err)}
+	}
+	if len(b) > maxGitFile {
+		return &PolicyError{"the leaf's .git file was changed: it is larger than git makes it"}
 	}
 	target, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir: ")
 	if !ok {
