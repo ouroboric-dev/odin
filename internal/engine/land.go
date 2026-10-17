@@ -108,8 +108,13 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 		Check: func(ctx context.Context) error {
 			return tidied(ctx, l, runChecks(ctx, r, n, attempt, n.Checks, n.Repo, l.Dir()))
 		},
-		Acceptance: func(ctx context.Context) error { return runChecks(ctx, r, n, attempt, n.Acceptance, "", parent.Dir) },
-		Generated:  n.Generated, SkipShrink: s.Waived[n.ID],
+		Acceptance: func(ctx context.Context) error {
+			if r.Sandbox == nil || len(n.Acceptance) == 0 {
+				return runChecks(ctx, r, n, attempt, n.Acceptance, "", parent.Dir)
+			}
+			return runAcceptance(ctx, r, n, attempt, parentRepo, n.Repo, to)
+		},
+		Generated: n.Generated, SkipShrink: s.Waived[n.ID],
 		Message: fmt.Sprintf("Move %s to %.12s (run %s, node %s)", child, to, s.ID, n.ID)})
 	var hs *hardStop
 	if errors.As(moveErr, &hs) { // the sandbox broke a hardening rule
@@ -164,6 +169,26 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	}
 	s.Summaries[n.ID] = fmt.Sprintf("moved %s to %s", child, to)
 	return nil
+}
+
+// runAcceptance runs a pointer node's acceptance checks, in a run with a sandbox, in the sandbox that holds
+// a snapshot of the project (change realm-content): the lead realm's checks, on the lead realm's
+// acceptance stack, over the committed files of every leaf, the one being moved at the commit it moves to.
+// Nothing of a leaf's working copy or git dir is in it, and what the checks write stays in the snapshot.
+func runAcceptance(ctx context.Context, r *run.Run, n schema.Node, attempt int, parentRepo, leafRepo, to string) error {
+	if parentRepo != "." {
+		return &nodeFailure{fmt.Errorf("node %s runs acceptance checks in the umbrella %s; the snapshot sandbox holds the project, so they run where the leaf's parent is the project", n.ID, parentRepo)}
+	}
+	runner, err := r.SnapshotRunner(ctx, n.ID, map[string]string{leafRepo: to})
+	var se *run.SnapshotError
+	if errors.As(err, &se) {
+		return &nodeFailure{err}
+	} else if err != nil {
+		return sandboxStart(err)
+	}
+	return runChecksWith(ctx, r, n, attempt, n.Acceptance, r.Setup.Realm(""), func(argv []string, logPath string) (error, error) {
+		return commandOn(ctx, runner, n.ID, argv, time.Duration(n.Timeout), logPath)
+	})
 }
 
 // failLanding fails a merge or pointer node that the gate refused, or whose target another process
