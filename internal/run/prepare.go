@@ -46,7 +46,7 @@ func (s *Setup) prepareSandbox() error {
 	if uid == 0 {
 		return fmt.Errorf("ygg must not run as root: the sandbox's user is the operator's own")
 	}
-	cfg := sandbox.Config{Images: sandbox.ImagesFor(s.Pack.Sandbox.Stack), UID: uid, GID: gid}
+	cfg := sandbox.Config{Images: sandbox.ImagesFor(s.Lead.Stack), UID: uid, GID: gid}
 	for _, m := range s.Config.Sandbox.Mounts {
 		cfg.Mounts = append(cfg.Mounts, sandbox.PathMap{Host: m.Host, Engine: m.Engine})
 	}
@@ -107,7 +107,7 @@ func (s *Setup) SandboxFor(repo string) (stack string, egress []string, services
 		}
 	}
 	slices.SortFunc(services, func(a, b gungnir.Service) int { return strings.Compare(a.Name, b.Name) })
-	return r.Pack.Sandbox.Stack, sortedUnique(slices.Concat(r.Pack.Sandbox.Egress, s.Sandbox.Hosts)), services, nil
+	return r.Stack, sortedUnique(slices.Concat(r.Pack.Sandbox.Egress, s.Sandbox.Hosts)), services, nil
 }
 
 func sameService(a, b gungnir.Service) bool {
