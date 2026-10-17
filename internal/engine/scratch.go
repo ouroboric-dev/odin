@@ -186,7 +186,11 @@ func copyTree(project, src, dst string, b *copyBudget) error {
 		if b.files--; b.files < 0 {
 			return fmt.Errorf("more than %d files", maxScratchFiles)
 		}
-		data, err := readRegular(project, name, b.bytes)
+		listed, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := readRegular(project, name, listed, b.bytes)
 		var big *tooBigError
 		switch {
 		case errors.As(err, &big):

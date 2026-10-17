@@ -17,14 +17,15 @@ type tooBigError struct {
 
 func (e *tooBigError) Error() string { return fmt.Sprintf("%s is more than %d bytes", e.path, e.limit) }
 
-// readRegular reads name, a path inside dir, and refuses anything but a regular file of at most limit
-// bytes. A file is checked when its folder is listed and read later, so the check is made again on the
-// file opened, not only on its path (review M-2): nothing on the way to it may lead out of dir (os.Root);
-// name itself must be a regular file, not a symlink, and the file opened must be that same file, so a
-// link or anything else put at name in between is refused, not followed; and the bytes are read through
-// the limit, so a file over it is refused, never read whole first or cut short. Nothing opened waits, so
-// a pipe swapped in is refused too.
-func readRegular(dir, name string, limit int64) ([]byte, error) {
+// readRegular reads name, a path inside dir, as the file the listing found (listed, the FileInfo the walk
+// or an Lstat took of it), and refuses anything but a regular file of at most limit bytes. A file is
+// checked when its folder is listed and read later, so the check is made again on the file opened, not
+// only on its path (review M-2): nothing on the way to it may lead out of dir (os.Root); name itself must
+// be a regular file, not a symlink; and the file opened must be both the file looked at again and the
+// listed one (os.SameFile), so a link or another file put at name in between is refused, not followed;
+// and the bytes are read through the limit, so a file over it is refused, never read whole first or cut
+// short. Nothing opened waits, so a pipe swapped in is refused too.
+func readRegular(dir, name string, listed fs.FileInfo, limit int64) ([]byte, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, err
@@ -49,7 +50,7 @@ func readRegular(dir, name string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !opened.Mode().IsRegular() || !os.SameFile(st, opened) {
+	if !opened.Mode().IsRegular() || !os.SameFile(st, opened) || !os.SameFile(listed, opened) {
 		return nil, fmt.Errorf("%s changed while it was read: it is not the regular file that was there", full)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))

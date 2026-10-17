@@ -47,11 +47,11 @@ func runPublish(ctx context.Context, r *run.Run, n schema.Node) error {
 		return err
 	}
 	out := filepath.Join(r.ScratchDir(n.From), "out")
-	files, err := listDocuments(out)
+	files, listed, err := listDocuments(out)
 	if err != nil {
 		return &nodeFailure{fmt.Errorf("%s publishes what %s wrote, and %w", n.ID, n.From, err)}
 	}
-	docs, err := readDocuments(out, files)
+	docs, err := readDocuments(out, files, listed)
 	if err != nil {
 		return &nodeFailure{fmt.Errorf("%s publishes what %s wrote, and %w", n.ID, n.From, err)}
 	}
@@ -104,11 +104,12 @@ func runPublish(ctx context.Context, r *run.Run, n schema.Node) error {
 // listDocuments lists the files under out as slash paths, sorted, and refuses what a document is not: a
 // symlink, a special file, a hidden name, an odd character, an ending that is not a document's, a file
 // over the size limit, or more files or bytes than the limits.
-func listDocuments(out string) ([]string, error) {
+func listDocuments(out string) ([]string, []fs.FileInfo, error) {
 	if st, err := os.Lstat(out); err != nil || !st.IsDir() {
-		return nil, fmt.Errorf("its output folder %s is not there (the node has not run)", out)
+		return nil, nil, fmt.Errorf("its output folder %s is not there (the node has not run)", out)
 	}
 	var files []string
+	infos := map[string]fs.FileInfo{}
 	var total int64
 	err := filepath.WalkDir(out, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -146,19 +147,24 @@ func listDocuments(out string) ([]string, error) {
 			return fmt.Errorf("it wrote more than %d bytes", maxPublishBytes)
 		}
 		files = append(files, filepath.ToSlash(rel))
+		infos[filepath.ToSlash(rel)] = info
 		return nil
 	})
 	slices.Sort(files)
-	return files, err
+	listed := make([]fs.FileInfo, len(files))
+	for i, f := range files {
+		listed[i] = infos[f]
+	}
+	return files, listed, err
 }
 
 // readDocuments reads each listed document once, as the regular file the listing found, within the limits:
 // these bytes are the ones scanned and published, whatever happens in out/ after.
-func readDocuments(out string, files []string) ([][]byte, error) {
+func readDocuments(out string, files []string, listed []fs.FileInfo) ([][]byte, error) {
 	docs := make([][]byte, len(files))
 	var total int64
 	for i, rel := range files {
-		b, err := readRegular(out, filepath.FromSlash(rel), maxPublishFile)
+		b, err := readRegular(out, filepath.FromSlash(rel), listed[i], maxPublishFile)
 		if err != nil {
 			return nil, err
 		}

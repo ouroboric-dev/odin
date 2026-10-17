@@ -86,7 +86,11 @@ func readLeavesFile(r *run.Run, rel string) ([]byte, error) {
 	if err := noSymlinks(r.Project, file); err != nil {
 		return nil, err
 	}
-	return readRegular(r.Project, filepath.FromSlash(rel), maxLeavesFile)
+	listed, err := os.Lstat(file)
+	if err != nil {
+		return nil, err
+	}
+	return readRegular(r.Project, filepath.FromSlash(rel), listed, maxLeavesFile)
 }
 
 // checkLeaves checks, before anything is created, that each leaf can be: its realm offers a leaf recipe,

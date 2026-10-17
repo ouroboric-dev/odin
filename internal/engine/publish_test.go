@@ -81,7 +81,7 @@ func TestPublishRefusesWhatIsNotADocument(t *testing.T) {
 		}
 	}
 	put("docs/ok.md", "fine\n")
-	if files, err := listDocuments(out); err != nil || strings.Join(files, ",") != "docs/ok.md" {
+	if files, _, err := listDocuments(out); err != nil || strings.Join(files, ",") != "docs/ok.md" {
 		t.Fatalf("listDocuments() = %v, %v", files, err)
 	}
 	cases := map[string]func(){
@@ -100,7 +100,7 @@ func TestPublishRefusesWhatIsNotADocument(t *testing.T) {
 		os.MkdirAll(out, 0o755)
 		put("docs/ok.md", "fine\n")
 		add()
-		if _, err := listDocuments(out); err == nil {
+		if _, _, err := listDocuments(out); err == nil {
 			t.Errorf("%s: listDocuments() = nil error", name)
 		}
 	}
@@ -109,7 +109,7 @@ func TestPublishRefusesWhatIsNotADocument(t *testing.T) {
 	for i := 0; i <= maxPublishFiles; i++ {
 		put("d/f"+strings.Repeat("a", 1+i%20)+string(rune('a'+i%26))+string(rune('a'+(i/26)%26))+string(rune('a'+(i/676)%26))+".md", "x\n")
 	}
-	if _, err := listDocuments(out); err == nil || !strings.Contains(err.Error(), "more than") {
+	if _, _, err := listDocuments(out); err == nil || !strings.Contains(err.Error(), "more than") {
 		t.Errorf("too many files: %v", err)
 	}
 }
