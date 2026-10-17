@@ -16,6 +16,7 @@ import (
 	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -75,6 +76,10 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			err = runPointer(ctx, r, n)
 		case schema.KindTasks:
 			err = runTasks(ctx, r, n)
+		}
+		var sb *sentBack
+		if errors.As(err, &sb) {
+			continue // the refusal went back: Position points at the node it went back to
 		}
 		var nf *nodeFailure
 		if errors.As(err, &nf) {
@@ -151,6 +156,9 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if reason := s.Reasons[n.ID]; reason != "" {
 		text += "\n\n## Rejected at the approval point\n\n" + reason + "\n"
 	}
+	if refusal := s.Refusals[n.ID]; refusal != "" {
+		text += "\n\n" + jormungandr.Refusal(refusal)
+	}
 	var before string
 	if n.ReadOnly {
 		if before, err = snapshot(ctx, r, n.Repo); err != nil {
@@ -171,6 +179,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 		return err
 	}
 	delete(s.Reasons, n.ID)
+	delete(s.Refusals, n.ID)
 	s.Summaries[n.ID] = res.Summary
 	return nil
 }

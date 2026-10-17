@@ -41,6 +41,9 @@ func runTasks(ctx context.Context, r *run.Run, n schema.Node) error {
 		if err := r.Log(ev); err != nil {
 			return err
 		}
+		if sent, err := sendBack(r, n, refusal); sent || err != nil {
+			return err
+		}
 		return &nodeFailure{errors.New(refusal)}
 	}
 	s := r.State

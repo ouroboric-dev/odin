@@ -41,6 +41,7 @@ func runLoop(ctx context.Context, r *run.Run, n schema.Node) error {
 	switch out.Kind {
 	case jormungandr.Passed:
 		delete(s.Reasons, n.ID)
+		delete(s.Refusals, n.ID)
 		s.Summaries[n.ID] = fmt.Sprintf("passed in attempt %d of %d with %d minor finding(s) open", out.Attempts, rec.State.Limit, len(rec.State.Book.Open()))
 		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: out.Attempts, Result: "passed"})
 	case jormungandr.Capped:
@@ -111,7 +112,7 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 	if err != nil {
 		return err
 	}
-	text += "\n\n" + jormungandr.Feedback(in.Open, in.LastFailure, r.State.Reasons[n.ID])
+	text += "\n\n" + jormungandr.Feedback(in.Open, in.LastFailure, r.State.Reasons[n.ID]) + jormungandr.Refusal(r.State.Refusals[n.ID])
 	started := func() error {
 		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: attempt,
 			Result: fmt.Sprintf("attempt %d of %d starts with %d finding(s) open", attempt, l.st.Limit, len(in.Open))})

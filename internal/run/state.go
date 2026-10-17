@@ -91,6 +91,8 @@ type State struct {
 	Features     []schema.FeatureRecord `json:"features,omitempty"`      // the plan's tasks in the order they are built, once the tasks node has run
 	PlanSource   string                 `json:"plan_source,omitempty"`   // the tasks.md they came from, relative to the project
 	PlanSHA256   string                 `json:"plan_sha256,omitempty"`   // that file as Odin read it
+	Returns      map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
+	Refusals     map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
 	Ledger       ledger.Anchor          `json:"ledger"`
 	Error        string                 `json:"error,omitempty"`
 	Exec         *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
@@ -213,6 +215,12 @@ func LoadState(dir string) (*State, error) {
 	}
 	if s.Loops == nil {
 		s.Loops = map[string]*LoopRecord{}
+	}
+	if s.Returns == nil {
+		s.Returns = map[string]int{}
+	}
+	if s.Refusals == nil {
+		s.Refusals = map[string]string{}
 	}
 	if s.Leaves == nil {
 		s.Leaves = map[string]LeafRecord{}

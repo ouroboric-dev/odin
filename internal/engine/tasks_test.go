@@ -57,7 +57,51 @@ func TestAReadyPlanBecomesFeaturesInTheOrderTheyAreBuilt(t *testing.T) {
 	}
 }
 
-func TestAPlanThatIsNotReadyFailsTheNodeWithEveryProblem(t *testing.T) {
+func TestAPlanThatIsNotReadyGoesBackToThePlannerWithEveryProblem(t *testing.T) {
+	bad := readyPlan + taskMD("p-T1", "repos/app", "L", "nothing") + taskMD("p-T2", "repos/db", "S", "p-T9")
+	good := readyPlan + taskMD("p-T1", "repos/app", "S", "nothing") + taskMD("p-T2", "repos/app", "S", "p-T1")
+	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: repos/app/tasks.md, back_to: plan }\n", planScript(bad, good))
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if r.State.Attempts["plan"] != 2 || r.State.Returns["ready"] != 1 {
+		t.Errorf("the planner ran %d times, the refusal went back %d times; want 2 and 1", r.State.Attempts["plan"], r.State.Returns["ready"])
+	}
+	prompt := promptOf(t, r, "plan-2")
+	for _, want := range []string{"## Refused after your work passed", "size L: split it", `layer "repos/db" is not a leaf of this project (repos/app)`, `depends on "p-T9"`} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the planner's second prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	if first := promptOf(t, r, "plan-1"); strings.Contains(first, "Refused after") {
+		t.Error("the first attempt was told of a refusal that had not happened")
+	}
+	if len(r.State.Features) != 2 || len(r.State.Refusals) != 0 {
+		t.Errorf("features %d, refusals %v; the refusal is spent once the planner's work is accepted", len(r.State.Features), r.State.Refusals)
+	}
+	text := ledgerText(t, r)
+	if !strings.Contains(text, `"event":"node_returned"`) || !strings.Contains(text, "back to plan, 1 of 2") {
+		t.Errorf("the ledger lacks node_returned:\n%s", text)
+	}
+}
+
+func TestARefusalGoesBackOnlyAsOftenAsTheNodeAllows(t *testing.T) {
+	bad := readyPlan + taskMD("p-T1", "repos/app", "L", "nothing")
+	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: repos/app/tasks.md, back_to: plan, returns: 1 }\n", planScript(bad, bad, bad))
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "size L: split it") {
+		t.Fatalf("Advance() = %+v, %v; want the run failed with the readiness error", out, err)
+	}
+	if r.State.Attempts["plan"] != 2 || r.State.Returns["ready"] != 1 {
+		t.Errorf("planner %d times, returned %d times; want 2 and 1", r.State.Attempts["plan"], r.State.Returns["ready"])
+	}
+	if _, err := os.Stat(filepath.Join(r.Project, ".factory", "features.json")); err == nil {
+		t.Error("features.json was written for a plan that is not ready")
+	}
+}
+
+func TestAPlanWithNoBackToFailsTheNode(t *testing.T) {
 	bad := readyPlan + taskMD("p-T1", "repos/app", "", "nothing")
 	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: repos/app/tasks.md }\n", planScript(bad))
 	out, err := Advance(context.Background(), r)
