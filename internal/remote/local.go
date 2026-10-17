@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
@@ -48,6 +49,11 @@ func (l *Local) Create(ctx context.Context, r gungnir.Repo) error {
 	}
 	if _, listed := p.Umbrella.Children[r.Path]; listed {
 		return fmt.Errorf("the umbrella %q already lists %s, so nothing was created", p.Path, r.Path)
+	}
+	for q := range p.Umbrella.Children {
+		if strings.HasPrefix(r.Path, q+"/") || strings.HasPrefix(q, r.Path+"/") {
+			return fmt.Errorf("%s would be inside %s or hold it, and a child is never inside another, so nothing was created", r.Path, q)
+		}
 	}
 	for _, c := range r.Consumes {
 		if p.Umbrella.Children[c].Kind != schema.ChildLeaf {

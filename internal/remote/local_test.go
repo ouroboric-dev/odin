@@ -153,3 +153,28 @@ func TestLocalCreateRecordsTheRealmPinAndWhatTheLeafConsumesInTheSameCommit(t *t
 		t.Errorf("a refused leaf left the umbrella dirty: %q", st)
 	}
 }
+
+func TestLocalCreateRefusesALeafInsideAnotherChildOrHoldingOne(t *testing.T) {
+	_, parent := gallery(t)
+	l := NewLocal(parent)
+	before, _ := git.Run(ctx, parent.Dir, "rev-parse", "HEAD")
+	for name, path := range map[string]string{"inside a leaf": "repos/api/sub", "holding a leaf": "repos"} {
+		r := blog()
+		r.Path, r.Name = path, "x"
+		if err := l.Create(ctx, r); err == nil {
+			t.Errorf("%s (%s): Create() = nil", name, path)
+		}
+	}
+	// A folder the project doesn't have yet, whose name is a leaf's folder plus more, is what the check is for.
+	deeper := blog()
+	deeper.Path, deeper.Name = "repos/api/sub", "x"
+	if err := l.Create(ctx, deeper); err == nil || !strings.Contains(err.Error(), "never inside another") {
+		t.Errorf("a leaf inside a leaf: Create() = %v", err)
+	}
+	if after, _ := git.Run(ctx, parent.Dir, "rev-parse", "HEAD"); after != before {
+		t.Error("the umbrella got a commit for a leaf that was refused")
+	}
+	if st, _ := git.Run(ctx, parent.Dir, "status", "--porcelain"); st != "" {
+		t.Errorf("a refused leaf left the umbrella dirty: %q", st)
+	}
+}
