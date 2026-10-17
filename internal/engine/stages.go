@@ -143,3 +143,62 @@ func writeFeatures(r *run.Run) error {
 	f := &schema.Features{Run: s.ID, Source: s.PlanSource, SourceSHA256: s.PlanSHA256, Tasks: slices.Clone(s.Features)}
 	return f.Save(filepath.Join(r.Project, filepath.FromSlash(FeaturesFile)))
 }
+
+// expanded is a foreach node that became the nodes of its tasks: Position now points at the first of them.
+type expanded struct{}
+
+func (*expanded) Error() string { return "expanded" }
+
+// expandForeach turns foreach node n into its task shape once for each task the plan holds, in the leaf and
+// the realm each task names (spec §4.2, change realm-leaf-naming). A plan the tasks node has not read, or a
+// task whose leaf the project lacks, fails the node.
+func expandForeach(ctx context.Context, r *run.Run, n schema.Node) error {
+	if len(r.State.Features) == 0 {
+		return &nodeFailure{fmt.Errorf("%s repeats its nodes for every task, and the run has no plan yet: a tasks node must come before it", n.ID)}
+	}
+	if err := r.Expand(ctx, n.ID); err != nil {
+		return &nodeFailure{err}
+	}
+	return &expanded{}
+}
+
+// settleTasks keeps the record of each task in step with Position: a task is doing once the first node of
+// its shape is next, and done once the walk has left its last node. It writes features.json when a task
+// changes, and a line in the ledger.
+func settleTasks(r *run.Run, nodes []schema.Node) error {
+	s := r.State
+	if s.Position > 0 && s.Position <= len(nodes) {
+		if prev := nodes[s.Position-1]; prev.Task != "" && (s.Position == len(nodes) || nodes[s.Position].Task != prev.Task) {
+			if err := setTask(r, prev.Task, schema.TaskDone, gungnir.EventTaskDone); err != nil {
+				return err
+			}
+		}
+	}
+	if s.Position < len(nodes) && nodes[s.Position].Task != "" {
+		return setTask(r, nodes[s.Position].Task, schema.TaskDoing, gungnir.EventTaskStarted)
+	}
+	return nil
+}
+
+// setTask moves the task with the node id slug to status, if that moves it forward: todo to doing, and
+// todo or doing to done. A task that is already done, or blocked, stays as it is.
+func setTask(r *run.Run, slug string, to schema.TaskStatus, event gungnir.EventName) error {
+	s := r.State
+	i := slices.IndexFunc(s.Features, func(f schema.FeatureRecord) bool { return f.Slug() == slug })
+	if i < 0 {
+		return nil
+	}
+	from := s.Features[i].Status
+	forward := (to == schema.TaskDoing && from == schema.TaskTodo) || (to == schema.TaskDone && (from == schema.TaskTodo || from == schema.TaskDoing))
+	if !forward {
+		return nil
+	}
+	s.Features[i].Status = to
+	if err := writeFeatures(r); err != nil {
+		return err
+	}
+	if err := r.Log(gungnir.Event{Name: event, Task: slug, Note: s.Features[i].ID}); err != nil {
+		return err
+	}
+	return r.Save()
+}

@@ -56,8 +56,14 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 	if err := r.Save(); err != nil {
 		return Outcome{}, err
 	}
-	nodes := r.Nodes()
-	for s.Position < len(nodes) {
+	for {
+		nodes := r.Nodes()
+		if err := settleTasks(r, nodes); err != nil {
+			return Outcome{}, err
+		}
+		if s.Position >= len(nodes) {
+			break
+		}
 		n := nodes[s.Position]
 		var stop bool
 		var err error
@@ -76,10 +82,13 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			err = runPointer(ctx, r, n)
 		case schema.KindTasks:
 			err = runTasks(ctx, r, n)
+		case schema.KindForeach:
+			err = expandForeach(ctx, r, n)
 		}
 		var sb *sentBack
-		if errors.As(err, &sb) {
-			continue // the refusal went back: Position points at the node it went back to
+		var ex *expanded
+		if errors.As(err, &sb) || errors.As(err, &ex) {
+			continue // Position already points at the node to run next
 		}
 		var nf *nodeFailure
 		if errors.As(err, &nf) {

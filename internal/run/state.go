@@ -91,6 +91,7 @@ type State struct {
 	Features     []schema.FeatureRecord `json:"features,omitempty"`      // the plan's tasks in the order they are built, once the tasks node has run
 	PlanSource   string                 `json:"plan_source,omitempty"`   // the tasks.md they came from, relative to the project
 	PlanSHA256   string                 `json:"plan_sha256,omitempty"`   // that file as Odin read it
+	Expanded     map[string]bool        `json:"expanded,omitempty"`      // foreach node ids already expanded into the nodes of each task
 	Returns      map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
 	Refusals     map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
 	Ledger       ledger.Anchor          `json:"ledger"`
@@ -216,6 +217,9 @@ func LoadState(dir string) (*State, error) {
 	if s.Loops == nil {
 		s.Loops = map[string]*LoopRecord{}
 	}
+	if s.Expanded == nil {
+		s.Expanded = map[string]bool{}
+	}
 	if s.Returns == nil {
 		s.Returns = map[string]int{}
 	}
@@ -331,7 +335,10 @@ func (s *State) checkRealms(setup *Setup) error {
 // check refuses a run.json whose position, pending node or leaves don't fit setup's graph and
 // tree. Odin wrote it, but a hand-edited file must not crash the engine.
 func (s *State) check(setup *Setup) error {
-	nodes := setup.Graph.Nodes
+	nodes, err := setup.NodesFor(s)
+	if err != nil {
+		return fmt.Errorf("the tasks the run expanded no longer fit the project: %w", err)
+	}
 	if s.Position < 0 || s.Position > len(nodes) {
 		return fmt.Errorf("position %d is outside the graph's %d nodes", s.Position, len(nodes))
 	}

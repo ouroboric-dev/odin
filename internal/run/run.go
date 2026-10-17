@@ -24,6 +24,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
+	"github.com/ouroboric-dev/odin/internal/plan"
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/tree"
@@ -224,6 +225,8 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 	switch {
 	case n.Kind == schema.KindGate, n.Kind == schema.KindPublish, n.Kind == schema.KindTasks, n.Kind == schema.KindInit:
 		return nil // they work in the project, not in a leaf
+	case n.Kind == schema.KindForeach:
+		return s.checkBody(graphPath, n)
 	}
 	if n.Repo == "" {
 		return fmt.Errorf("%s: node %s names no repo; every node that does work runs in a repo of the project", graphPath, n.ID)
@@ -256,6 +259,42 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 	for _, rv := range n.Reviewers {
 		if err := s.checkSession(graphPath, n.SessionKey(rv), rv.Role, rv.Prompt); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// checkBody checks the roles and prompts of a foreach node's body, which run in leaves the project
+// decides later: a role must be in factory.yaml, a reviewer's prompt must be in the lead realm, and the
+// prompt and checks of a leaf's loop come from the realm of the leaf, where Expand finds them.
+func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
+	for _, n := range fe.Body {
+		switch n.Kind {
+		case schema.KindAgent:
+			if err := s.checkSession(graphPath, n.ID, n.Role, n.Prompt); err != nil {
+				return err
+			}
+		case schema.KindLoop:
+			if _, ok := s.Config.Roles[n.Role]; !ok {
+				return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
+			}
+			if s.Agents[n.Role] == nil {
+				a, err := agents.New(s.Config.Roles[n.Role], filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy})
+				if err != nil {
+					return fmt.Errorf("role %s: %w", n.Role, err)
+				}
+				s.Agents[n.Role] = a
+			}
+			for _, rv := range n.Reviewers {
+				if err := s.checkSession(graphPath, fe.ID+"-"+n.ID+"-"+rv.ID, rv.Role, rv.Prompt); err != nil {
+					return err
+				}
+			}
+		}
+		for _, c := range n.Acceptance {
+			if _, ok := s.Pack.Checks[c]; !ok {
+				return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
+			}
 		}
 	}
 	return nil
@@ -409,10 +448,73 @@ type Run struct {
 	Saved    []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
 	SetAside []string        // the notes of Saved from the set-aside of a session whose spend the journal couldn't take, for its gate (review I4)
 	Sandbox  gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
+	nodes    []schema.Node   // the nodes of the run, with foreach nodes expanded; see Nodes
 }
 
-// Nodes returns the nodes the run walks, in order. Position indexes this list.
-func (r *Run) Nodes() []schema.Node { return r.Setup.Graph.Nodes }
+// Nodes returns the nodes the run walks, in order: the graph's, with each foreach node that has been
+// expanded replaced by the nodes of its tasks. Position indexes this list.
+func (r *Run) Nodes() []schema.Node {
+	if r.nodes == nil {
+		r.nodes = r.Setup.Graph.Nodes
+	}
+	return r.nodes
+}
+
+// Expand replaces foreach node id by its task shape for each task of the plan, in the leaf and the realm
+// each task names, and every leaf the tasks work in becomes part of the run. Position is not changed: it
+// then points at the first node of the first task's shape. The expansion is recorded in run.json, so a
+// resume makes the same nodes.
+func (r *Run) Expand(ctx context.Context, id string) error {
+	s := r.State
+	for _, f := range s.Features {
+		if err := r.AddLeaf(ctx, f.Layer); err != nil {
+			return fmt.Errorf("task %s works in %s: %w", f.ID, f.Layer, err)
+		}
+	}
+	s.Expanded[id] = true
+	nodes, err := r.Setup.NodesFor(s)
+	if err != nil {
+		delete(s.Expanded, id)
+		return err
+	}
+	r.nodes = nodes
+	return r.Save()
+}
+
+// NodesFor returns the nodes of the run in the state st: the graph's, with each foreach node that st has
+// expanded replaced by its task shape once for each task, in the order the tasks are built.
+func (s *Setup) NodesFor(st *State) ([]schema.Node, error) {
+	var out []schema.Node
+	for _, n := range s.Graph.Nodes {
+		if n.Kind != schema.KindForeach || !st.Expanded[n.ID] {
+			out = append(out, n)
+			continue
+		}
+		fs := make([]schema.Feature, len(st.Features))
+		for i, f := range st.Features {
+			fs[i] = f.Feature
+		}
+		ex, err := plan.Expand(n, fs, s.Graph, s.recipeOf)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ex...)
+	}
+	return out, nil
+}
+
+// recipeOf says what the realm of the leaf at layer offers its tasks.
+func (s *Setup) recipeOf(layer string) (plan.Recipe, error) {
+	if u := s.Project.Umbrella; u == nil || u.Children[layer].Kind != schema.ChildLeaf {
+		return plan.Recipe{}, fmt.Errorf("the project has no leaf %s", layer)
+	}
+	r := s.RealmOf(layer)
+	rec := plan.Recipe{Realm: r.Name}
+	if r.Pack.Leaf != nil {
+		rec.Implementer, rec.Checks = r.Pack.Leaf.Implementer, r.Pack.Leaf.Checks
+	}
+	return rec, nil
+}
 
 // Meter returns the budget of this run: its caps against its own usage and the day's journal.
 func (r *Run) Meter() *budget.Meter {
@@ -674,7 +776,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
-		Waived: map[string]bool{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Returns: map[string]int{}, Refusals: map[string]string{}, Created: now, Updated: now,
+		Waived: map[string]bool{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Created: now, Updated: now,
 	}}
 	started := gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256,
 		Realm: setup.Lead.Name, RealmVersion: setup.Lead.Version, Note: realmNote(setup.Realms)}
@@ -845,6 +947,10 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 		s.Exec = nil
 	}
 	r := &Run{Project: setup.Project.Dir, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
+	if r.nodes, err = setup.NodesFor(s); err != nil { // State.check made it once, so this holds
+		l.Close()
+		return nil, err
+	}
 	// The spends the journal missed are written before the run goes on, so the day's cap counts them,
 	// and before anything else changes, so a refusal while the journal is still broken leaves the
 	// sandboxes and the leaves as they are. run.json is written as it was loaded, less what was
