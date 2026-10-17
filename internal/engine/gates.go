@@ -124,6 +124,9 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 		s.Summaries[n.ID] = fmt.Sprintf("accepted by the operator after %d attempt(s), with %d finding(s) open", rec.State.Attempt-1, len(rec.State.Book.Open()))
 		delete(s.Reasons, n.ID)
 		s.Position++
+	case run.Quarantines(s.PendingGate) && n.Repo == "":
+		// A node that works in the project, such as a publish: nothing in a leaf to put back. The person
+		// edited the workspace the stop names, and the node runs again.
 	case run.Quarantines(s.PendingGate):
 		rec := s.Leaves[n.Repo]
 		l, err := r.Leaf(n.Repo)
@@ -237,6 +240,8 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 		time.Now().UTC().Format(time.RFC3339), h.err)
 	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
 	switch {
+	case run.Quarantines(h.gate) && n.Repo == "":
+		fmt.Fprintf(&b, "Nothing was published. The documents are in %s; remove what the scan found, and then approve: %s runs again.\n", filepath.Join(r.ScratchDir(n.From), "out"), n.ID)
 	case run.Quarantines(h.gate):
 		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again; what the node wrote is not saved.\n", n.Repo, n.ID)
 	case h.gate == gungnir.GateBudgetCap && journalCap(h.err) && len(s.PendingSpend) > 0:

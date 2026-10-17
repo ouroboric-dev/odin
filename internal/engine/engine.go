@@ -93,6 +93,8 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			err = runTasks(ctx, r, n)
 		case schema.KindForeach:
 			err = expandForeach(ctx, r, n)
+		case schema.KindPublish:
+			err = runPublish(ctx, r, n)
 		}
 		var sb *sentBack
 		var ex *expanded
