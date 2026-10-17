@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
@@ -135,5 +137,79 @@ func TestRunJSONRecordsEveryRealmAndAResumeRefusesOneThatChanged(t *testing.T) {
 	}
 	if _, err := Open(ctx, project, id, ""); err == nil || !strings.Contains(err.Error(), "the realm helheim-go changed since the run started") {
 		t.Errorf("Open() after a prompt of a leaf's realm changed = %v", err)
+	}
+}
+
+func gitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := git.Run(ctx, dir, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestTheFirstRunPinsTheLeadRealmItWasGivenByName(t *testing.T) {
+	_, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0"})
+	project := treetest.Project(t, "repos/app")
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"})
+	if err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	r.Close()
+	u, err := schema.LoadUmbrella(project)
+	if err != nil || u.Realm != "midgard-react" || u.RealmVersion != "0.1.0" {
+		t.Fatalf("umbrella.yaml = %+v, %v; want the lead realm pinned", u, err)
+	}
+	if msg := gitOut(t, project, "log", "-1", "--format=%s", "--", "umbrella.yaml"); msg != "Pin the lead realm midgard-react 0.1.0" {
+		t.Errorf("the pin's commit says %q", msg)
+	}
+	if st := gitOut(t, project, "status", "--porcelain", "--", "umbrella.yaml"); st != "" {
+		t.Errorf("umbrella.yaml is left uncommitted: %q", st)
+	}
+	ledger, _ := os.ReadFile(filepath.Join(Dir(project, r.State.ID), "ledger.jsonl"))
+	first, _, _ := strings.Cut(string(ledger), "\n")
+	if !strings.Contains(first, `"event":"run_started"`) || !strings.Contains(first, `"ygg.realm.name":"midgard-react"`) || !strings.Contains(first, `"ygg.realm.version":"0.1.0"`) ||
+		!strings.Contains(first, "realms: midgard-react 0.1.0 sha256:") {
+		t.Errorf("the first ledger line lacks the realms:\n%s", first)
+	}
+	// The next run finds the pin and agrees with it.
+	r2, err := Start(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"})
+	if err != nil {
+		t.Fatalf("a second Start() = %v", err)
+	}
+	r2.Close()
+	if n := gitOut(t, project, "rev-list", "--count", "HEAD", "--", "umbrella.yaml"); n != "2" {
+		t.Errorf("umbrella.yaml has %s commits; the second run pinned nothing", n)
+	}
+}
+
+func TestARealmGivenByPathIsNotPinned(t *testing.T) {
+	project := treetest.Project(t, "repos/app")
+	before := gitOut(t, project, "rev-parse", "HEAD")
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if gitOut(t, project, "rev-parse", "HEAD") != before {
+		t.Error("a run with a realm given by path committed to the project: it pins nothing")
+	}
+}
+
+func TestARunWontPinOverUncommittedWork(t *testing.T) {
+	_, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0"})
+	project := treetest.Project(t, "repos/app")
+	f := filepath.Join(project, "umbrella.yaml")
+	b, _ := os.ReadFile(f)
+	os.WriteFile(f, append(b, []byte("# the operator's note\n")...), 0o644)
+	if _, err := Start(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"}); err == nil || !strings.Contains(err.Error(), "umbrella.yaml") {
+		t.Errorf("Start() = %v; the operator's own edit of umbrella.yaml is not Odin's to commit", err)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".factory", "runs")); err == nil {
+		entries, _ := os.ReadDir(filepath.Join(project, ".factory", "runs"))
+		if len(entries) != 0 {
+			t.Errorf("a refused start left run directories: %v", entries)
+		}
 	}
 }

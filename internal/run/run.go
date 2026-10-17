@@ -20,6 +20,7 @@ import (
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/agents"
 	"github.com/ouroboric-dev/odin/internal/budget"
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
@@ -72,6 +73,7 @@ type Setup struct {
 	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
 	Backoff      jormungandr.Backoff
 	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
+	PinLead      bool                                             // the lead realm was named, and the project doesn't pin one yet: Start pins it
 
 	Root        string               // the tree's root: the project, or an umbrella above it
 	ProjectPath string               // the project's path from the root
@@ -108,7 +110,7 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if s.Config.Realms != nil {
 		store = &realm.Store{Dir: s.Config.Realms.Dir}
 	}
-	realmDir, _, err := realm.Resolve(o.Realm, store)
+	realmDir, byName, err := realm.Resolve(o.Realm, store)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +136,9 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if s.Realms, err = s.collectRealms(store, o.Realms); err != nil {
 		return nil, err
 	}
+	// A realm named in the store is pinned by the project's first run; one given as a path is a checkout
+	// being worked on, and pins nothing.
+	s.PinLead = byName && s.Project.Umbrella != nil && s.Project.Umbrella.Realm == ""
 	for _, n := range s.Graph.Nodes {
 		if err := s.checkNode(ctx, graphPath, n); err != nil {
 			return nil, err
@@ -537,6 +542,11 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		os.RemoveAll(dir) // the run's own new directory: nothing ran
 		return nil, err
 	}
+	if err := r.pinLead(ctx); err != nil {
+		r.Close()
+		os.RemoveAll(dir)
+		return nil, err
+	}
 	if err := r.openSandbox(setup.newSandbox); err != nil {
 		r.Close()
 		os.RemoveAll(dir)
@@ -550,6 +560,41 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		return nil, &Failed{ID: id, Err: err}
 	}
 	return r, r.Save()
+}
+
+// pinLead records the lead realm and its version in the project's umbrella.yaml, in a commit of its own,
+// when the project pins none: from then on every run of the project must agree with it. The operator's
+// own uncommitted edit of umbrella.yaml is not Odin's to commit.
+func (r *Run) pinLead(ctx context.Context) error {
+	s := r.Setup
+	if !s.PinLead {
+		return nil
+	}
+	p := s.Project
+	if st, err := git.Run(ctx, p.Dir, "status", "--porcelain", "--", schema.UmbrellaFile); err != nil || st != "" {
+		return fmt.Errorf("%s has changes that are not committed, so the run can't pin the realm %s %s in it: commit or discard them first (%v)",
+			filepath.Join(p.Dir, schema.UmbrellaFile), s.Lead.Name, s.Lead.Version, err)
+	}
+	p.Umbrella.Realm, p.Umbrella.RealmVersion = s.Lead.Name, s.Lead.Version
+	if err := p.Umbrella.Save(p.Dir); err != nil {
+		return err
+	}
+	if _, err := git.Run(ctx, p.Dir, "add", "--", schema.UmbrellaFile); err != nil {
+		return err
+	}
+	_, err := git.Run(ctx, p.Dir, "commit", "-q", "-m", fmt.Sprintf("Pin the lead realm %s %s", s.Lead.Name, s.Lead.Version), "--", schema.UmbrellaFile)
+	return err
+}
+
+// realmNote lists the realms of the run for the ledger's first line: each with its version and the hash
+// a resume compares.
+func realmNote(set *realm.Set) string {
+	var parts []string
+	for _, name := range set.Names() {
+		r := set.Realms[name]
+		parts = append(parts, fmt.Sprintf("%s %s sha256:%s", r.Name, r.Version, r.Hash))
+	}
+	return "realms: " + strings.Join(parts, "; ")
 }
 
 // record locks the new run and writes its run.json and first ledger line.
@@ -574,7 +619,9 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
 		Waived: map[string]bool{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Created: now, Updated: now,
 	}}
-	if err := r.Log(gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256}); err != nil {
+	started := gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256,
+		Realm: setup.Lead.Name, RealmVersion: setup.Lead.Version, Note: realmNote(setup.Realms)}
+	if err := r.Log(started); err != nil {
 		r.Close()
 		return nil, err
 	}
