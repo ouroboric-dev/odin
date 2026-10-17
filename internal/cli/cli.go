@@ -30,13 +30,13 @@ const (
 )
 
 const usage = `usage:
-  ygg run     --realm <dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
+  ygg run     --realm <name|dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
   ygg resume  <run-id> [--project <dir>] [--mode <mode>]
   ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
   ygg status  <run-id> [--project <dir>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
-  ygg sandbox build --realm <dir> [--config <factory.yaml>]
+  ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
 exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused: the provider's quota is used up
 `
 
@@ -67,6 +67,8 @@ type command struct {
 // flags holds every flag; each command reads the ones it defines.
 type flags struct {
 	project, config, realm, brief, mode, note, reason, root string
+	realms                                                  []string        // sandbox build: every --realm given
+	all                                                     bool            // sandbox build: --all
 	set                                                     map[string]bool // the flags given
 }
 
@@ -119,7 +121,7 @@ func (c *command) refuse(err error) int {
 func (c *command) run(args []string) int {
 	f, _, ok := c.parse("run", args, 0, func(fs *flag.FlagSet, f *flags) {
 		fs.StringVar(&f.config, "config", "factory.yaml", "the factory config")
-		fs.StringVar(&f.realm, "realm", "", "the realm directory (holds pack.yaml)")
+		fs.StringVar(&f.realm, "realm", "", "the lead realm: a name found in factory.yaml's realms.dir, or the directory that holds pack.yaml")
 		fs.StringVar(&f.brief, "brief", "", "the brief")
 	})
 	if !ok {
