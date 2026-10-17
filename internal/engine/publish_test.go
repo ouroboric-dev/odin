@@ -81,7 +81,7 @@ func TestPublishRefusesWhatIsNotADocument(t *testing.T) {
 		}
 	}
 	put("docs/ok.md", "fine\n")
-	if files, err := listDocuments(out); err != nil || strings.Join(files, ",") != "docs/ok.md" {
+	if files, _, err := listDocuments(out); err != nil || strings.Join(files, ",") != "docs/ok.md" {
 		t.Fatalf("listDocuments() = %v, %v", files, err)
 	}
 	cases := map[string]func(){
@@ -100,7 +100,7 @@ func TestPublishRefusesWhatIsNotADocument(t *testing.T) {
 		os.MkdirAll(out, 0o755)
 		put("docs/ok.md", "fine\n")
 		add()
-		if _, err := listDocuments(out); err == nil {
+		if _, _, err := listDocuments(out); err == nil {
 			t.Errorf("%s: listDocuments() = nil error", name)
 		}
 	}
@@ -109,7 +109,7 @@ func TestPublishRefusesWhatIsNotADocument(t *testing.T) {
 	for i := 0; i <= maxPublishFiles; i++ {
 		put("d/f"+strings.Repeat("a", 1+i%20)+string(rune('a'+i%26))+string(rune('a'+(i/26)%26))+string(rune('a'+(i/676)%26))+".md", "x\n")
 	}
-	if _, err := listDocuments(out); err == nil || !strings.Contains(err.Error(), "more than") {
+	if _, _, err := listDocuments(out); err == nil || !strings.Contains(err.Error(), "more than") {
 		t.Errorf("too many files: %v", err)
 	}
 }
@@ -159,5 +159,34 @@ func TestSecretsInTheDocumentsAreAHardStopAndNothingIsPublished(t *testing.T) {
 	}
 	if got := headFiles(t, r.Project); !strings.Contains(got, "docs/1-product/design.md") {
 		t.Errorf("after approval the commit holds %q", got)
+	}
+}
+
+// What is published is what the secret scan read: Odin reads each document once, gives the scan those
+// bytes, and writes those bytes, so a file changed in out/ after the scan read it is not what lands in the
+// project (review M-2).
+func TestPublishCommitsTheBytesTheScanRead(t *testing.T) {
+	r, fake := startSandboxed(t, publishNodes, publishScript)
+	scanned := map[string]string{}
+	fake.OnScan = func(env gungnir.Env, c gungnir.Cmd, files []string) {
+		for _, f := range files {
+			b, err := os.ReadFile(filepath.Join(env.Workdir, c.Dir, f))
+			if err != nil {
+				t.Errorf("the scan can't read %s: %v", f, err)
+			}
+			scanned[f] = string(b)
+		}
+		if err := os.WriteFile(filepath.Join(r.ScratchDir("design"), "out", "1-product", "design.md"), []byte("# Changed after the scan\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if got := scanned["out/1-product/design.md"]; got != "# Design\n" {
+		t.Errorf("the scan read %q", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.Project, "docs", "1-product", "design.md")); string(b) != scanned["out/1-product/design.md"] {
+		t.Errorf("published %q; the scan read %q", b, scanned["out/1-product/design.md"])
 	}
 }

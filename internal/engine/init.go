@@ -2,8 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -63,23 +63,34 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	return r.Log(gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Result: r.State.Summaries[n.ID]})
 }
 
+// maxLeavesFile is the biggest leaves file Odin reads: a few leaves, each a few lines.
+const maxLeavesFile = 1 << 20
+
 // readLeaves reads and parses the leaves file n names.
 func readLeaves(r *run.Run, n schema.Node) (*schema.Leaves, error) {
-	file := filepath.Join(r.Project, filepath.FromSlash(n.From))
-	st, err := os.Lstat(file)
-	if err != nil || !st.Mode().IsRegular() || noSymlinks(r.Project, file) != nil {
+	data, err := readLeavesFile(r, n.From)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return nil, fmt.Errorf("the leaves file %s is not there as a regular file; the spec stage names the product's leaves in it", n.From)
-	}
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 1<<20))
-	if err != nil {
-		return nil, err
+	case err != nil:
+		return nil, fmt.Errorf("the leaves file %s can't be read: %w", n.From, err)
 	}
 	return schema.ParseLeaves(n.From, data)
+}
+
+// readLeavesFile reads the leaves file at rel in the project, for init and for the tasks node alike: a
+// regular file reached with no symlink, of at most maxLeavesFile bytes. A longer one is refused, never
+// parsed cut short (review M-3).
+func readLeavesFile(r *run.Run, rel string) ([]byte, error) {
+	file := filepath.Join(r.Project, filepath.FromSlash(rel))
+	if err := noSymlinks(r.Project, file); err != nil {
+		return nil, err
+	}
+	listed, err := os.Lstat(file)
+	if err != nil {
+		return nil, err
+	}
+	return readRegular(r.Project, filepath.FromSlash(rel), listed, maxLeavesFile)
 }
 
 // checkLeaves checks, before anything is created, that each leaf can be: its realm offers a leaf recipe,
@@ -154,13 +165,20 @@ func initOrder(spec *schema.Leaves) []string {
 }
 
 // initLeaf makes leaf p real: it creates it through the remote when the project lacks it, makes it part
-// of the run, and, while the leaf holds only its first commit, adds the rest of the realm's template to
-// the run's branch in a checkpoint of its own. It reports whether it created the leaf.
+// of the run, and, for a leaf this run created that still holds only its first commit, adds the rest of
+// the realm's template to the run's branch in a checkpoint of its own. A leaf the project had before the
+// run is left as it is, even with one commit (review M-8): run.json records each leaf init creates before
+// it is created, so a resume finishes the template of its own leaves and of no other. It reports whether
+// it created the leaf.
 func initLeaf(ctx context.Context, r *run.Run, n schema.Node, p string, l schema.LeafSpec) (created bool, err error) {
 	s := r.Setup
 	rl := s.Realms.Realms[l.Realm]
 	recipe := rl.Pack.Leaf
 	if _, has := s.Project.Umbrella.Children[p]; !has {
+		r.State.NewLeaves[p] = true
+		if err := r.Save(); err != nil {
+			return false, err
+		}
 		files := map[string][]byte{}
 		for _, f := range recipe.FirstCommit {
 			b, err := os.ReadFile(filepath.Join(rl.Dir, recipe.Template, f))
@@ -188,8 +206,11 @@ func initLeaf(ctx context.Context, r *run.Run, n schema.Node, p string, l schema
 	if err != nil {
 		return created, err
 	}
+	if !r.State.NewLeaves[p] {
+		return created, nil // a leaf of the project's, not of this run's: its files are its own
+	}
 	if count, err := lf.Git(ctx, "rev-list", "--count", "HEAD"); err != nil || count != "1" {
-		return created, err // the leaf has history beyond its first commit: its template was applied, or it is not new
+		return created, err // the leaf has history beyond its first commit: its template was applied
 	}
 	if err := copyTemplate(filepath.Join(rl.Dir, recipe.Template), lf.Dir(), recipe.FirstCommit); err != nil {
 		return created, &nodeFailure{fmt.Errorf("copying the template of %s into %s: %w", l.Realm, p, err)}
@@ -205,7 +226,9 @@ func initLeaf(ctx context.Context, r *run.Run, n schema.Node, p string, l schema
 }
 
 // copyTemplate copies the template's files into the leaf, except the first commit's, which the leaf has.
-// A template is the realm's own text; a link or any file but a regular one in it is refused.
+// A template is the realm's own text; a link or any file but a regular one in it is refused. Nothing is
+// written through a symlink in the leaf, or over anything in it but a regular file: the write would land
+// outside the leaf, or not where the template says.
 func copyTemplate(tmpl, dst string, first []string) error {
 	return filepath.WalkDir(tmpl, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -222,6 +245,9 @@ func copyTemplate(tmpl, dst string, first []string) error {
 			return nil
 		}
 		target := filepath.Join(dst, rel)
+		if err := noSymlinks(dst, target); err != nil {
+			return err
+		}
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
@@ -242,6 +268,9 @@ func copyTemplate(tmpl, dst string, first []string) error {
 		mode := os.FileMode(0o644)
 		if info.Mode()&0o111 != 0 {
 			mode = 0o755
+		}
+		if st, err := os.Lstat(target); err == nil && !st.Mode().IsRegular() {
+			return fmt.Errorf("%s exists and is not a regular file", target)
 		}
 		return os.WriteFile(target, data, mode)
 	})

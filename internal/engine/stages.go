@@ -124,12 +124,7 @@ func planLeaves(r *run.Run, n schema.Node) (leaves []string, refusal string, err
 		}
 	}
 	if n.Leaves != "" {
-		file := filepath.Join(r.Project, filepath.FromSlash(n.Leaves))
-		var data []byte
-		rerr := noSymlinks(r.Project, file)
-		if rerr == nil {
-			data, rerr = os.ReadFile(file)
-		}
+		data, rerr := readLeavesFile(r, n.Leaves)
 		if rerr != nil {
 			return nil, fmt.Sprintf("the leaves file %s can't be read (%v), so the tasks' leaves can't be checked. The spec stage names the product's leaves there.", n.Leaves, rerr), nil
 		}

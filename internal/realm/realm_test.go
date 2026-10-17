@@ -61,7 +61,6 @@ func TestTheHashFollowsEveryFileTheRunCouldRead(t *testing.T) {
 		"a file is added":         func(d string) { write(t, d, "prompts/extra.md", "x", 0o644) },
 		"a file is removed":       func(d string) { os.Remove(filepath.Join(d, "prompts/implementer.md")) },
 		"a file becomes a script": func(d string) { os.Chmod(filepath.Join(d, "prompts/implementer.md"), 0o755) },
-		"a symlink appears":       func(d string) { os.Symlink("../pack.yaml", filepath.Join(d, "prompts/link.md")) },
 	} {
 		if got := hashOf(mutate); got == plain {
 			t.Errorf("%s, and the hash did not change", name)
@@ -70,10 +69,50 @@ func TestTheHashFollowsEveryFileTheRunCouldRead(t *testing.T) {
 	if got := hashOf(func(d string) { write(t, d, ".git/HEAD", "ref: x", 0o644) }); got != plain {
 		t.Error("the hash follows .git, which holds nothing a run reads")
 	}
-	a := hashOf(func(d string) { os.Symlink("../pack.yaml", filepath.Join(d, "prompts/link.md")) })
-	b := hashOf(func(d string) { os.Symlink("../graph.yaml", filepath.Join(d, "prompts/link.md")) })
-	if a == b {
-		t.Error("two symlinks with different targets hash alike")
+}
+
+// A realm's files are its own: a symlink anywhere in it is refused when it is loaded, before anything is
+// read. Prompts, first-commit files and the template are read by following links, so a link could read
+// outside the realm, and a change at its target would not change the realm's hash (review M-7).
+func TestARealmWithASymlinkInItIsRefused(t *testing.T) {
+	outside := t.TempDir()
+	write(t, outside, "secret.md", "outside the realm\n", 0o644)
+	write(t, outside, "pack.yaml", "name: midgard-react\nversion: 0.1.0\ngraph: graph.yaml\n", 0o644)
+	for name, c := range map[string]struct{ link, target string }{
+		"a prompt that leads out":      {"prompts/link.md", filepath.Join(outside, "secret.md")},
+		"a prompt that stays inside":   {"prompts/link.md", "implementer.md"},
+		"a folder that leads out":      {"templates", outside},
+		"the pack itself, leading out": {"pack.yaml", filepath.Join(outside, "pack.yaml")},
+	} {
+		dir := filepath.Join(t.TempDir(), "midgard-react")
+		fixture(t, dir, "midgard-react", "0.1.0")
+		os.Remove(filepath.Join(dir, c.link))
+		if err := os.Symlink(c.target, filepath.Join(dir, c.link)); err != nil {
+			t.Fatal(err)
+		}
+		if r, err := Load(dir); err == nil || !strings.Contains(err.Error(), filepath.Join(dir, c.link)) || !strings.Contains(err.Error(), "symlink") {
+			t.Errorf("%s: Load() = %+v, %v; want a refusal naming %s as a symlink", name, r, err, c.link)
+		}
+		if _, err := Hash(dir); err == nil {
+			t.Errorf("%s: Hash() = nil error", name)
+		}
+	}
+}
+
+// A realm whose root folder is a symlink is refused too: the hash walk does not enter a linked root, so
+// its hash would be that of an empty folder and a resume would accept any change (review I-1).
+func TestARealmWhoseRootIsASymlinkIsRefused(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "midgard-react")
+	fixture(t, real, "midgard-react", "0.1.0")
+	link := filepath.Join(t.TempDir(), "linked")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := Load(link); err == nil || !strings.Contains(err.Error(), link) || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("Load(linked root) = %+v, %v; want a refusal naming %s as a symlink", r, err, link)
+	}
+	if r, err := Load(real); err != nil || r.Name != "midgard-react" {
+		t.Errorf("Load(normal realm) = %+v, %v", r, err)
 	}
 }
 

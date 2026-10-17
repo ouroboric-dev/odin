@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -199,5 +200,35 @@ func TestARetryOfAScratchAgentReseedsTheWorkspaceItsSandboxMounts(t *testing.T) 
 	}
 	if b, _ := os.ReadFile(filepath.Join(ws, "try.txt")); strings.TrimSpace(string(b)) != "2" {
 		t.Errorf("try.txt = %q", b)
+	}
+}
+
+// An input that holds the project's root, such as ".", never brings the project's .factory (run state,
+// ledgers, other runs' transcripts) or .git into a workspace: the workspace is the project as the agent
+// may read it (review M-4). Gungnir refuses "." as an input; this holds whatever an input names.
+func TestAnInputThatHoldsTheProjectRootLeavesOutFactoryAndGit(t *testing.T) {
+	r := start(t, "key-points", "", scratchNode, designScript)
+	withInputs(t, r)
+	if _, err := os.Stat(filepath.Join(r.Project, ".factory")); err != nil {
+		t.Fatalf("the project has no .factory to leave out: %v", err)
+	}
+	for _, in := range []string{".", "docs/.."} {
+		n := schema.Node{ID: "design", Role: "planner", Prompt: "p.md", Scratch: true, Inputs: []string{in}}
+		present, err := seedScratch(r, n)
+		if err != nil {
+			t.Fatalf("seedScratch(%q) = %v", in, err)
+		}
+		ws := filepath.Join(r.ScratchDir("design"), filepath.FromSlash(in))
+		for _, hidden := range []string{".factory", ".git"} {
+			if _, err := os.Lstat(filepath.Join(ws, hidden)); err == nil {
+				t.Errorf("input %q: the workspace holds the project's %s", in, hidden)
+			}
+		}
+		if b, err := os.ReadFile(filepath.Join(ws, "docs", "input.md")); err != nil || string(b) != "the input\n" {
+			t.Errorf("input %q: the copy of docs/input.md = %q, %v", in, b, err)
+		}
+		if len(present) != 1 {
+			t.Errorf("input %q: present = %v", in, present)
+		}
 	}
 }
