@@ -59,6 +59,12 @@ var defaultLimits = limits{files: 5000, bytes: 64 << 20}
 func Hash(dir string) (string, error) { return hashLimited(dir, defaultLimits) }
 
 func hashLimited(dir string, lim limits) (string, error) {
+	// The walk does not enter a root that is a link, so its hash would be that of an empty folder.
+	if st, err := os.Lstat(dir); err != nil {
+		return "", err
+	} else if st.Mode()&fs.ModeSymlink != 0 {
+		return "", fmt.Errorf("%s is a symlink; a realm holds its own files and folders, and a link could lead out of it", dir)
+	}
 	h := sha256.New()
 	var files, size int64
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {

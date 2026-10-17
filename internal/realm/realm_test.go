@@ -99,6 +99,23 @@ func TestARealmWithASymlinkInItIsRefused(t *testing.T) {
 	}
 }
 
+// A realm whose root folder is a symlink is refused too: the hash walk does not enter a linked root, so
+// its hash would be that of an empty folder and a resume would accept any change (review I-1).
+func TestARealmWhoseRootIsASymlinkIsRefused(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "midgard-react")
+	fixture(t, real, "midgard-react", "0.1.0")
+	link := filepath.Join(t.TempDir(), "linked")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := Load(link); err == nil || !strings.Contains(err.Error(), link) || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("Load(linked root) = %+v, %v; want a refusal naming %s as a symlink", r, err, link)
+	}
+	if r, err := Load(real); err != nil || r.Name != "midgard-react" {
+		t.Errorf("Load(normal realm) = %+v, %v", r, err)
+	}
+}
+
 func TestTheHashRefusesARealmTooBigToBeOne(t *testing.T) {
 	dir := t.TempDir()
 	fixture(t, dir, "midgard-react", "0.1.0")
