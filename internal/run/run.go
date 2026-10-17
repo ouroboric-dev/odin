@@ -23,18 +23,20 @@ import (
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
+	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/tree"
 )
 
 // Options say what to run.
 type Options struct {
-	Project string       // the project umbrella (L1), inside an instance tree
-	Config  string       // factory.yaml
-	Realm   string       // the directory that holds pack.yaml
-	Brief   string       // optional
-	Mode    gungnir.Mode // "" means the config's mode
-	Hooks   Hooks        // tests only
+	Project string            // the project umbrella (L1), inside an instance tree
+	Config  string            // factory.yaml
+	Realm   string            // the lead realm: a realm leaf's name, found in factory.yaml's realms.dir, or a path to the folder that holds pack.yaml
+	Realms  map[string]string // a resume: the folder of each realm the run recorded, by name; they are loaded from there
+	Brief   string            // optional
+	Mode    gungnir.Mode      // "" means the config's mode
+	Hooks   Hooks             // tests only
 }
 
 // Hooks replace parts of a run in tests: the skill libraries, the sandbox driver, the clock that
@@ -52,8 +54,10 @@ type Setup struct {
 	Config       *schema.Factory
 	ConfigPath   string // absolute
 	ConfigSHA256 string
-	Pack         *schema.Pack
-	RealmDir     string // absolute
+	Pack         *schema.Pack // the lead realm's
+	RealmDir     string       // the lead realm's folder, absolute
+	Lead         *realm.Realm // the lead realm: --realm, loaded
+	Realms       *realm.Set   // every realm of the run: the lead's and one for each realm a leaf of the project names, each loaded once
 	Graph        *schema.Graph
 	GraphSHA256  string
 	Brief        string // absolute, or ""
@@ -100,11 +104,20 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if o.Mode != "" {
 		s.Mode = o.Mode
 	}
-	if s.RealmDir, err = filepath.Abs(o.Realm); err != nil {
+	var store *realm.Store
+	if s.Config.Realms != nil {
+		store = &realm.Store{Dir: s.Config.Realms.Dir}
+	}
+	realmDir, _, err := realm.Resolve(o.Realm, store)
+	if err != nil {
 		return nil, err
 	}
-	if s.Pack, err = schema.LoadPack(s.RealmDir); err != nil {
+	if s.Lead, err = realm.Load(realmDir); err != nil {
 		return nil, err
+	}
+	s.Pack, s.RealmDir = s.Lead.Pack, s.Lead.Dir
+	if s.Pack.Graph == "" {
+		return nil, fmt.Errorf("the realm %s has no graph, so it can't lead a run; --realm names the realm whose graph builds the product", s.Pack.Name)
 	}
 	graphPath := filepath.Join(s.RealmDir, s.Pack.Graph)
 	graphData, err := os.ReadFile(graphPath)
@@ -116,6 +129,9 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	}
 	s.GraphSHA256 = sum(graphData)
 	if err := s.findProject(ctx, o.Project); err != nil {
+		return nil, err
+	}
+	if s.Realms, err = s.collectRealms(store, o.Realms); err != nil {
 		return nil, err
 	}
 	for _, n := range s.Graph.Nodes {
@@ -251,6 +267,55 @@ func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
 		return fmt.Errorf("role %s: %w", role, err)
 	}
 	return nil
+}
+
+// collectRealms loads the realms of the run: the lead's, and one for each realm the project's pins name.
+// The pins must agree with each other and with what the realm store holds (change realm-leaf-naming), so
+// a mismatch stops the run before anything is created or started. recorded holds the folders a resumed
+// run loaded its realms from.
+func (s *Setup) collectRealms(store *realm.Store, recorded map[string]string) (*realm.Set, error) {
+	var pins []schema.Pin
+	if u := s.Project.Umbrella; u != nil {
+		for _, p := range u.Pins() {
+			if p.Where == "." || u.Children[p.Where].Kind == schema.ChildLeaf {
+				pins = append(pins, p)
+			}
+		}
+	}
+	return realm.Collect(s.Lead, pins, func(name string) (*realm.Realm, error) {
+		if dir, ok := recorded[name]; ok {
+			return realm.Load(dir)
+		}
+		if store == nil {
+			return nil, errors.New("factory.yaml has no realms section to find it in")
+		}
+		dir, err := store.Find(name)
+		if err != nil {
+			return nil, err
+		}
+		return realm.Load(dir)
+	})
+}
+
+// Realm returns the realm called name, or the lead realm for "".
+func (s *Setup) Realm(name string) *realm.Realm {
+	if name == "" {
+		return s.Lead
+	}
+	return s.Realms.Realms[name]
+}
+
+// RealmOf returns the realm that provides the leaf at repo: the one the project pins for it, or the lead
+// realm when the leaf has no pin.
+func (s *Setup) RealmOf(repo string) *realm.Realm {
+	if u := s.Project.Umbrella; u != nil {
+		if c, ok := u.Children[repo]; ok && c.Realm != "" {
+			if r := s.Realms.Realms[c.Realm]; r != nil {
+				return r
+			}
+		}
+	}
+	return s.Lead
 }
 
 // isLeaf reports whether repo is a leaf: one the tree records as a leaf, or one Start creates.
@@ -501,7 +566,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 	now := time.Now().UTC()
 	r := &Run{Project: project, Dir: dir, Setup: setup, Ledger: l, unlock: unlock, State: &State{
 		ID: id, Status: StatusRunning, Mode: setup.Mode,
-		Realm: setup.Pack.Name, RealmVersion: setup.Pack.Version, RealmDir: setup.RealmDir,
+		Realm: setup.Pack.Name, RealmVersion: setup.Pack.Version, RealmDir: setup.RealmDir, Realms: realmRecords(setup),
 		GraphVersion: setup.Graph.Version, GraphSHA256: setup.GraphSHA256,
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
@@ -518,6 +583,17 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// realmRecords is what run.json keeps of each realm of the run, so a resume loads the same folders and
+// can tell none of them changed.
+func realmRecords(setup *Setup) map[string]RealmRecord {
+	out := map[string]RealmRecord{}
+	for _, name := range setup.Realms.Names() {
+		r := setup.Realms.Realms[name]
+		out[name] = RealmRecord{Version: r.Version, Dir: r.Dir, SHA256: r.Hash}
+	}
+	return out
 }
 
 func roles(setup *Setup) map[string]RoleRecord {
@@ -626,7 +702,11 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	if mode == "" {
 		mode = s.Mode
 	}
-	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Brief: s.Brief, Mode: mode, Hooks: h})
+	dirs := map[string]string{}
+	for name, r := range s.Realms {
+		dirs[name] = r.Dir
+	}
+	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Realms: dirs, Brief: s.Brief, Mode: mode, Hooks: h})
 	if err != nil {
 		return nil, err
 	}
@@ -638,6 +718,9 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	}
 	if setup.Skills.Hash != s.Skills.Hash {
 		return nil, errors.New("the skills the graph names changed since the run started, so results would not compare; start a new run")
+	}
+	if err := s.checkRealms(setup); err != nil {
+		return nil, err
 	}
 	if setup.Root != s.Root || setup.ProjectPath != s.ProjectPath {
 		return nil, fmt.Errorf("the run belongs to %s in %s, not this project", s.ProjectPath, s.Root)

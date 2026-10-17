@@ -40,6 +40,13 @@ const (
 	StatusDone    Status = "done"
 )
 
+// RealmRecord is a realm leaf as the run loaded it.
+type RealmRecord struct {
+	Version string `json:"version"`
+	Dir     string `json:"dir"`
+	SHA256  string `json:"sha256"` // of every file a run could read; a resume refuses a realm whose hash changed
+}
+
 // RoleRecord is the agent and model a role used.
 type RoleRecord struct {
 	Agent string `json:"agent"`
@@ -55,6 +62,7 @@ type State struct {
 	Realm        string                 `json:"realm"`
 	RealmVersion string                 `json:"realm_version"`
 	RealmDir     string                 `json:"realm_dir"`
+	Realms       map[string]RealmRecord `json:"realms,omitempty"` // every realm of the run, the lead's too, by name
 	GraphVersion string                 `json:"graph_version"`
 	GraphSHA256  string                 `json:"graph_sha256"`
 	ConfigPath   string                 `json:"config_path"`
@@ -281,6 +289,32 @@ func Lock(dir string) (unlock func(), err error) {
 // Locked reports whether a process holds dir/lock. It never takes the lock, so a status check
 // can't make another process's resume fail.
 func Locked(dir string) bool { return lock.Held(filepath.Join(dir, "lock")) }
+
+// checkRealms refuses a resume when a realm changed under the run, or the project's pins no longer name
+// the realms the run started with: its graph positions and prompts would no longer mean what they meant.
+func (s *State) checkRealms(setup *Setup) error {
+	if len(s.Realms) == 0 {
+		return nil // a run from before realms were recorded; the graph's hash is all there is
+	}
+	for _, name := range setup.Realms.Names() {
+		got := setup.Realms.Realms[name]
+		want, ok := s.Realms[name]
+		switch {
+		case !ok:
+			return fmt.Errorf("the project now names the realm %s, which this run didn't start with; start a new run", name)
+		case got.Version != want.Version:
+			return fmt.Errorf("the realm %s is at %s, and the run started with %s; start a new run", name, got.Version, want.Version)
+		case got.Hash != want.SHA256:
+			return fmt.Errorf("the realm %s changed since the run started (%s), so the run's prompts and checks are not the ones it began with; start a new run", name, want.Dir)
+		}
+	}
+	for name := range s.Realms {
+		if setup.Realms.Realms[name] == nil {
+			return fmt.Errorf("the run started with the realm %s, which the project no longer names; start a new run", name)
+		}
+	}
+	return nil
+}
 
 // check refuses a run.json whose position, pending node or leaves don't fit setup's graph and
 // tree. Odin wrote it, but a hand-edited file must not crash the engine.
