@@ -92,6 +92,7 @@ type State struct {
 	PlanSource   string                 `json:"plan_source,omitempty"`   // the tasks.md they came from, relative to the project
 	PlanSHA256   string                 `json:"plan_sha256,omitempty"`   // that file as Odin read it
 	Expanded     map[string]bool        `json:"expanded,omitempty"`      // foreach node ids already expanded into the nodes of each task
+	NewLeaves    map[string]bool        `json:"new_leaves,omitempty"`    // leaf paths this run's init creates: only these get the realm's template
 	Returns      map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
 	Refusals     map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
 	Ledger       ledger.Anchor          `json:"ledger"`
@@ -226,6 +227,9 @@ func LoadState(dir string) (*State, error) {
 	}
 	if s.Expanded == nil {
 		s.Expanded = map[string]bool{}
+	}
+	if s.NewLeaves == nil {
+		s.NewLeaves = map[string]bool{}
 	}
 	if s.Returns == nil {
 		s.Returns = map[string]int{}

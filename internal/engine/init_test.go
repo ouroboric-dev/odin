@@ -306,3 +306,113 @@ func TestTheLeavesFileIsARegularFileWithinTheLimitForInitAndForTheTasksNode(t *t
 	}
 	check("a folder", "not a regular file")
 }
+
+// galleryRealms are the two realms the leaves file names, each with a leaf recipe.
+func galleryRealms() []realmFiles {
+	return []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")}
+}
+
+// The realm's template goes only into a leaf this run's init created. A leaf the project has already is
+// left as it is, even one with a single commit, which is what a leaf just created also looks like (review
+// M-8).
+func TestInitLeavesAnExistingLeafWithOneCommitUntouched(t *testing.T) {
+	r := startRealms(t, realmsSetup{nodes: initNode, script: "steps: {}\n", realms: galleryRealms(), leaves: map[string]string{"repos/api": "helheim-go"}})
+	os.MkdirAll(filepath.Join(r.Project, "docs"), 0o755)
+	if err := os.WriteFile(filepath.Join(r.Project, "docs", "leaves.yaml"), []byte(galleryLeaves), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	api := filepath.Join(r.Project, "repos", "api")
+	if count, _ := git.Run(ctx, api, "rev-list", "--count", "HEAD"); count != "1" {
+		t.Fatalf("the existing leaf has %s commits; the test needs one", count)
+	}
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(api, "AGENTS.md")); err == nil {
+		t.Error("init wrote the realm's template into a leaf the project had already")
+	}
+	if count, _ := git.Run(ctx, api, "rev-list", "--count", "HEAD"); count != "1" {
+		t.Errorf("the existing leaf has %s commits after init; it was left as it was with 1", count)
+	}
+	web, _ := r.Leaf("repos/web")
+	if _, err := os.Stat(filepath.Join(web.Dir(), "AGENTS.md")); err != nil {
+		t.Errorf("the leaf init created lacks its template: %v", err)
+	}
+	if got := r.State.Summaries["leaves"]; !strings.Contains(got, "created 1 leaf(s) (repos/web)") || !strings.Contains(got, "1 already there (repos/api)") {
+		t.Errorf("summary = %q", got)
+	}
+}
+
+// halfInit runs init, then puts the run and repos/api back where a crash between creating the leaf and
+// committing its template leaves them: init running, the leaf on its first commit, and run.json as init
+// saved it. It returns the run, reopened as a resume does.
+func halfInit(t *testing.T) *run.Run {
+	t.Helper()
+	ctx := context.Background()
+	r := startRealms(t, realmsSetup{nodes: initNode, script: "steps: {}\n", realms: galleryRealms()})
+	os.MkdirAll(filepath.Join(r.Project, "docs"), 0o755)
+	if err := os.WriteFile(filepath.Join(r.Project, "docs", "leaves.yaml"), []byte(galleryLeaves), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	api, _ := r.Leaf("repos/api")
+	rec := r.State.Leaves["repos/api"]
+	if _, err := api.Git(ctx, "reset", "-q", "--hard", rec.Base); err != nil {
+		t.Fatal(err)
+	}
+	rec.Checkpoint = rec.Base
+	r.State.Leaves["repos/api"] = rec
+	r.State.Position, r.State.Status = 0, run.StatusRunning
+	if err := r.Save(); err != nil {
+		t.Fatal(err)
+	}
+	id, project := r.State.ID, r.Project
+	r.Close()
+	again, err := run.Open(ctx, project, id, "")
+	if err != nil {
+		t.Fatalf("Open() = %v", err)
+	}
+	t.Cleanup(func() { again.Close() })
+	return again
+}
+
+// A resume of an init that stopped after creating a leaf and before committing its template still adds
+// the template: run.json says this run created the leaf.
+func TestAResumedInitStillAddsTheTemplateToALeafItCreated(t *testing.T) {
+	r := halfInit(t)
+	ctx := context.Background()
+	api, _ := r.Leaf("repos/api")
+	if _, err := os.Stat(filepath.Join(api.Dir(), "AGENTS.md")); err == nil {
+		t.Fatal("the rewound leaf still holds its template")
+	}
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() after the resume = %+v, %v", out, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(api.Dir(), "AGENTS.md")); err != nil || string(b) != "rules of helheim-go\n" {
+		t.Errorf("AGENTS.md = %q, %v; the resumed init adds the template of the leaf it created", b, err)
+	}
+	if count, _ := api.Git(ctx, "rev-list", "--count", "HEAD"); count != "2" {
+		t.Errorf("the leaf has %s commits; want its first and the template's", count)
+	}
+}
+
+// The template is never written through a symlink in the leaf: the write would land outside it.
+func TestInitWritesNoTemplateThroughASymlinkInTheLeaf(t *testing.T) {
+	r := halfInit(t)
+	ctx := context.Background()
+	api, _ := r.Leaf("repos/api")
+	outside := outsideDir(t)
+	if err := os.Symlink(outside, filepath.Join(api.Dir(), "docs")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(ctx, r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "symlink") {
+		t.Fatalf("Advance() = %+v, %v; want a failure naming the symlink", out, err)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 1 {
+		t.Errorf("the folder outside the leaf holds %d entries; the template was written through the link", len(entries))
+	}
+}
