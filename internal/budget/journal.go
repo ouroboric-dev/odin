@@ -95,7 +95,7 @@ func (j *Journal) Append(e Entry) error {
 	if err := os.MkdirAll(j.Dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(j.File(e.Time), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	f, err := j.open(e.Time)
 	if err != nil {
 		return err
 	}
@@ -104,6 +104,21 @@ func (j *Journal) Append(e Entry) error {
 		return err
 	}
 	return f.Sync()
+}
+
+// Appendable opens today's file the way Append does, writes nothing, and closes it: ygg doctor finds
+// a journal that would refuse a session's spend before a session spends.
+func (j *Journal) Appendable() error {
+	f, err := j.open(j.now())
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// open opens the file of the day t falls in for appending, and creates it if it is missing.
+func (j *Journal) open(t time.Time) (*os.File, error) {
+	return os.OpenFile(j.File(t), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 }
 
 // Day adds up the usage recorded on the day t falls in. A last line cut short, which a crash leaves,
