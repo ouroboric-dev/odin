@@ -48,10 +48,16 @@ func runMerge(ctx context.Context, r *run.Run, n schema.Node) error {
 	if leaf.IsPolicy(landErr) { // a check rewrote the leaf's .git or planted a repository
 		return &hardStop{gate: gungnir.GatePolicyViolation, err: landErr}
 	}
-	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt,
+	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Task: n.Task,
 		DurationMS: time.Since(began).Milliseconds()}
 	if landErr != nil {
-		return failLanding(r, ev, landErr)
+		var mr *merge.Refused
+		if errors.As(landErr, &mr) && mr.Why == merge.WhyChecks && res.Checked != "" {
+			// The branch, with the base merged in, is what the checks refused: the loop goes on from there.
+			rec.Checkpoint = res.Checked
+			r.State.Leaves[n.Repo] = rec
+		}
+		return failLanding(r, n, ev, landErr)
 	}
 	rec.Checkpoint = res.Merged
 	r.State.Leaves[n.Repo] = rec
@@ -115,7 +121,7 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	var se *shrink.Error
 	if errors.As(moveErr, &se) {
 		// The attempt the node_started line opened closes in the ledger (backlog B-010).
-		fail := gungnir.Event{Name: gungnir.EventNodeFailed, Node: n.ID, Attempt: attempt, Result: moveErr.Error(),
+		fail := gungnir.Event{Name: gungnir.EventNodeFailed, Node: n.ID, Attempt: attempt, Task: n.Task, Result: moveErr.Error(),
 			DurationMS: time.Since(began).Milliseconds()}
 		if err := r.Log(fail); err != nil {
 			return err
@@ -125,13 +131,13 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	if leaf.IsPolicy(moveErr) { // a check rewrote the leaf's .git or planted a repository
 		return &hardStop{gate: gungnir.GatePolicyViolation, err: moveErr}
 	}
-	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt,
+	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Task: n.Task,
 		DurationMS: time.Since(began).Milliseconds()}
 	if moveErr != nil {
-		return failLanding(r, ev, moveErr)
+		return failLanding(r, n, ev, moveErr)
 	}
 	if res.Commit != "" {
-		moved := gungnir.Event{Name: gungnir.EventPointerMoved, Node: n.ID, Attempt: attempt, Commit: res.Commit,
+		moved := gungnir.Event{Name: gungnir.EventPointerMoved, Node: n.ID, Attempt: attempt, Task: n.Task, Commit: res.Commit,
 			Note: fmt.Sprintf("%s: %.12s -> %.12s", filepath.Join(parentRepo, child), res.From, res.To)}
 		if err := r.Log(moved); err != nil {
 			return err
@@ -146,7 +152,7 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 			return err
 		}
 		if !logged {
-			moved := gungnir.Event{Name: gungnir.EventPointerMoved, Node: n.ID, Attempt: attempt,
+			moved := gungnir.Event{Name: gungnir.EventPointerMoved, Node: n.ID, Attempt: attempt, Task: n.Task,
 				Note: fmt.Sprintf("%s: already at %.12s; an earlier attempt moved it and the run didn't record it", filepath.Join(parentRepo, child), res.To)}
 			if err := r.Log(moved); err != nil {
 				return err
@@ -162,8 +168,11 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 }
 
 // failLanding fails a merge or pointer node that the gate refused, or whose target another process
-// holds. Anything else is a failure of Odin itself.
-func failLanding(r *run.Run, ev gungnir.Event, err error) error {
+// holds. Anything else is a failure of Odin itself. A gate that refused because the work fails its checks
+// sends the work back into the loop that made it when the node names one (spec §4.5, back_to); a base that
+// doesn't merge cleanly, or a target another process holds, fails the node, since the implementer can't
+// fix either.
+func failLanding(r *run.Run, n schema.Node, ev gungnir.Event, err error) error {
 	var mr *merge.Refused
 	var pr *pointer.Refused
 	if !errors.As(err, &mr) && !errors.As(err, &pr) && !errors.Is(err, lock.ErrHeld) {
@@ -172,6 +181,11 @@ func failLanding(r *run.Run, ev gungnir.Event, err error) error {
 	ev.Name, ev.Result = gungnir.EventNodeFailed, err.Error()
 	if lerr := r.Log(ev); lerr != nil {
 		return lerr
+	}
+	if (mr != nil && mr.Why == merge.WhyChecks) || pr != nil {
+		if sent, serr := sendBack(r, n, err.Error()); sent || serr != nil {
+			return serr
+		}
 	}
 	return &nodeFailure{err}
 }
