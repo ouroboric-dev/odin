@@ -46,7 +46,7 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	if skillText != "" {
 		text += "\n\n" + skillText
 	}
-	text += "\n\n" + workspaceNote(r, present)
+	text += "\n\n" + workspaceNote(r, present, n.Reviews)
 	if r.Setup.BriefText != "" {
 		text += "\n\n## Brief\n\n" + r.Setup.BriefText
 	}
@@ -73,7 +73,7 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 }
 
 // workspaceNote tells the agent what its workspace holds and where its output goes.
-func workspaceNote(r *run.Run, present []string) string {
+func workspaceNote(r *run.Run, present []string, reviews string) string {
 	var b strings.Builder
 	b.WriteString("## Your workspace\n\nYou work in the folder you start in. It is not a repository, and nothing in it is committed by you.\n")
 	if r.Setup.BriefText != "" {
@@ -82,13 +82,17 @@ func workspaceNote(r *run.Run, present []string) string {
 	for _, p := range present {
 		fmt.Fprintf(&b, "- %s is a copy of the project's file or folder of that name. Read it. What you change in it is ignored.\n", p)
 	}
+	if reviews != "" {
+		fmt.Fprintf(&b, "- reviewed/ holds the output of the node %s, which you review: what it wrote under its out/. Read it. What you change in it is ignored.\n", reviews)
+	}
 	b.WriteString("- Write every document you produce under out/, in the folders it should have in the project (for example out/docs/2-engineering/specs/...). " +
 		"Only out/ leaves this workspace, and only after a person or a check has approved it.\n")
 	return b.String()
 }
 
 // seedScratch makes the workspace of node n anew: the brief, a copy of each input that exists in the
-// project, and an empty out/. It returns the inputs it copied. Everything in Odin's own folder is
+// project, and an empty out/. A node that reviews another scratch agent also gets a copy of that agent's
+// out/ as reviewed/. It returns the inputs it copied. Everything in Odin's own folder is
 // replaced; nothing outside it is touched. The folder itself stays, emptied in place: the scratch sandbox
 // mounts it and stays up across a retry and a refusal sent back, and a folder made again would not be
 // the one its container sees (review I-3). An input that is, or holds, a symlink or anything but a
@@ -119,6 +123,16 @@ func seedScratch(r *run.Run, n schema.Node) (present []string, err error) {
 			return nil, fmt.Errorf("input %s of %s: %w", in, n.ID, err)
 		}
 		present = append(present, in)
+	}
+	if n.Reviews != "" {
+		// The output of the agent under review, as a copy: the reviewer reads it and cannot change it.
+		src := filepath.Join(r.ScratchDir(n.Reviews), "out")
+		if st, err := os.Lstat(src); err != nil || !st.IsDir() {
+			return nil, fmt.Errorf("node %s reviews %s, which has no output to review", n.ID, n.Reviews)
+		}
+		if err := copyTree(src, src, filepath.Join(dir, "reviewed"), b); err != nil {
+			return nil, fmt.Errorf("the output of %s, which %s reviews: %w", n.Reviews, n.ID, err)
+		}
 	}
 	return present, nil
 }
