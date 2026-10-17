@@ -464,8 +464,14 @@ func (r *Run) AddLeaf(ctx context.Context, repo string) error {
 	if err != nil {
 		return err
 	}
-	r.State.Leaves[repo] = LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head}
+	r.State.Leaves[repo] = r.leafRecord(repo, head)
 	return r.Save()
+}
+
+// leafRecord is the record of a leaf that joins the run at head: its branch, and the realm that provides it.
+func (r *Run) leafRecord(repo, head string) LeafRecord {
+	rl := r.Setup.RealmOf(repo)
+	return LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head, Realm: rl.Name, RealmVersion: rl.Version}
 }
 
 // Leaves returns the paths of the leaves the graph works in, sorted.
@@ -876,7 +882,7 @@ func (r *Run) begin(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		r.State.Leaves[p] = LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head}
+		r.State.Leaves[p] = r.leafRecord(p, head)
 	}
 	return nil
 }

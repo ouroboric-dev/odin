@@ -7,11 +7,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/ledger"
+	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/tree"
 )
@@ -52,6 +54,7 @@ func (c *command) doctor(args []string) int {
 		return exit(bad)
 	}
 	if factory != nil {
+		checkRealms(factory, report)
 		checkBudget(factory, report)
 		c.checkSandbox(f.project, factory, report)
 	}
@@ -111,6 +114,43 @@ func checkConfig(path string, report func(level, what, msg string)) *schema.Fact
 	}
 	report("OK", "config", path)
 	return f
+}
+
+// checkRealms says which realm leaves the store holds and at which versions, and that each loads: a realm
+// a project pins must load at the pinned version, or its runs stop before they start (change
+// realm-leaf-naming). A config with no realms section takes --realm as a path, which is fine.
+func checkRealms(f *schema.Factory, report func(level, what, msg string)) {
+	if f.Realms == nil {
+		report("WARN", "realms", "no realms section: --realm takes a path, and a project can't pin a realm leaf")
+		return
+	}
+	entries, err := os.ReadDir(f.Realms.Dir)
+	if err != nil {
+		report("ERROR", "realms", err.Error())
+		return
+	}
+	var found []string
+	for _, e := range entries {
+		dir := filepath.Join(f.Realms.Dir, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "pack.yaml")); err != nil {
+			continue // not a realm leaf
+		}
+		r, err := realm.Load(dir)
+		if err != nil {
+			report("ERROR", "realms", e.Name()+": "+err.Error())
+			continue
+		}
+		if r.Name != e.Name() {
+			report("ERROR", "realms", fmt.Sprintf("%s holds the realm %s, so --realm %s can't find it", dir, r.Name, e.Name()))
+			continue
+		}
+		found = append(found, r.Name+" "+r.Version)
+	}
+	if len(found) == 0 {
+		report("ERROR", "realms", f.Realms.Dir+" holds no realm leaf")
+		return
+	}
+	report("OK", "realms", f.Realms.Dir+" ("+strings.Join(found, ", ")+")")
 }
 
 // checkBudget says what the caps are and how much of today's is used, and checks that the spend

@@ -126,6 +126,10 @@ type LeafRecord struct {
 	Branch     string `json:"branch"`     // the run's branch: ygg/<run id>
 	Base       string `json:"base"`       // the leaf's main when the run started
 	Checkpoint string `json:"checkpoint"` // the last checkpoint commit; resume resets the leaf to it
+	// Realm and RealmVersion are the realm leaf that provides this leaf, as the run used it (the lead
+	// realm's, for a leaf with no pin).
+	Realm        string `json:"realm,omitempty"`
+	RealmVersion string `json:"realm_version,omitempty"`
 }
 
 var idPattern = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$`)
