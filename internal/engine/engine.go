@@ -130,7 +130,7 @@ func startAttempt(r *run.Run, n schema.Node) (int, error) {
 
 func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
-	prompt, err := os.ReadFile(filepath.Join(r.Setup.RealmDir, n.Prompt))
+	prompt, err := os.ReadFile(filepath.Join(r.Setup.Realm(n.Realm).Dir, n.Prompt))
 	if err != nil {
 		return err
 	}
@@ -266,7 +266,7 @@ func runCheck(ctx context.Context, r *run.Run, node, repo, dir string, spec chec
 func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, repo, dir string) error {
 	for _, c := range names {
 		logPath := filepath.Join(r.Dir, "logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, c))
-		cmdErr, err := command(ctx, r, n.ID, repo, dir, r.Setup.Pack.Checks[c], time.Duration(n.Timeout), logPath)
+		cmdErr, err := command(ctx, r, n.ID, repo, dir, r.Setup.Realm(n.Realm).Pack.Checks[c], time.Duration(n.Timeout), logPath)
 		if err != nil {
 			return err
 		}
