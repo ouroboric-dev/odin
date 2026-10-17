@@ -132,6 +132,10 @@ func checkBudget(f *schema.Factory, report func(level, what, msg string)) {
 	}
 	probe.Close()
 	os.Remove(probe.Name())
+	if err := j.Appendable(); err != nil {
+		report("ERROR", "budget", "today's spend journal file can't be opened for appending: "+err.Error())
+		return
+	}
 	day, err := j.Today()
 	if err != nil {
 		report("ERROR", "budget", err.Error())

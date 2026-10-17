@@ -74,13 +74,20 @@ func (j *Journal) File(t time.Time) string {
 	return filepath.Join(j.Dir, t.In(j.loc()).Format("2006-01-02")+".jsonl")
 }
 
+// Stamp returns e with its time set to now when it has none, so an entry appended later, after the
+// journal failed, still belongs to the day it was spent.
+func (j *Journal) Stamp(e Entry) Entry {
+	if e.Time.IsZero() {
+		e.Time = j.now().UTC()
+	}
+	return e
+}
+
 // Append records one session's usage, now. The line is written with one write to a file opened for
 // appending, and synced, so lines from runs going at once never mix and a crash loses nothing that
 // was returned.
 func (j *Journal) Append(e Entry) error {
-	if e.Time.IsZero() {
-		e.Time = j.now().UTC()
-	}
+	e = j.Stamp(e)
 	line, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -88,7 +95,7 @@ func (j *Journal) Append(e Entry) error {
 	if err := os.MkdirAll(j.Dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(j.File(e.Time), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	f, err := j.open(e.Time)
 	if err != nil {
 		return err
 	}
@@ -99,23 +106,64 @@ func (j *Journal) Append(e Entry) error {
 	return f.Sync()
 }
 
+// Appendable opens today's file the way Append does, writes nothing, and closes it: ygg doctor finds
+// a journal that would refuse a session's spend before a session spends.
+func (j *Journal) Appendable() error {
+	f, err := j.open(j.now())
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// open opens the file of the day t falls in for appending, and creates it if it is missing.
+func (j *Journal) open(t time.Time) (*os.File, error) {
+	return os.OpenFile(j.File(t), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+}
+
 // Day adds up the usage recorded on the day t falls in. A last line cut short, which a crash leaves,
 // is ignored; any other line that is not an entry is an error, because a sum that skips lines would
 // under-count the spend, and a cap must err the other way.
 func (j *Journal) Day(t time.Time) (gungnir.Usage, error) {
 	var sum gungnir.Usage
+	es, err := j.entries(t)
+	for _, e := range es {
+		sum = sum.Add(e.Usage)
+	}
+	return sum, err
+}
+
+// Has reports whether the file of e's day holds e already: an entry of the same run and node, at the
+// same time. A pending entry is checked before it is written, since a process that stopped between
+// the append and the save that dropped it leaves it in both places.
+func (j *Journal) Has(e Entry) (bool, error) {
+	es, err := j.entries(e.Time)
+	if err != nil {
+		return false, err
+	}
+	for _, x := range es {
+		if x.Run == e.Run && x.Node == e.Node && x.Time.Equal(e.Time) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// entries reads the file of the day t falls in, as Day says.
+func (j *Journal) entries(t time.Time) ([]Entry, error) {
 	path := j.File(t)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return sum, nil
+		return nil, nil
 	}
 	if err != nil {
-		return sum, err
+		return nil, err
 	}
 	lines := bytes.Split(data, []byte("\n"))
 	if last := len(lines) - 1; len(lines[last]) > 0 {
 		lines = lines[:last] // no newline after it: the write was cut short
 	}
+	var es []Entry
 	for i, line := range lines {
 		if len(line) == 0 {
 			continue
@@ -124,11 +172,11 @@ func (j *Journal) Day(t time.Time) (gungnir.Usage, error) {
 		dec.DisallowUnknownFields()
 		var e Entry
 		if err := dec.Decode(&e); err != nil || !finite(e.Usage) {
-			return sum, fmt.Errorf("%s:%d is not a spend entry; fix or remove the line", path, i+1)
+			return nil, fmt.Errorf("%s:%d is not a spend entry; fix or remove the line", path, i+1)
 		}
-		sum = sum.Add(e.Usage)
+		es = append(es, e)
 	}
-	return sum, nil
+	return es, nil
 }
 
 // finite reports whether u is a usage a session could have had.

@@ -57,24 +57,28 @@ func TestAJournalThatCannotBeReadStopsTheRunAndSaysWhy(t *testing.T) {
 	if hit == nil || hit.Dimension != gungnir.CapJournal || !strings.Contains(hit.Error(), "2026-10-16.jsonl:1") {
 		t.Errorf("Check() = %v; an unreadable journal must count as a reached cap", hit)
 	}
-	if m.RemainingTurns() != 0 {
-		t.Errorf("RemainingTurns() = %d, want 0", m.RemainingTurns())
+	if left, hit := m.RemainingTurns(); left != 0 || hit == nil || hit.Scope != gungnir.CapDay || hit.Dimension != gungnir.CapJournal || !strings.Contains(hit.Error(), "2026-10-16.jsonl:1") {
+		t.Errorf("RemainingTurns() = %d, %v; want 0 and the journal's error", left, hit)
 	}
 }
 
 func TestTheTurnsLeftAreTheLesserOfTheRunsAndTheDays(t *testing.T) {
 	run := &gungnir.Usage{Turns: 4}
 	m, j := meter(t, run, false)
-	if got := m.RemainingTurns(); got != 6 {
-		t.Errorf("RemainingTurns() = %d, want 6 (the run's)", got)
+	if got, hit := m.RemainingTurns(); got != 6 || hit != nil {
+		t.Errorf("RemainingTurns() = %d, %v; want 6 (the run's)", got, hit)
 	}
 	j.Append(entry("20261016-090000-aaaaaa", 1, 27))
-	if got := m.RemainingTurns(); got != 3 {
-		t.Errorf("RemainingTurns() = %d, want 3 (the day's)", got)
+	if got, hit := m.RemainingTurns(); got != 3 || hit != nil {
+		t.Errorf("RemainingTurns() = %d, %v; want 3 (the day's)", got, hit)
+	}
+	j.Append(entry("20261016-090000-aaaaaa", 1, 5))
+	if got, hit := m.RemainingTurns(); got != 0 || hit == nil || hit.Scope != gungnir.CapDay || hit.Dimension != gungnir.CapTurns || hit.Used != 32 || hit.Limit != 30 {
+		t.Errorf("RemainingTurns() = %d, %v; want 0 and the day's turns cap, 32 used of 30", got, hit)
 	}
 	run.Turns = 99
-	if got := m.RemainingTurns(); got != 0 {
-		t.Errorf("RemainingTurns() = %d, want 0, never negative", got)
+	if got, hit := m.RemainingTurns(); got != 0 || hit == nil || hit.Scope != gungnir.CapRun || hit.Dimension != gungnir.CapTurns || hit.Used != 99 || hit.Limit != 10 {
+		t.Errorf("RemainingTurns() = %d, %v; want 0 and the run's turns cap first, 99 used of 10", got, hit)
 	}
 }
 

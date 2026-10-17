@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
@@ -45,22 +46,14 @@ func startSession(r *run.Run, key string) (int, error) {
 // failure; or an error of Odin's own.
 func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, gungnir.Event, error) {
 	role := r.Setup.Config.Roles[sp.role]
-	var fatal error // an error of Odin's own, which must never read as a failure of the agent
+	var fatal error // an error of Odin's own, or a cap found at the try, which must never read as a failure of the agent
 	var done gungnir.Event
 	meter := r.Meter()
 	retrier := jormungandr.Retrier{Backoff: r.Setup.Backoff, Meter: meter, Sleep: r.Setup.Sleep,
 		OnRetry: func(try int, wait time.Duration, why string) error {
-			// A read-only session's leaf is compared first: the reset would hide what it changed (review I1).
-			if sp.readOnly {
-				if err := readOnly(context.WithoutCancel(ctx), r, sp.repo, sp.role, sp.before); err != nil {
-					return err
-				}
-			}
 			// The failed try may have left half its work in the leaf: the retry starts from the checkpoint.
-			if _, ok := r.State.Leaves[sp.repo]; ok {
-				if err := r.DiscardWork(ctx, sp.repo); err != nil {
-					return err
-				}
+			if err := setAside(ctx, r, sp); err != nil {
+				return err
 			}
 			return r.Log(gungnir.Event{Name: gungnir.EventRetry, Node: sp.key, Attempt: r.State.Attempts[sp.key],
 				Note: fmt.Sprintf("try %d failed for a reason that is not the agent's; it runs again in %s: %s", try, wait, why)})
@@ -75,6 +68,13 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 				return stop(err)
 			}
 			sp.started = nil
+		}
+		// The caps may have no turn left though the meter let this try start: another run can spend the
+		// day's last turns in between. The session then does not start, rather than run with no bound
+		// (review M3); the cap reaches the caller as it is, as a cap the meter found would.
+		left, hit := meter.RemainingTurns()
+		if hit != nil {
+			return stop(hit)
 		}
 		attempt, err := startSession(r, sp.key)
 		if err != nil {
@@ -92,7 +92,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 			return stop(sandboxStart(err))
 		}
 		task := gungnir.Task{Role: sp.role, Node: sp.key, Attempt: attempt, Prompt: sp.text, Workdir: r.RepoDir(sp.repo),
-			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turnsFor(sp.maxTurns, meter.RemainingTurns()), Timeout: sp.timeout,
+			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turnsFor(sp.maxTurns, left), Timeout: sp.timeout,
 			TranscriptDir: filepath.Join(r.Dir, "transcripts"), Sandbox: runner}
 		actx, cancel := ctx, context.CancelFunc(func() {})
 		if task.Timeout > 0 {
@@ -115,6 +115,16 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 			spent = se.Usage
 		}
 		if err := r.Spend(sp.key, spent); err != nil {
+			// The journal can't record the spend, so the run stops at budget-cap (review I4). The leaf goes
+			// back to its checkpoint first, as for a retry, so a resume or an approval doesn't refuse it as
+			// changed while the run waited.
+			if _, ok := jormungandr.IsCap(err); ok {
+				from := len(r.Saved)
+				if serr := setAside(ctx, r, sp); serr != nil {
+					return stop(serr)
+				}
+				r.SetAside = slices.Clone(r.Saved[from:]) // this set-aside's notes only, for the gate
+			}
 			return stop(err)
 		}
 		if err := warnBudget(r, sp.key); err != nil {
@@ -145,8 +155,25 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 	return res, done, err
 }
 
+// setAside puts the session's leaf back to its checkpoint, what the session left saved or discarded
+// as DiscardWork says. A read-only session's leaf is compared first: the reset would hide what it
+// changed (review I1).
+func setAside(ctx context.Context, r *run.Run, sp sessionSpec) error {
+	if sp.readOnly {
+		if err := readOnly(context.WithoutCancel(ctx), r, sp.repo, sp.role, sp.before); err != nil {
+			return err
+		}
+	}
+	if _, ok := r.State.Leaves[sp.repo]; ok {
+		return r.DiscardWork(ctx, sp.repo)
+	}
+	return nil
+}
+
 // turnsFor bounds a session's turns by what the caps still allow, so one session can't run far past
-// a cap that is checked only between sessions. 0 means the adapter's own limit.
+// a cap that is checked only between sessions. left is above zero, since a session the caps leave no
+// turn for does not start, so the bound is never 0, which a gungnir.Task reads as the adapter's own
+// limit.
 func turnsFor(node int, left int64) int {
 	if node > 0 && int64(node) <= left {
 		return node

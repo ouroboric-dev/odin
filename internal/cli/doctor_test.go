@@ -87,3 +87,33 @@ func TestDoctorChecksTheSpendJournal(t *testing.T) {
 		}
 	}
 }
+
+// Review I4: the journal folder can be fine while today's file can't take a line; doctor opens today's
+// file for appending, as a session's spend does.
+func TestDoctorOpensTodaysJournalFileForAppending(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root writes to a file of mode 0400")
+	}
+	dir, config := project(t, "script.yaml", "")
+	journal := filepath.Join(t.TempDir(), "spend")
+	os.MkdirAll(journal, 0o700)
+	today := filepath.Join(journal, time.Now().Format("2006-01-02")+".jsonl")
+	if err := os.WriteFile(today, nil, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(config)
+	os.WriteFile(config, append(b, []byte("  journal: "+journal+"\n")...), 0o644)
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	if code != ExitFailed || !strings.Contains(out, "ERROR budget: ") || !strings.Contains(out, today) {
+		t.Errorf("doctor with today's journal file read-only: exit %d:\n%s", code, out)
+	}
+	if err := os.Chmod(today, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config); code != ExitDone || !strings.Contains(out, "OK    budget: ") {
+		t.Errorf("doctor with today's journal file writable: exit %d:\n%s", code, out)
+	}
+	if b, _ := os.ReadFile(today); len(b) != 0 {
+		t.Errorf("doctor wrote %q to today's journal file; it must write nothing", b)
+	}
+}

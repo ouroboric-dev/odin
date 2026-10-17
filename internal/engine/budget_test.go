@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -227,19 +228,102 @@ func (b journalBreaker) Run(ctx context.Context, t gungnir.Task) (gungnir.Result
 	return res, errors.Join(err, os.WriteFile(b.dir, nil, 0o600))
 }
 
-// Review I4: a journal that can't be written still leaves the session in the run's usage.
-func TestASpendTheJournalCannotTakeStillCountsInTheRun(t *testing.T) {
+// Review I4: a session whose spend the journal can't take stops the run at budget-cap, since the
+// per-day cap can't be kept. The spend still counts in the run and stays pending in run.json, the
+// leaf is put back to its checkpoint with what the session wrote set aside, and once the journal is
+// fixed, approving runs the node again and the journal gets the first session's spend.
+func TestASpendTheJournalCannotTakeStopsAtBudgetCapWithTheWorkSetAside(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	journal := filepath.Join(t.TempDir(), "spend")
-	r := startWith(t, setup{nodes: twoNodes, script: spendScript, journal: journal})
+	again := "    - actions: [ { write: { path: a.txt, content: \"a again\\n\" } } ]\n      result: { status: ok, summary: did a again, usage: { in: 5, out: 1, turns: 1 } }\n"
+	script := strings.Replace(spendScript, "  b:\n", again+"  b:\n", 1)
+	r := startWith(t, setup{nodes: twoNodes, script: script, journal: journal})
 	r.Setup.Agents["planner"] = journalBreaker{Agent: r.Setup.Agents["planner"], dir: journal}
-	if out, err := Advance(context.Background(), r); err == nil || !strings.Contains(err.Error(), "recording the spend") {
-		t.Fatalf("Advance() = %+v, %v; want the journal's error", out, err)
+	r.Saved = []string{"repos/app: an earlier discard in this process"} // not this stop's: the gate must not list it
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateBudgetCap || out.Gate != "a" {
+		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at budget-cap at node a", out, err, r.State.PendingGate)
 	}
 	s, err := run.LoadState(r.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Usage.InTok != 100 || s.Usage.Turns != 3 {
-		t.Errorf("run.json usage = %+v; the session's spend counts though the journal didn't take it", s.Usage)
+	if s.Usage.InTok != 100 || s.Usage.Turns != 3 || len(s.PendingSpend) != 1 {
+		t.Errorf("run.json usage = %+v, pending = %+v; the session's spend counts though the journal didn't take it", s.Usage, s.PendingSpend)
+	}
+	l, err := r.Leaf("repos/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _ := l.Head(context.Background())
+	st, _ := l.Git(context.Background(), "status", "--porcelain")
+	if head != s.Leaves["repos/app"].Checkpoint || st != "" {
+		t.Errorf("the leaf is at %s with changes %q; want it back at its checkpoint %s", head, st, s.Leaves["repos/app"].Checkpoint)
+	}
+	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "a-1.md"))
+	for _, want := range []string{journal, "ygg doctor checks only today's journal file", "run.json", "refs/ygg/" + s.ID + "/discarded/"} {
+		if !strings.Contains(string(gate), want) {
+			t.Errorf("the gate file doesn't name %q:\n%s", want, gate)
+		}
+	}
+	for _, wrong := range []string{"Raise the cap", "wait until", "an earlier discard"} {
+		if strings.Contains(string(gate), wrong) {
+			t.Errorf("the gate file says %q, which doesn't help a journal that can't be written:\n%s", wrong, gate)
+		}
+	}
+	// The operator fixes the journal and approves: the run goes on.
+	if err := os.Remove(journal); err != nil {
+		t.Fatal(err)
+	}
+	r = reopen(t, r)
+	if err := Approve(context.Background(), r, "a", "the journal is fixed"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v; want done", out, err)
+	}
+	if r.State.Attempts["a"] != 2 {
+		t.Errorf("node a ran %d session(s), want 2: approving runs it again", r.State.Attempts["a"])
+	}
+	if got := today(t, r); got != r.State.Usage || got.InTok != 100+5+10 {
+		t.Errorf("the day's journal = %+v, run usage = %+v; want every session's spend, the first one's too", got, r.State.Usage)
+	}
+}
+
+// countingAgent counts the sessions its agent was asked to run.
+type countingAgent struct {
+	gungnir.Agent
+	calls *int
+}
+
+func (c countingAgent) Run(ctx context.Context, t gungnir.Task) (gungnir.Result, error) {
+	*c.calls++
+	return c.Agent.Run(ctx, t)
+}
+
+// Review M3: another run can spend the day's last turns after the meter let a session start. The
+// session must not then start with no turn bound, which a MaxTurns of 0 would mean.
+func TestASessionTheCapsLeaveNoTurnsForDoesNotStart(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	r := startWith(t, setup{nodes: twoNodes, script: spendScript, budget: caps(100000, 100, 200000, 5)})
+	var calls int
+	r.Setup.Agents["planner"] = countingAgent{Agent: r.Setup.Agents["planner"], calls: &calls}
+	// The meter has let the session start; then another run spends the day's last turns.
+	spend := func() error {
+		return r.Setup.Journal.Append(budget.Entry{Run: "20261016-090000-aaaaaa", Project: "/another/project", Node: "x", Usage: gungnir.Usage{InTok: 10, OutTok: 1, Turns: 5}})
+	}
+	_, _, err := session(context.Background(), r, sessionSpec{key: "a", role: "planner", repo: "repos/app", text: "Do the work.", started: spend})
+	if calls != 0 {
+		t.Errorf("the agent ran %d session(s) though the caps left no turns", calls)
+	}
+	c, ok := jormungandr.IsCap(err)
+	if !ok || c.Dimension != gungnir.CapTurns || c.Scope != gungnir.CapDay || c.Used != 5 || c.Limit != 5 {
+		t.Fatalf("session() error = %v (%+v); want the per-day turns cap, 5 used of 5", err, c)
+	}
+	if r.State.Attempts["a"] != 0 {
+		t.Errorf("attempts = %d; a session that never started counts none", r.State.Attempts["a"])
+	}
+	if strings.Contains(ledgerText(t, r), `"event":"node_started"`) {
+		t.Errorf("the ledger says a session started that never did:\n%s", ledgerText(t, r))
 	}
 }
