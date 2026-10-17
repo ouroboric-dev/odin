@@ -12,8 +12,9 @@ import (
 
 const sandboxExtra = "sandbox:\n  engine: unix:///run/ygg-test.sock\n"
 
-// stubEngine puts a podman and a devcontainer that log their calls first on PATH. STUB_ROOTLESS
-// and STUB_LEFT, set by the test, say what they answer.
+// stubEngine puts a podman and a devcontainer that log their calls first on PATH. The engine tools get
+// none of the test's variables but PATH and the folders, so what they answer is in files beside them,
+// which stubSays writes: rootless and left.
 func stubEngine(t *testing.T) (log string) {
 	t.Helper()
 	bin := t.TempDir()
@@ -23,12 +24,14 @@ func stubEngine(t *testing.T) (log string) {
 			t.Fatal(err)
 		}
 	}
-	write("podman", `echo "podman $*" >> "$STUB_LOG"
+	write("podman", `d=$(dirname "$0")
+echo "podman $*" >> "$d/calls.log"
+answer() { if [ -f "$d/$1" ]; then cat "$d/$1"; else echo "$2"; fi; }
 case "$1" in
-  info) echo "${STUB_ROOTLESS:-true} 5.7.1" ;;
+  info) echo "$(answer rootless true) 5.7.1" ;;
   ps)
     case "$*" in
-      *--format*) echo "${STUB_LEFT:-[]}" ;;
+      *--format*) answer left "[]" ;;
       *) echo c1 ;;
     esac ;;
   network) [ "$2" = exists ] && exit 1 ;;
@@ -37,8 +40,15 @@ exit 0
 `)
 	write("devcontainer", "echo 0.89.0\n")
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-	t.Setenv("STUB_LOG", log)
 	return log
+}
+
+// stubSays sets what the stub engine whose log is log answers for name.
+func stubSays(t *testing.T, log, name, answer string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(filepath.Dir(log), name), []byte(answer+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // withSandbox returns a copy of config with a sandbox section, for doctor: a run starts under the plain
@@ -69,7 +79,7 @@ func TestDoctorChecksTheEngineAndStopsLeftoverSandboxes(t *testing.T) {
 		t.Fatalf("run: exit %d: %s", code, errOut)
 	}
 	id := runID(t, dir)
-	t.Setenv("STUB_LEFT", leftoverJSON(id, "repos/app", "ygg-p1"))
+	stubSays(t, log, "left", leftoverJSON(id, "repos/app", "ygg-p1"))
 	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
 	for _, want := range []string{"OK    engine: podman 5.7.1, rootless", "OK    devcontainer: CLI 0.89.0", "WARN  sandboxes: run " + id + " left the sandbox of repos/app (running); stopped it"} {
 		if !strings.Contains(out, want) {
@@ -97,9 +107,9 @@ func TestDoctorLeavesWhatALiveRunOrAnotherProjectOwns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
-	t.Setenv("STUB_LEFT", leftoverJSON(id, "repos/app", "ygg-live"))
+	stubSays(t, log, "left", leftoverJSON(id, "repos/app", "ygg-live"))
 	ygg(t, "doctor", "--project", dir, "--config", config)
-	t.Setenv("STUB_LEFT", leftoverJSON("20250101-000000-abcdef", "repos/app", "ygg-other"))
+	stubSays(t, log, "left", leftoverJSON("20250101-000000-abcdef", "repos/app", "ygg-other"))
 	_, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
 	if !strings.Contains(out, "belongs to another project") {
 		t.Errorf("doctor's output:\n%s", out)
@@ -110,8 +120,7 @@ func TestDoctorLeavesWhatALiveRunOrAnotherProjectOwns(t *testing.T) {
 }
 
 func TestDoctorRefusesARootfulEngine(t *testing.T) {
-	stubEngine(t)
-	t.Setenv("STUB_ROOTLESS", "false")
+	stubSays(t, stubEngine(t), "rootless", "false")
 	dir, plain := project(t, "script.yaml", "")
 	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", withSandbox(t, plain))
 	if code != ExitFailed || !strings.Contains(out, "ERROR engine:") || !strings.Contains(out, "rootful") {
