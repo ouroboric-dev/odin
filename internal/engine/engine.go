@@ -321,9 +321,19 @@ func runCheck(ctx context.Context, r *run.Run, node, repo, dir string, spec chec
 // when the run has one; the pointer node's acceptance checks pass "" and the umbrella's dir, and run
 // on the host.
 func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, repo, dir string) error {
+	// A pointer node's acceptance checks, which pass no repo, are the lead realm's, run in the project; the
+	// checks of a leaf are its realm's.
+	rl := r.Setup.Realm(n.Realm)
+	if repo == "" {
+		rl = r.Setup.Realm("")
+	}
 	for _, c := range names {
+		argv := rl.Pack.Checks[c]
+		if len(argv) == 0 {
+			return &nodeFailure{fmt.Errorf("the realm %s defines no check %s", rl.Name, c)}
+		}
 		logPath := filepath.Join(r.Dir, "logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, c))
-		cmdErr, err := command(ctx, r, n.ID, repo, dir, r.Setup.Realm(n.Realm).Pack.Checks[c], time.Duration(n.Timeout), logPath)
+		cmdErr, err := command(ctx, r, n.ID, repo, dir, argv, time.Duration(n.Timeout), logPath)
 		if err != nil {
 			return err
 		}

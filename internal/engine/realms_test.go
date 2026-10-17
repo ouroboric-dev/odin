@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,5 +136,35 @@ func TestANodeReadsItsPromptAndRunsItsChecksFromItsOwnRealm(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(r.RepoDir("repos/web"), "ran-by.txt")); strings.TrimSpace(string(b)) != "lead" {
 		t.Errorf("the web's check was run by %q", b)
+	}
+}
+
+func TestAPointersAcceptanceChecksAreTheLeadRealmsEvenInALeafOfAnotherRealm(t *testing.T) {
+	realms := twoRealms()
+	realms[0].pack += "  accept: [sh, -c, \"echo lead > accepted-by.txt\"]\n"
+	r := startRealms(t, realmsSetup{realms: realms, leaves: map[string]string{"repos/api": "helheim-go"},
+		nodes: "  - { id: api-touch, kind: exec, run: [echo, api], repo: repos/api }\n", script: "steps: {}\n"})
+	api := schema.Node{ID: "move", Kind: schema.KindPointer, Repo: "repos/api", Realm: "helheim-go", Acceptance: []string{"accept"}}
+	// The acceptance check runs in the project, with no repo: helheim-go defines no accept, and the lead does.
+	if err := runChecks(context.Background(), r, api, 1, api.Acceptance, "", r.Project); err != nil {
+		t.Fatalf("runChecks() = %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.Project, "accepted-by.txt")); strings.TrimSpace(string(b)) != "lead" {
+		t.Errorf("the acceptance check was run by %q", b)
+	}
+}
+
+func TestACheckTheRealmDoesNotDefineIsAnErrorNotAPanic(t *testing.T) {
+	r := startRealms(t, realmsSetup{realms: twoRealms(), leaves: map[string]string{"repos/api": "helheim-go"},
+		nodes: "  - { id: api-touch, kind: exec, run: [echo, api], repo: repos/api }\n", script: "steps: {}\n"})
+	n := schema.Node{ID: "land", Kind: schema.KindMerge, Repo: "repos/api", Realm: "helheim-go", Checks: []string{"nope"}}
+	err := runChecks(context.Background(), r, n, 1, n.Checks, "repos/api", r.RepoDir("repos/api"))
+	var nf *nodeFailure
+	if !errors.As(err, &nf) || !strings.Contains(err.Error(), "the realm helheim-go defines no check nope") {
+		t.Errorf("runChecks() = %v", err)
+	}
+	steps := &loopSteps{r: r, n: schema.Node{ID: "build", Kind: schema.KindLoop, Repo: "repos/api", Realm: "helheim-go"}}
+	if _, err := steps.Check(context.Background(), 1, "nope"); !errors.As(err, &nf) || !strings.Contains(err.Error(), "defines no check nope") {
+		t.Errorf("the loop's Check() = %v", err)
 	}
 }

@@ -141,7 +141,11 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormungandr.CheckOutcome, error) {
 	r, n := l.r, l.n
 	rel := filepath.Join("logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, name))
-	res, err := runCheck(ctx, r, n.ID, n.Repo, r.RepoDir(n.Repo), checks.Spec{Name: name, Argv: r.Setup.Realm(n.Realm).Pack.Checks[name], Timeout: ExecTimeout},
+	argv := r.Setup.Realm(n.Realm).Pack.Checks[name]
+	if len(argv) == 0 {
+		return jormungandr.CheckOutcome{}, &nodeFailure{fmt.Errorf("the realm %s defines no check %s", r.Setup.Realm(n.Realm).Name, name)}
+	}
+	res, err := runCheck(ctx, r, n.ID, n.Repo, r.RepoDir(n.Repo), checks.Spec{Name: name, Argv: argv, Timeout: ExecTimeout},
 		filepath.Join(r.Dir, rel))
 	if err == nil {
 		var lf *leaf.Leaf
