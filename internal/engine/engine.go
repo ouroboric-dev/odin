@@ -199,6 +199,9 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if r.Setup.BriefText != "" {
 		text += "\n\n## Brief\n\n" + r.Setup.BriefText
 	}
+	if block := taskBlock(r, n); block != "" {
+		text += "\n\n" + block
+	}
 	if reason := s.Reasons[n.ID]; reason != "" {
 		text += "\n\n## Rejected at the approval point\n\n" + reason + "\n"
 	}

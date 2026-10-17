@@ -112,6 +112,9 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 	if err != nil {
 		return err
 	}
+	if block := taskBlock(r, n); block != "" {
+		text += "\n\n" + block
+	}
 	text += "\n\n" + jormungandr.Feedback(in.Open, in.LastFailure, r.State.Reasons[n.ID]) + jormungandr.Refusal(r.State.Refusals[n.ID])
 	started := func() error {
 		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: attempt,
@@ -192,6 +195,9 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	text, err := l.prompt("", rv.Prompt, rv.Skills)
 	if err != nil {
 		return "", err
+	}
+	if block := taskBlock(r, n); block != "" {
+		text += "\n\n" + block
 	}
 	text += "\n\n" + jormungandr.ReviewRequest(rv.ID, open, passed)
 	before, err := snapshot(ctx, r, n.Repo)

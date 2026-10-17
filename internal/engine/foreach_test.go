@@ -174,3 +174,45 @@ func TestATaskInALeafWhoseRealmOffersNoRecipeFailsTheNode(t *testing.T) {
 		t.Error("a failed expansion was recorded")
 	}
 }
+
+func TestTheTaskIsInThePromptOfItsImplementerAndItsReviewer(t *testing.T) {
+	shape := strings.Replace(taskShape, "      - { id: implement, kind: loop, realm: leaf, role: implementer }\n",
+		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md } ] }\n", 1)
+	script := "steps:\n" + writeStep("p-t1-implement", "api.txt") + "  p-t1-implement-spec:\n    - result: { status: ok, summary: no findings, report: [] }\n"
+	r := startRealms(t, realmsSetup{nodes: shape, script: script,
+		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")},
+		leaves: map[string]string{"repos/api": "helheim-go"}})
+	plan := "# Tasks\n\n## p-T1: the API stores galleries\n\n- **Acceptance criteria:**\n  - [ ] a gallery can be created\n  - [ ] a name is required\n" +
+		"- **Named test:** repos/api/gallery_test.go TestCreate\n- **Layer:** repos/api\n- **Size:** S\n- **Depends on:** nothing\n"
+	os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte(plan), 0o644)
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	for _, stem := range []string{"p-t1-implement-1", "p-t1-implement-spec-1"} {
+		got := promptOf(t, r, stem)
+		for _, want := range []string{"## Your task", "p-T1: the API stores galleries", "You work in the leaf repos/api.", "- a gallery can be created", "- a name is required",
+			"The test that proves it: repos/api/gallery_test.go TestCreate"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("the prompt of %s lacks %q:\n%s", stem, want, got)
+			}
+		}
+	}
+}
+
+func TestATasksWordsAreBoundedInAPrompt(t *testing.T) {
+	r := startRealms(t, realmsSetup{nodes: taskShape, script: "steps: {}\n", realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web.")},
+		leaves: map[string]string{"repos/web": "midgard-react"}})
+	long := strings.Repeat("w", 5000)
+	f := schema.Feature{ID: "p-T1", Title: long, Layer: "repos/web", Test: long}
+	for i := 0; i < 40; i++ {
+		f.Criteria = append(f.Criteria, long)
+	}
+	r.State.Features = []schema.FeatureRecord{{Feature: f, Status: schema.TaskTodo}}
+	got := taskBlock(r, schema.Node{Task: "p-t1"})
+	if len(got) > 40*1100 || strings.Contains(got, strings.Repeat("w", 1001)) || !strings.Contains(got, "... and 10 more in the plan") {
+		t.Errorf("the block is %d bytes: a task's words are cut, and criteria past the thirtieth are counted", len(got))
+	}
+	if taskBlock(r, schema.Node{}) != "" || taskBlock(r, schema.Node{Task: "nobody"}) != "" {
+		t.Error("a node with no task, or an unknown one, gets a task block")
+	}
+}

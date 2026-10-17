@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
@@ -147,6 +148,47 @@ func writeFeatures(r *run.Run) error {
 	}
 	f := &schema.Features{Run: s.ID, Source: s.PlanSource, SourceSHA256: s.PlanSHA256, Tasks: slices.Clone(s.Features)}
 	return f.Save(filepath.Join(r.Project, filepath.FromSlash(FeaturesFile)))
+}
+
+// What a task's text may take up in a prompt: the plan is written by an agent, and one task's fields
+// must not swamp a session.
+const (
+	maxTaskTitle    = 200
+	maxTaskCriteria = 30
+	maxTaskField    = 1000
+)
+
+func clip(s string, n int) string {
+	if r := []rune(strings.TrimSpace(s)); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return strings.TrimSpace(s)
+}
+
+// taskBlock tells a session what its task is, as the plan states it (spec §4.4: a session reads its task
+// from features.json, and Odin, the only reader of that file, puts the task in the prompt). It is empty
+// for a node that works for no task. The words are the planner's, bounded, and are data to the session as
+// the rest of the repository is.
+func taskBlock(r *run.Run, n schema.Node) string {
+	i := slices.IndexFunc(r.State.Features, func(f schema.FeatureRecord) bool { return n.Task != "" && f.Slug() == n.Task })
+	if i < 0 {
+		return ""
+	}
+	f := r.State.Features[i]
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Your task\n\n%s: %s\n\nYou work in the leaf %s.\n\nAcceptance criteria:\n", f.ID, clip(f.Title, maxTaskTitle), f.Layer)
+	for j, c := range f.Criteria {
+		if j == maxTaskCriteria {
+			fmt.Fprintf(&b, "- ... and %d more in the plan\n", len(f.Criteria)-j)
+			break
+		}
+		fmt.Fprintf(&b, "- %s\n", clip(c, maxTaskField))
+	}
+	fmt.Fprintf(&b, "\nThe test that proves it: %s\n", clip(f.Test, maxTaskField))
+	if len(f.DependsOn) > 0 {
+		fmt.Fprintf(&b, "\nIt builds on: %s (already landed).\n", strings.Join(f.DependsOn, ", "))
+	}
+	return b.String()
 }
 
 // expanded is a foreach node that became the nodes of its tasks: Position now points at the first of them.
