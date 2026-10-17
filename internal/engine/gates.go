@@ -57,7 +57,7 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action) (
 	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Decision: %s\n- Time: %s\n\n", s.ID, s.Mode, decision,
 		time.Now().UTC().Format(time.RFC3339))
 	b.WriteString("## What happened\n\n")
-	nodes := r.Setup.Graph.Nodes
+	nodes := r.Nodes()
 	start := 0
 	for i := s.Position - 1; i >= 0; i-- {
 		if nodes[i].Kind == schema.KindGate {
@@ -103,7 +103,7 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 		return err
 	}
 	s := r.State
-	n := r.Setup.Graph.Nodes[s.Position]
+	n := r.Nodes()[s.Position]
 	if n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation {
 		if rec := s.Loops[n.ID]; rec == nil || rec.Escalation == nil || rec.Escalation.Reason != jormungandr.ReasonExhausted {
 			return fmt.Errorf("loop %s stopped because a reviewer's answer can't be read, and an answer nobody can read is not an approval; "+
@@ -124,6 +124,9 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 		s.Summaries[n.ID] = fmt.Sprintf("accepted by the operator after %d attempt(s), with %d finding(s) open", rec.State.Attempt-1, len(rec.State.Book.Open()))
 		delete(s.Reasons, n.ID)
 		s.Position++
+	case run.Quarantines(s.PendingGate) && n.Repo == "":
+		// A node that works in the project, such as a publish: nothing in a leaf to put back. The person
+		// edited the workspace the stop names, and the node runs again.
 	case run.Quarantines(s.PendingGate):
 		rec := s.Leaves[n.Repo]
 		l, err := r.Leaf(n.Repo)
@@ -144,10 +147,10 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 // loop that gave up. A hard stop that a node raised takes approve only, or a new run (spec §7.2).
 func Rejectable(r *run.Run) bool {
 	s := r.State
-	if s.Pending == "" || s.Position >= len(r.Setup.Graph.Nodes) {
+	if s.Pending == "" || s.Position >= len(r.Nodes()) {
 		return false
 	}
-	n := r.Setup.Graph.Nodes[s.Position]
+	n := r.Nodes()[s.Position]
 	return n.Kind == schema.KindGate || (n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation)
 }
 
@@ -155,10 +158,10 @@ func Rejectable(r *run.Run) bool {
 // reviewer's answer can't be read does not: that is not a decision a person can take for the reviewer.
 func Approvable(r *run.Run) bool {
 	s := r.State
-	if s.Pending == "" || s.Position >= len(r.Setup.Graph.Nodes) {
+	if s.Pending == "" || s.Position >= len(r.Nodes()) {
 		return false
 	}
-	n := r.Setup.Graph.Nodes[s.Position]
+	n := r.Nodes()[s.Position]
 	if n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation {
 		rec := s.Loops[n.ID]
 		return rec != nil && rec.Escalation != nil && rec.Escalation.Reason == jormungandr.ReasonExhausted
@@ -176,7 +179,7 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 		return err
 	}
 	s := r.State
-	g := r.Setup.Graph
+	nodes := r.Nodes()
 	if !Rejectable(r) {
 		return fmt.Errorf("%s stopped at the hard approval point %s, which takes approve; to drop the work, start a new run", gateID, s.PendingGate)
 	}
@@ -186,7 +189,7 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 	if err := r.Log(gungnir.Event{Name: gungnir.EventGateRejected, Node: gateID, Gate: gateID, Note: reason}); err != nil {
 		return err
 	}
-	if n := g.Nodes[s.Position]; n.Kind == schema.KindLoop {
+	if n := nodes[s.Position]; n.Kind == schema.KindLoop {
 		rec := s.Loops[n.ID]
 		rec.State.Extend(loopConfig(n))
 		rec.Escalation = nil
@@ -195,13 +198,17 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 		target := n.Reruns
 		s.Reasons[target] = reason
 		gate := s.Position
-		s.Position = g.Index(target)
+		s.Position = indexOf(nodes, target)
 		// Every loop from the target up to the gate starts over: the work under a loop that passed changes
 		// when a node before it runs again (review I2).
-		for _, m := range g.Nodes[s.Position:gate] {
+		for _, m := range nodes[s.Position:gate] {
 			if m.Kind == schema.KindLoop {
 				delete(s.Loops, m.ID)
 			}
+			delete(s.Returns, m.ID) // a rejection is a fresh start: a refusal may go back again
+		}
+		if err := replan(r, nodes[s.Position:gate]); err != nil {
+			return err
 		}
 	}
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
@@ -237,6 +244,8 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 		time.Now().UTC().Format(time.RFC3339), h.err)
 	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
 	switch {
+	case run.Quarantines(h.gate) && n.Repo == "":
+		fmt.Fprintf(&b, "Nothing was published. The documents are in %s; remove what the scan found, and then approve: %s runs again.\n", filepath.Join(r.ScratchDir(n.From), "out"), n.ID)
 	case run.Quarantines(h.gate):
 		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again; what the node wrote is not saved.\n", n.Repo, n.ID)
 	case h.gate == gungnir.GateBudgetCap && journalCap(h.err) && len(s.PendingSpend) > 0:
@@ -275,4 +284,14 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 	}
 	s.Status, s.Pending, s.PendingGate = run.StatusStopped, n.ID, h.gate
 	return Outcome{Status: run.StatusStopped, Gate: n.ID}, r.Save()
+}
+
+// indexOf returns the position of the node with the given id, or -1.
+func indexOf(nodes []schema.Node, id string) int {
+	for i, n := range nodes {
+		if n.ID == id {
+			return i
+		}
+	}
+	return -1
 }

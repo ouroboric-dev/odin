@@ -1,0 +1,14 @@
+# The second realm of the realms smoke run: a leaf recipe and no graph, with a stack of its own.
+name: smoke-api
+version: 0.1.0
+checks:
+  unit: [grep, -q, hello, hello.txt]
+leaf:
+  description: A smoke leaf of the second realm.
+  template: templates/leaf
+  first_commit: [LICENSE]
+  implementer: prompts/implementer.md
+  checks: [unit]
+sandbox:
+  stack: docker.io/library/golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514
+  egress: []

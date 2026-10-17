@@ -22,7 +22,12 @@ type Node struct {
 	Leaf       bool            // a leaf holds a README; an umbrella holds umbrella.yaml
 	Children   map[string]Node // path relative to this umbrella: child node
 	Plain      []string        // submodules that are not nodes, such as shared assets an umbrella vendors
+	Pin        Pin             // the realm leaf this node is built with: a leaf's own, an umbrella's lead realm
+	Consumes   []string        // a leaf: the sibling leaves it calls
 }
+
+// Pin is a realm leaf and the version a fixture node pins; the zero Pin is none.
+type Pin struct{ Realm, Version string }
 
 // Standard is a company umbrella over two projects and their leaves, the shape Asgard's company
 // trees have: one project is public with a private leaf, and assets/ and tools/ are submodules
@@ -78,13 +83,15 @@ func build(t *testing.T, ctx context.Context, remotes, name string, n Node, root
 	if n.Leaf {
 		write(t, filepath.Join(dir, "README.md"), "# "+name+"\n")
 	} else {
-		u := schema.Umbrella{Root: root, Owner: n.Owner, Visibility: n.Visibility, Children: map[string]schema.Child{}}
+		u := schema.Umbrella{Root: root, Owner: n.Owner, Visibility: n.Visibility, Realm: n.Pin.Realm, RealmVersion: n.Pin.Version,
+			Children: map[string]schema.Child{}}
 		for path, c := range n.Children {
 			kind := schema.ChildUmbrella
 			if c.Leaf {
 				kind = schema.ChildLeaf
 			}
-			u.Children[path] = schema.Child{Kind: kind, Owner: c.Owner, Visibility: c.Visibility}
+			u.Children[path] = schema.Child{Kind: kind, Owner: c.Owner, Visibility: c.Visibility,
+				Realm: c.Pin.Realm, RealmVersion: c.Pin.Version, Consumes: c.Consumes}
 		}
 		if err := u.Save(dir); err != nil {
 			t.Fatal(err)

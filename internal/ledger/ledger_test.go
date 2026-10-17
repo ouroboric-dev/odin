@@ -127,3 +127,20 @@ func TestAppendRefusesAnEventTheSchemaRejects(t *testing.T) {
 		t.Errorf("a refused event moved the head to %d", l.Head().Seq)
 	}
 }
+
+func TestHasFindsAnEventThatWasWritten(t *testing.T) {
+	path, _ := write(t, 2)
+	if ok, err := Has(path, func(e gungnir.Event) bool { return e.Node == "design" && e.Attempt == 2 }); err != nil || !ok {
+		t.Errorf("Has(attempt 2) = %v, %v", ok, err)
+	}
+	if ok, err := Has(path, func(e gungnir.Event) bool { return e.Attempt == 3 }); err != nil || ok {
+		t.Errorf("Has(attempt 3) = %v, %v", ok, err)
+	}
+	if _, err := Has(filepath.Join(t.TempDir(), "none.jsonl"), func(gungnir.Event) bool { return true }); err == nil {
+		t.Error("Has() of a ledger that isn't there = nil error")
+	}
+	os.WriteFile(path, []byte("not json\n"), 0o644)
+	if _, err := Has(path, func(gungnir.Event) bool { return false }); err == nil {
+		t.Error("Has() of a line that isn't an event = nil error")
+	}
+}

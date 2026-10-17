@@ -135,6 +135,28 @@ func Verify(path string, want Anchor) (Anchor, error) {
 	return head, nil
 }
 
+// Has reports whether any line of the ledger at path is an event for which match is true. It reads the
+// lines as they are and does not check the chain: Verify does that. A line that is not an event is an error.
+func Has(path string, match func(gungnir.Event) bool) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
+	for n := 1; sc.Scan(); n++ {
+		var e gungnir.Event
+		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
+			return false, fmt.Errorf("%s:%d: %w", path, n, err)
+		}
+		if match(e) {
+			return true, nil
+		}
+	}
+	return false, sc.Err()
+}
+
 func hash(line []byte) string {
 	s := sha256.Sum256(line)
 	return hex.EncodeToString(s[:])

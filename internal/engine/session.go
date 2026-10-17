@@ -25,6 +25,10 @@ type sessionSpec struct {
 	before   string // a read-only session's snapshot of the leaf before it ran
 	maxTurns int
 	timeout  time.Duration
+	// scratch, when set, is the workspace a scratch agent works in, in place of a leaf: the session runs
+	// there, in the scratch sandbox of key, and a try that failed starts again from reseed's fresh copy.
+	scratch string
+	reseed  func() error
 	// started, when set, runs once, when the first try starts: after the meter let it, so a stop for
 	// a cap or a quota before the session logs nothing that says it started (review I5).
 	started func() error
@@ -86,12 +90,19 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 		if err := r.Log(begin); err != nil {
 			return stop(err)
 		}
-		runner, err := r.Runner(ctx, sp.repo)
+		var runner gungnir.Runner
+		workdir := r.RepoDir(sp.repo)
+		if sp.scratch != "" {
+			runner, err = r.ScratchRunner(ctx, sp.key)
+			workdir = sp.scratch
+		} else {
+			runner, err = r.Runner(ctx, sp.repo)
+		}
 		if err != nil {
 			// A sandbox that won't start is not a failure of the agent, and is not retried here (spec §12).
 			return stop(sandboxStart(err))
 		}
-		task := gungnir.Task{Role: sp.role, Node: sp.key, Attempt: attempt, Prompt: sp.text, Workdir: r.RepoDir(sp.repo),
+		task := gungnir.Task{Role: sp.role, Node: sp.key, Attempt: attempt, Prompt: sp.text, Workdir: workdir,
 			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turnsFor(sp.maxTurns, left), Timeout: sp.timeout,
 			TranscriptDir: filepath.Join(r.Dir, "transcripts"), Sandbox: runner}
 		actx, cancel := ctx, context.CancelFunc(func() {})
@@ -159,6 +170,9 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 // as DiscardWork says. A read-only session's leaf is compared first: the reset would hide what it
 // changed (review I1).
 func setAside(ctx context.Context, r *run.Run, sp sessionSpec) error {
+	if sp.scratch != "" {
+		return sp.reseed() // a workspace holds nothing worth keeping: a try starts from a fresh one
+	}
 	if sp.readOnly {
 		if err := readOnly(context.WithoutCancel(ctx), r, sp.repo, sp.role, sp.before); err != nil {
 			return err

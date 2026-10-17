@@ -20,21 +20,26 @@ import (
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/agents"
 	"github.com/ouroboric-dev/odin/internal/budget"
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
+	"github.com/ouroboric-dev/odin/internal/plan"
+	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/tree"
 )
 
 // Options say what to run.
 type Options struct {
-	Project string       // the project umbrella (L1), inside an instance tree
-	Config  string       // factory.yaml
-	Realm   string       // the directory that holds pack.yaml
-	Brief   string       // optional
-	Mode    gungnir.Mode // "" means the config's mode
-	Hooks   Hooks        // tests only
+	Project string            // the project umbrella (L1), inside an instance tree
+	Config  string            // factory.yaml
+	Realm   string            // the lead realm: a realm leaf's name, found in factory.yaml's realms.dir, or a path to the folder that holds pack.yaml
+	Realms  map[string]string // a resume: the folder of each realm the run recorded, by name; they are loaded from there
+	Leaves  []string          // a resume: the leaves the run added beyond the ones its graph names (AddLeaf)
+	Brief   string            // optional
+	Mode    gungnir.Mode      // "" means the config's mode
+	Hooks   Hooks             // tests only
 }
 
 // Hooks replace parts of a run in tests: the skill libraries, the sandbox driver, the clock that
@@ -52,8 +57,10 @@ type Setup struct {
 	Config       *schema.Factory
 	ConfigPath   string // absolute
 	ConfigSHA256 string
-	Pack         *schema.Pack
-	RealmDir     string // absolute
+	Pack         *schema.Pack // the lead realm's
+	RealmDir     string       // the lead realm's folder, absolute
+	Lead         *realm.Realm // the lead realm: --realm, loaded
+	Realms       *realm.Set   // every realm of the run: the lead's and one for each realm a leaf of the project names, each loaded once
 	Graph        *schema.Graph
 	GraphSHA256  string
 	Brief        string // absolute, or ""
@@ -68,6 +75,9 @@ type Setup struct {
 	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
 	Backoff      jormungandr.Backoff
 	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
+	PinLead      bool                                             // the lead realm was named, and the project doesn't pin one yet: Start pins it
+	store        *realm.Store                                     // where a realm is found by name; nil without factory.yaml's realms section
+	recorded     map[string]string                                // a resume: the folder of each realm the run recorded
 
 	Root        string               // the tree's root: the project, or an umbrella above it
 	ProjectPath string               // the project's path from the root
@@ -100,11 +110,20 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if o.Mode != "" {
 		s.Mode = o.Mode
 	}
-	if s.RealmDir, err = filepath.Abs(o.Realm); err != nil {
+	var store *realm.Store
+	if s.Config.Realms != nil {
+		store = &realm.Store{Dir: s.Config.Realms.Dir}
+	}
+	realmDir, byName, err := realm.Resolve(o.Realm, store)
+	if err != nil {
 		return nil, err
 	}
-	if s.Pack, err = schema.LoadPack(s.RealmDir); err != nil {
+	if s.Lead, err = realm.Load(realmDir); err != nil {
 		return nil, err
+	}
+	s.Pack, s.RealmDir = s.Lead.Pack, s.Lead.Dir
+	if s.Pack.Graph == "" {
+		return nil, fmt.Errorf("the realm %s has no graph, so it can't lead a run; --realm names the realm whose graph builds the product", s.Pack.Name)
 	}
 	graphPath := filepath.Join(s.RealmDir, s.Pack.Graph)
 	graphData, err := os.ReadFile(graphPath)
@@ -118,6 +137,18 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if err := s.findProject(ctx, o.Project); err != nil {
 		return nil, err
 	}
+	s.store, s.recorded = store, o.Realms
+	if s.Realms, err = s.collectRealms(nil); err != nil {
+		return nil, err
+	}
+	for _, p := range o.Leaves {
+		if err := s.addLeaf(ctx, p); err != nil {
+			return nil, err
+		}
+	}
+	// A realm named in the store is pinned by the project's first run; one given as a path is a checkout
+	// being worked on, and pins nothing.
+	s.PinLead = byName && s.Project.Umbrella != nil && s.Project.Umbrella.Realm == ""
 	for _, n := range s.Graph.Nodes {
 		if err := s.checkNode(ctx, graphPath, n); err != nil {
 			return nil, err
@@ -194,8 +225,13 @@ func (s *Setup) findProject(ctx context.Context, project string) error {
 
 // checkNode checks that node n can run in this project: its repo, its role and prompt, its checks.
 func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) error {
-	if n.Kind == schema.KindGate {
-		return nil
+	switch {
+	case n.Kind == schema.KindGate, n.Kind == schema.KindPublish, n.Kind == schema.KindTasks, n.Kind == schema.KindInit:
+		return nil // they work in the project, not in a leaf
+	case n.Kind == schema.KindForeach:
+		return s.checkBody(graphPath, n)
+	case n.Kind == schema.KindAgent && n.Scratch:
+		return s.checkSession(graphPath, n.ID, n.Role, n.Prompt) // it works in a workspace of its own
 	}
 	if n.Repo == "" {
 		return fmt.Errorf("%s: node %s names no repo; every node that does work runs in a repo of the project", graphPath, n.ID)
@@ -233,6 +269,42 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 	return nil
 }
 
+// checkBody checks the roles and prompts of a foreach node's body, which run in leaves the project
+// decides later: a role must be in factory.yaml, a reviewer's prompt must be in the lead realm, and the
+// prompt and checks of a leaf's loop come from the realm of the leaf, where Expand finds them.
+func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
+	for _, n := range fe.Body {
+		switch n.Kind {
+		case schema.KindAgent:
+			if err := s.checkSession(graphPath, n.ID, n.Role, n.Prompt); err != nil {
+				return err
+			}
+		case schema.KindLoop:
+			if _, ok := s.Config.Roles[n.Role]; !ok {
+				return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
+			}
+			if s.Agents[n.Role] == nil {
+				a, err := agents.New(s.Config.Roles[n.Role], filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy})
+				if err != nil {
+					return fmt.Errorf("role %s: %w", n.Role, err)
+				}
+				s.Agents[n.Role] = a
+			}
+			for _, rv := range n.Reviewers {
+				if err := s.checkSession(graphPath, fe.ID+"-"+n.ID+"-"+rv.ID, rv.Role, rv.Prompt); err != nil {
+					return err
+				}
+			}
+		}
+		for _, c := range n.Acceptance {
+			if _, ok := s.Pack.Checks[c]; !ok {
+				return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
+			}
+		}
+	}
+	return nil
+}
+
 // checkSession checks that a session of node (a node, or a loop's reviewer) can run: its prompt file
 // is in the realm and its role is in factory.yaml, whose adapter is built once per role.
 func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
@@ -253,12 +325,172 @@ func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
 	return nil
 }
 
+// projectPins returns the realm pins of the project: its lead realm's, and each leaf's.
+func (s *Setup) projectPins() []schema.Pin {
+	var pins []schema.Pin
+	if u := s.Project.Umbrella; u != nil {
+		for _, p := range u.Pins() {
+			if p.Where == "." || u.Children[p.Where].Kind == schema.ChildLeaf {
+				pins = append(pins, p)
+			}
+		}
+	}
+	return pins
+}
+
+// loadRealm finds a realm by name: one the run has already loaded, the folder a resumed run recorded,
+// or the realm store.
+func (s *Setup) loadRealm(name string) (*realm.Realm, error) {
+	if s.Realms != nil {
+		if r := s.Realms.Realms[name]; r != nil {
+			return r, nil
+		}
+	}
+	if dir, ok := s.recorded[name]; ok {
+		return realm.Load(dir)
+	}
+	if s.store == nil {
+		return nil, errors.New("factory.yaml has no realms section to find it in")
+	}
+	dir, err := s.store.Find(name)
+	if err != nil {
+		return nil, err
+	}
+	return realm.Load(dir)
+}
+
+// collectRealms loads the realms of the run: the lead's, and one for each realm the project's pins and
+// extra name. The pins must agree with each other and with what the realm store holds (change
+// realm-leaf-naming), so a mismatch stops the run before anything is created or started.
+func (s *Setup) collectRealms(extra []schema.Pin) (*realm.Set, error) {
+	set, err := realm.Collect(s.Lead, append(s.projectPins(), extra...), s.loadRealm)
+	if err != nil {
+		return nil, err
+	}
+	// A resumed run keeps every realm it recorded, whether or not the project pins it yet: init loads a
+	// realm, and may stop before it has created the leaf that pins it.
+	for name, dir := range s.recorded {
+		if set.Realms[name] == nil {
+			x, err := realm.Load(dir)
+			if err != nil {
+				return nil, err
+			}
+			set.Realms[name] = x
+		}
+	}
+	return set, nil
+}
+
+// PlanRealms loads and checks the realms that extra pins would add to the run, as AddRealms does, and
+// changes nothing: a caller can look at the realms before it commits the run to them.
+func (r *Run) PlanRealms(extra []schema.Pin) (*realm.Set, error) { return r.Setup.collectRealms(extra) }
+
+// AddRealms loads the realms that extra pins name and the run doesn't have yet, after checking that
+// every pin of the project, the old and the new, agrees. The spec stage names the product's leaves and
+// their realms, and init is where they join the run. Each new realm is recorded in run.json and the
+// ledger.
+func (r *Run) AddRealms(extra []schema.Pin) error {
+	set, err := r.Setup.collectRealms(extra)
+	if err != nil {
+		return err
+	}
+	for _, name := range set.Names() {
+		if _, had := r.Setup.Realms.Realms[name]; had {
+			continue
+		}
+		x := set.Realms[name]
+		if r.State.Realms == nil {
+			r.State.Realms = map[string]RealmRecord{}
+		}
+		r.State.Realms[name] = RealmRecord{Version: x.Version, Dir: x.Dir, SHA256: x.Hash}
+		if err := r.Log(gungnir.Event{Name: gungnir.EventRealmLoaded, Realm: x.Name, RealmVersion: x.Version, Note: "sha256:" + x.Hash}); err != nil {
+			return err
+		}
+	}
+	r.Setup.Realms = set
+	return r.Save()
+}
+
+// Realm returns the realm called name, or the lead realm for "".
+func (s *Setup) Realm(name string) *realm.Realm {
+	if name == "" {
+		return s.Lead
+	}
+	return s.Realms.Realms[name]
+}
+
+// RealmOf returns the realm that provides the leaf at repo: the one the project pins for it, or the lead
+// realm when the leaf has no pin.
+func (s *Setup) RealmOf(repo string) *realm.Realm {
+	if u := s.Project.Umbrella; u != nil {
+		if c, ok := u.Children[repo]; ok && c.Realm != "" {
+			if r := s.Realms.Realms[c.Realm]; r != nil {
+				return r
+			}
+		}
+	}
+	return s.Lead
+}
+
 // isLeaf reports whether repo is a leaf: one the tree records as a leaf, or one Start creates.
 func (s *Setup) isLeaf(repo string) bool {
 	if n, ok := s.Repos[repo]; ok {
 		return n.Kind == schema.ChildLeaf
 	}
 	return slices.Contains(s.Create, repo)
+}
+
+// addLeaf resolves the leaf at repo, a path from the project, and makes it one of the run's repos.
+func (s *Setup) addLeaf(ctx context.Context, repo string) error {
+	if !filepath.IsLocal(repo) || repo == "." {
+		return fmt.Errorf("%q is not a path inside the project", repo)
+	}
+	if _, ok := s.Repos[repo]; ok {
+		return nil
+	}
+	if u := s.Project.Umbrella; u == nil || u.Children[repo].Kind != schema.ChildLeaf {
+		return fmt.Errorf("%s is not a leaf of the project", repo)
+	}
+	nodes, err := tree.Resolve(ctx, s.Root, filepath.Join(s.ProjectPath, repo))
+	if err != nil {
+		return err
+	}
+	s.Repos[repo] = nodes[len(nodes)-1]
+	if s.Sandbox != nil {
+		if _, _, _, err := s.SandboxFor(repo); err != nil {
+			delete(s.Repos, repo)
+			return err
+		}
+	}
+	return nil
+}
+
+// AddLeaf makes the leaf at repo part of the run once the run knows it needs it: a task works in it,
+// or init made it. The leaf gets the run's branch and a record in run.json, as a leaf its graph names
+// does at the start; a leaf the run already has is left alone.
+func (r *Run) AddLeaf(ctx context.Context, repo string) error {
+	if err := r.Setup.addLeaf(ctx, repo); err != nil {
+		return err
+	}
+	if _, ok := r.State.Leaves[repo]; ok {
+		return nil
+	}
+	l, err := r.Leaf(repo)
+	if err != nil {
+		return err
+	}
+	head, err := l.StartBranch(ctx, Branch(r.State.ID), "main")
+	if err != nil {
+		return err
+	}
+	r.State.Leaves[repo] = r.leafRecord(repo, head)
+	return r.Save()
+}
+
+// leafRecord is the record of a leaf that joins the run at head: its branch, and the realm that provides it.
+func (r *Run) leafRecord(repo, head string) LeafRecord {
+	rl := r.Setup.RealmOf(repo)
+	return LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head, Realm: rl.Name, RealmVersion: rl.Version}
 }
 
 // Leaves returns the paths of the leaves the graph works in, sorted.
@@ -285,6 +517,98 @@ type Run struct {
 	Saved    []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
 	SetAside []string        // the notes of Saved from the set-aside of a session whose spend the journal couldn't take, for its gate (review I4)
 	Sandbox  gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
+	nodes    []schema.Node   // the nodes of the run, with foreach nodes expanded; see Nodes
+}
+
+// Nodes returns the nodes the run walks, in order: the graph's, with each foreach node that has been
+// expanded replaced by the nodes of its tasks. Position indexes this list.
+func (r *Run) Nodes() []schema.Node {
+	if r.nodes == nil {
+		r.nodes = r.Setup.Graph.Nodes
+	}
+	return r.nodes
+}
+
+// Expand replaces foreach node id by its task shape for each task of the plan, in the leaf and the realm
+// each task names, and every leaf the tasks work in becomes part of the run. Position is not changed: it
+// then points at the first node of the first task's shape. The expansion is recorded in run.json, so a
+// resume makes the same nodes.
+func (r *Run) Expand(ctx context.Context, id string) error {
+	s := r.State
+	for _, f := range s.Features {
+		if err := r.AddLeaf(ctx, f.Layer); err != nil {
+			return fmt.Errorf("task %s works in %s: %w", f.ID, f.Layer, err)
+		}
+	}
+	s.Expanded[id] = true
+	nodes, err := r.Setup.NodesFor(s)
+	if err != nil {
+		delete(s.Expanded, id)
+		return err
+	}
+	r.nodes = nodes
+	return r.Save()
+}
+
+// Unexpand undoes the expansion of every foreach node that comes after the tasks node id in the graph,
+// for a walk that goes back to or before that node: it reads the plan again, and the foreach nodes must
+// expand against the plan it then reads, not the old one. The nodes up to the first such foreach node
+// stay where they are, so a Position at or before id indexes the same node. The caller saves run.json.
+func (r *Run) Unexpand(id string) error {
+	s := r.State
+	after, changed := false, false
+	for _, n := range r.Setup.Graph.Nodes {
+		if n.ID == id {
+			after = true
+		} else if after && n.Kind == schema.KindForeach && s.Expanded[n.ID] {
+			delete(s.Expanded, n.ID)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	nodes, err := r.Setup.NodesFor(s)
+	if err != nil {
+		return err
+	}
+	r.nodes = nodes
+	return nil
+}
+
+// NodesFor returns the nodes of the run in the state st: the graph's, with each foreach node that st has
+// expanded replaced by its task shape once for each task, in the order the tasks are built.
+func (s *Setup) NodesFor(st *State) ([]schema.Node, error) {
+	var out []schema.Node
+	for _, n := range s.Graph.Nodes {
+		if n.Kind != schema.KindForeach || !st.Expanded[n.ID] {
+			out = append(out, n)
+			continue
+		}
+		fs := make([]schema.Feature, len(st.Features))
+		for i, f := range st.Features {
+			fs[i] = f.Feature
+		}
+		ex, err := plan.Expand(n, fs, s.Graph, s.recipeOf)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ex...)
+	}
+	return out, nil
+}
+
+// recipeOf says what the realm of the leaf at layer offers its tasks.
+func (s *Setup) recipeOf(layer string) (plan.Recipe, error) {
+	if u := s.Project.Umbrella; u == nil || u.Children[layer].Kind != schema.ChildLeaf {
+		return plan.Recipe{}, fmt.Errorf("the project has no leaf %s", layer)
+	}
+	r := s.RealmOf(layer)
+	rec := plan.Recipe{Realm: r.Name}
+	if r.Pack.Leaf != nil {
+		rec.Implementer, rec.Checks = r.Pack.Leaf.Implementer, r.Pack.Leaf.Checks
+	}
+	return rec, nil
 }
 
 // Meter returns the budget of this run: its caps against its own usage and the day's journal.
@@ -472,6 +796,11 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		os.RemoveAll(dir) // the run's own new directory: nothing ran
 		return nil, err
 	}
+	if err := r.pinLead(ctx); err != nil {
+		r.Close()
+		os.RemoveAll(dir)
+		return nil, err
+	}
 	if err := r.openSandbox(setup.newSandbox); err != nil {
 		r.Close()
 		os.RemoveAll(dir)
@@ -485,6 +814,41 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		return nil, &Failed{ID: id, Err: err}
 	}
 	return r, r.Save()
+}
+
+// pinLead records the lead realm and its version in the project's umbrella.yaml, in a commit of its own,
+// when the project pins none: from then on every run of the project must agree with it. The operator's
+// own uncommitted edit of umbrella.yaml is not Odin's to commit.
+func (r *Run) pinLead(ctx context.Context) error {
+	s := r.Setup
+	if !s.PinLead {
+		return nil
+	}
+	p := s.Project
+	if st, err := git.Run(ctx, p.Dir, "status", "--porcelain", "--", schema.UmbrellaFile); err != nil || st != "" {
+		return fmt.Errorf("%s has changes that are not committed, so the run can't pin the realm %s %s in it: commit or discard them first (%v)",
+			filepath.Join(p.Dir, schema.UmbrellaFile), s.Lead.Name, s.Lead.Version, err)
+	}
+	p.Umbrella.Realm, p.Umbrella.RealmVersion = s.Lead.Name, s.Lead.Version
+	if err := p.Umbrella.Save(p.Dir); err != nil {
+		return err
+	}
+	if _, err := git.Run(ctx, p.Dir, "add", "--", schema.UmbrellaFile); err != nil {
+		return err
+	}
+	_, err := git.Run(ctx, p.Dir, "commit", "-q", "-m", fmt.Sprintf("Pin the lead realm %s %s", s.Lead.Name, s.Lead.Version), "--", schema.UmbrellaFile)
+	return err
+}
+
+// realmNote lists the realms of the run for the ledger's first line: each with its version and the hash
+// a resume compares.
+func realmNote(set *realm.Set) string {
+	var parts []string
+	for _, name := range set.Names() {
+		r := set.Realms[name]
+		parts = append(parts, fmt.Sprintf("%s %s sha256:%s", r.Name, r.Version, r.Hash))
+	}
+	return "realms: " + strings.Join(parts, "; ")
 }
 
 // record locks the new run and writes its run.json and first ledger line.
@@ -501,15 +865,17 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 	now := time.Now().UTC()
 	r := &Run{Project: project, Dir: dir, Setup: setup, Ledger: l, unlock: unlock, State: &State{
 		ID: id, Status: StatusRunning, Mode: setup.Mode,
-		Realm: setup.Pack.Name, RealmVersion: setup.Pack.Version, RealmDir: setup.RealmDir,
+		Realm: setup.Pack.Name, RealmVersion: setup.Pack.Version, RealmDir: setup.RealmDir, Realms: realmRecords(setup),
 		GraphVersion: setup.Graph.Version, GraphSHA256: setup.GraphSHA256,
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
-		Waived: map[string]bool{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Created: now, Updated: now,
+		Waived: map[string]bool{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Created: now, Updated: now,
 	}}
-	if err := r.Log(gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256}); err != nil {
+	started := gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256,
+		Realm: setup.Lead.Name, RealmVersion: setup.Lead.Version, Note: realmNote(setup.Realms)}
+	if err := r.Log(started); err != nil {
 		r.Close()
 		return nil, err
 	}
@@ -518,6 +884,17 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// realmRecords is what run.json keeps of each realm of the run, so a resume loads the same folders and
+// can tell none of them changed.
+func realmRecords(setup *Setup) map[string]RealmRecord {
+	out := map[string]RealmRecord{}
+	for _, name := range setup.Realms.Names() {
+		r := setup.Realms.Realms[name]
+		out[name] = RealmRecord{Version: r.Version, Dir: r.Dir, SHA256: r.Hash}
+	}
+	return out
 }
 
 func roles(setup *Setup) map[string]RoleRecord {
@@ -550,7 +927,7 @@ func (r *Run) begin(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		r.State.Leaves[p] = LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head}
+		r.State.Leaves[p] = r.leafRecord(p, head)
 	}
 	return nil
 }
@@ -626,7 +1003,12 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	if mode == "" {
 		mode = s.Mode
 	}
-	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Brief: s.Brief, Mode: mode, Hooks: h})
+	dirs := map[string]string{}
+	for name, r := range s.Realms {
+		dirs[name] = r.Dir
+	}
+	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Realms: dirs, Leaves: slices.Sorted(maps.Keys(s.Leaves)),
+		Brief: s.Brief, Mode: mode, Hooks: h})
 	if err != nil {
 		return nil, err
 	}
@@ -638,6 +1020,9 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	}
 	if setup.Skills.Hash != s.Skills.Hash {
 		return nil, errors.New("the skills the graph names changed since the run started, so results would not compare; start a new run")
+	}
+	if err := s.checkRealms(setup); err != nil {
+		return nil, err
 	}
 	if setup.Root != s.Root || setup.ProjectPath != s.ProjectPath {
 		return nil, fmt.Errorf("the run belongs to %s in %s, not this project", s.ProjectPath, s.Root)
@@ -657,6 +1042,10 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 		s.Exec = nil
 	}
 	r := &Run{Project: setup.Project.Dir, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
+	if r.nodes, err = setup.NodesFor(s); err != nil { // State.check made it once, so this holds
+		l.Close()
+		return nil, err
+	}
 	// The spends the journal missed are written before the run goes on, so the day's cap counts them,
 	// and before anything else changes, so a refusal while the journal is still broken leaves the
 	// sandboxes and the leaves as they are. run.json is written as it was loaded, less what was

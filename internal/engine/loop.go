@@ -41,6 +41,7 @@ func runLoop(ctx context.Context, r *run.Run, n schema.Node) error {
 	switch out.Kind {
 	case jormungandr.Passed:
 		delete(s.Reasons, n.ID)
+		delete(s.Refusals, n.ID)
 		s.Summaries[n.ID] = fmt.Sprintf("passed in attempt %d of %d with %d minor finding(s) open", out.Attempts, rec.State.Limit, len(rec.State.Book.Open()))
 		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: out.Attempts, Result: "passed"})
 	case jormungandr.Capped:
@@ -80,9 +81,11 @@ type loopSteps struct {
 
 var _ jormungandr.Steps = (*loopSteps)(nil)
 
-// prompt is the text of a session: the prompt file of the realm, the skills it names, and the brief.
-func (l *loopSteps) prompt(file string, skillNames []string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(l.r.Setup.RealmDir, file))
+// prompt is the text of a session: the prompt file of the realm named realm ("" is the lead realm), the
+// skills it names, and the brief. The implementer's prompt comes from the realm of the task's leaf; a
+// reviewer's from the lead realm.
+func (l *loopSteps) prompt(realm, file string, skillNames []string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(l.r.Setup.Realm(realm).Dir, file))
 	if err != nil {
 		return "", err
 	}
@@ -105,11 +108,14 @@ func (l *loopSteps) prompt(file string, skillNames []string) (string, error) {
 // discarded, so the next attempt does not build on half a thought.
 func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.Input) error {
 	r, n := l.r, l.n
-	text, err := l.prompt(n.Prompt, n.Skills)
+	text, err := l.prompt(n.Realm, n.Prompt, n.Skills)
 	if err != nil {
 		return err
 	}
-	text += "\n\n" + jormungandr.Feedback(in.Open, in.LastFailure, r.State.Reasons[n.ID])
+	if block := taskBlock(r, n); block != "" {
+		text += "\n\n" + block
+	}
+	text += "\n\n" + jormungandr.Feedback(in.Open, in.LastFailure, r.State.Reasons[n.ID]) + jormungandr.Refusal(r.State.Refusals[n.ID])
 	started := func() error {
 		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: attempt,
 			Result: fmt.Sprintf("attempt %d of %d starts with %d finding(s) open", attempt, l.st.Limit, len(in.Open))})
@@ -138,7 +144,11 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormungandr.CheckOutcome, error) {
 	r, n := l.r, l.n
 	rel := filepath.Join("logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, name))
-	res, err := runCheck(ctx, r, n.ID, n.Repo, r.RepoDir(n.Repo), checks.Spec{Name: name, Argv: r.Setup.Pack.Checks[name], Timeout: ExecTimeout},
+	argv := r.Setup.Realm(n.Realm).Pack.Checks[name]
+	if len(argv) == 0 {
+		return jormungandr.CheckOutcome{}, &nodeFailure{fmt.Errorf("the realm %s defines no check %s", r.Setup.Realm(n.Realm).Name, name)}
+	}
+	res, err := runCheck(ctx, r, n.ID, n.Repo, r.RepoDir(n.Repo), checks.Spec{Name: name, Argv: argv, Timeout: ExecTimeout},
 		filepath.Join(r.Dir, rel))
 	if err == nil {
 		var lf *leaf.Leaf
@@ -182,9 +192,12 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 			rv = c
 		}
 	}
-	text, err := l.prompt(rv.Prompt, rv.Skills)
+	text, err := l.prompt("", rv.Prompt, rv.Skills)
 	if err != nil {
 		return "", err
+	}
+	if block := taskBlock(r, n); block != "" {
+		text += "\n\n" + block
 	}
 	text += "\n\n" + jormungandr.ReviewRequest(rv.ID, open, passed)
 	before, err := snapshot(ctx, r, n.Repo)

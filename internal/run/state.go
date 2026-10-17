@@ -20,6 +20,7 @@ import (
 
 	"github.com/ouroboric-dev/gleipnir/skills"
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/ledger"
@@ -40,6 +41,13 @@ const (
 	StatusDone    Status = "done"
 )
 
+// RealmRecord is a realm leaf as the run loaded it.
+type RealmRecord struct {
+	Version string `json:"version"`
+	Dir     string `json:"dir"`
+	SHA256  string `json:"sha256"` // of every file a run could read; a resume refuses a realm whose hash changed
+}
+
 // RoleRecord is the agent and model a role used.
 type RoleRecord struct {
 	Agent string `json:"agent"`
@@ -55,6 +63,7 @@ type State struct {
 	Realm        string                 `json:"realm"`
 	RealmVersion string                 `json:"realm_version"`
 	RealmDir     string                 `json:"realm_dir"`
+	Realms       map[string]RealmRecord `json:"realms,omitempty"` // every realm of the run, the lead's too, by name
 	GraphVersion string                 `json:"graph_version"`
 	GraphSHA256  string                 `json:"graph_sha256"`
 	ConfigPath   string                 `json:"config_path"`
@@ -79,6 +88,12 @@ type State struct {
 	Paused       *Pause                 `json:"paused,omitempty"`        // why the run is paused
 	Warned       map[string]bool        `json:"warned,omitempty"`        // the budget warnings already given, so each comes once
 	Loops        map[string]*LoopRecord `json:"loops,omitempty"`         // loop node id: where its loop stands
+	Features     []schema.FeatureRecord `json:"features,omitempty"`      // the plan's tasks in the order they are built, once the tasks node has run
+	PlanSource   string                 `json:"plan_source,omitempty"`   // the tasks.md they came from, relative to the project
+	PlanSHA256   string                 `json:"plan_sha256,omitempty"`   // that file as Odin read it
+	Expanded     map[string]bool        `json:"expanded,omitempty"`      // foreach node ids already expanded into the nodes of each task
+	Returns      map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
+	Refusals     map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
 	Ledger       ledger.Anchor          `json:"ledger"`
 	Error        string                 `json:"error,omitempty"`
 	Exec         *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
@@ -111,6 +126,13 @@ type LeafRecord struct {
 	Branch     string `json:"branch"`     // the run's branch: ygg/<run id>
 	Base       string `json:"base"`       // the leaf's main when the run started
 	Checkpoint string `json:"checkpoint"` // the last checkpoint commit; resume resets the leaf to it
+	// TaskBase is the leaf's main when the task working in it now started: a task given up after its
+	// merge landed puts main back there (spec §7.3).
+	TaskBase string `json:"task_base,omitempty"`
+	// Realm and RealmVersion are the realm leaf that provides this leaf, as the run used it (the lead
+	// realm's, for a leaf with no pin).
+	Realm        string `json:"realm,omitempty"`
+	RealmVersion string `json:"realm_version,omitempty"`
 }
 
 var idPattern = regexp.MustCompile(`^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$`)
@@ -202,6 +224,15 @@ func LoadState(dir string) (*State, error) {
 	if s.Loops == nil {
 		s.Loops = map[string]*LoopRecord{}
 	}
+	if s.Expanded == nil {
+		s.Expanded = map[string]bool{}
+	}
+	if s.Returns == nil {
+		s.Returns = map[string]int{}
+	}
+	if s.Refusals == nil {
+		s.Refusals = map[string]string{}
+	}
 	if s.Leaves == nil {
 		s.Leaves = map[string]LeafRecord{}
 	}
@@ -282,10 +313,34 @@ func Lock(dir string) (unlock func(), err error) {
 // can't make another process's resume fail.
 func Locked(dir string) bool { return lock.Held(filepath.Join(dir, "lock")) }
 
+// checkRealms refuses a resume when a realm changed under the run, or the project now names a realm the run
+// did not load: its graph positions and prompts would no longer mean what they meant.
+func (s *State) checkRealms(setup *Setup) error {
+	if len(s.Realms) == 0 {
+		return nil // a run from before realms were recorded; the graph's hash is all there is
+	}
+	for _, name := range setup.Realms.Names() {
+		got := setup.Realms.Realms[name]
+		want, ok := s.Realms[name]
+		switch {
+		case !ok:
+			return fmt.Errorf("the project now names the realm %s, which this run didn't start with; start a new run", name)
+		case got.Version != want.Version:
+			return fmt.Errorf("the realm %s is at %s, and the run started with %s; start a new run", name, got.Version, want.Version)
+		case got.Hash != want.SHA256:
+			return fmt.Errorf("the realm %s changed since the run started (%s), so the run's prompts and checks are not the ones it began with; start a new run", name, want.Dir)
+		}
+	}
+	return nil
+}
+
 // check refuses a run.json whose position, pending node or leaves don't fit setup's graph and
 // tree. Odin wrote it, but a hand-edited file must not crash the engine.
 func (s *State) check(setup *Setup) error {
-	nodes := setup.Graph.Nodes
+	nodes, err := setup.NodesFor(s)
+	if err != nil {
+		return fmt.Errorf("the tasks the run expanded no longer fit the project: %w", err)
+	}
 	if s.Position < 0 || s.Position > len(nodes) {
 		return fmt.Errorf("position %d is outside the graph's %d nodes", s.Position, len(nodes))
 	}

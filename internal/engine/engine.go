@@ -16,6 +16,7 @@ import (
 	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -55,14 +56,32 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 	if err := r.Save(); err != nil {
 		return Outcome{}, err
 	}
-	nodes := r.Setup.Graph.Nodes
-	for s.Position < len(nodes) {
+	for {
+		nodes := r.Nodes()
+		if err := finishTask(r, nodes); err != nil {
+			return Outcome{}, err
+		}
+		if moved, err := skipBlocked(r, nodes); err != nil {
+			return Outcome{}, err
+		} else if moved {
+			continue
+		}
+		if err := startTask(ctx, r, nodes); err != nil {
+			return Outcome{}, err
+		}
+		if s.Position >= len(nodes) {
+			break
+		}
 		n := nodes[s.Position]
 		var stop bool
 		var err error
 		switch n.Kind {
 		case schema.KindAgent:
-			err = runAgent(ctx, r, n)
+			if n.Scratch {
+				err = runScratch(ctx, r, n)
+			} else {
+				err = runAgent(ctx, r, n)
+			}
 		case schema.KindLoop:
 			err = runLoop(ctx, r, n)
 		case schema.KindExec:
@@ -73,6 +92,19 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			err = runMerge(ctx, r, n)
 		case schema.KindPointer:
 			err = runPointer(ctx, r, n)
+		case schema.KindTasks:
+			err = runTasks(ctx, r, n)
+		case schema.KindForeach:
+			err = expandForeach(ctx, r, n)
+		case schema.KindPublish:
+			err = runPublish(ctx, r, n)
+		case schema.KindInit:
+			err = runInit(ctx, r, n)
+		}
+		var sb *sentBack
+		var ex *expanded
+		if errors.As(err, &sb) || errors.As(err, &ex) {
+			continue // Position already points at the node to run next
 		}
 		var nf *nodeFailure
 		if errors.As(err, &nf) {
@@ -88,6 +120,13 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		}
 		var esc *escalation
 		if errors.As(err, &esc) {
+			if blocksTasks(r, n) {
+				// Unattended: give the task up and go on with the tasks that don't depend on it (spec §7.3).
+				if err := blockTask(ctx, r, nodes, n, "its loop gave up ("+esc.out.Reason+"): "+esc.out.Detail+"."); err != nil {
+					return Outcome{}, err
+				}
+				continue
+			}
 			return stopEscalation(r, n, esc)
 		}
 		if err != nil {
@@ -102,10 +141,24 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		}
 	}
 	s.Status = run.StatusDone
-	if err := r.Log(gungnir.Event{Name: gungnir.EventRunFinished, Result: "done"}.WithUsage(s.Usage)); err != nil {
+	if err := r.Log(gungnir.Event{Name: gungnir.EventRunFinished, Result: doneResult(s)}.WithUsage(s.Usage)); err != nil {
 		return Outcome{}, err
 	}
 	return Outcome{Status: run.StatusDone}, r.Save()
+}
+
+// doneResult is how a finished run is described: "done", or the tasks it gave up, listed first (spec §7.3).
+func doneResult(s *run.State) string {
+	var blocked []string
+	for _, f := range s.Features {
+		if f.Status == schema.TaskBlocked {
+			blocked = append(blocked, f.ID)
+		}
+	}
+	if len(blocked) == 0 {
+		return "done"
+	}
+	return fmt.Sprintf("done, with %d task(s) blocked: %s", len(blocked), strings.Join(blocked, ", "))
 }
 
 // nodeFailure is a node that failed; the run stops failed, and resume re-runs the node.
@@ -130,7 +183,7 @@ func startAttempt(r *run.Run, n schema.Node) (int, error) {
 
 func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
-	prompt, err := os.ReadFile(filepath.Join(r.Setup.RealmDir, n.Prompt))
+	prompt, err := os.ReadFile(filepath.Join(r.Setup.Realm(n.Realm).Dir, n.Prompt))
 	if err != nil {
 		return err
 	}
@@ -146,8 +199,14 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if r.Setup.BriefText != "" {
 		text += "\n\n## Brief\n\n" + r.Setup.BriefText
 	}
+	if block := taskBlock(r, n); block != "" {
+		text += "\n\n" + block
+	}
 	if reason := s.Reasons[n.ID]; reason != "" {
 		text += "\n\n## Rejected at the approval point\n\n" + reason + "\n"
+	}
+	if refusal := s.Refusals[n.ID]; refusal != "" {
+		text += "\n\n" + jormungandr.Refusal(refusal)
 	}
 	var before string
 	if n.ReadOnly {
@@ -169,6 +228,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 		return err
 	}
 	delete(s.Reasons, n.ID)
+	delete(s.Refusals, n.ID)
 	s.Summaries[n.ID] = res.Summary
 	return nil
 }
@@ -260,13 +320,23 @@ func runCheck(ctx context.Context, r *run.Run, node, repo, dir string, spec chec
 }
 
 // runChecks runs the pack checks names in order, for the given attempt of node n, and logs each
-// result. The first failing check is the error. repo is the leaf they check, whose sandbox runs them
+// result. The first failing check is the error, a *checkFailed; any other error is Odin's own. repo is the leaf they check, whose sandbox runs them
 // when the run has one; the pointer node's acceptance checks pass "" and the umbrella's dir, and run
 // on the host.
 func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, repo, dir string) error {
+	// A pointer node's acceptance checks, which pass no repo, are the lead realm's, run in the project; the
+	// checks of a leaf are its realm's.
+	rl := r.Setup.Realm(n.Realm)
+	if repo == "" {
+		rl = r.Setup.Realm("")
+	}
 	for _, c := range names {
+		argv := rl.Pack.Checks[c]
+		if len(argv) == 0 {
+			return &nodeFailure{fmt.Errorf("the realm %s defines no check %s", rl.Name, c)}
+		}
 		logPath := filepath.Join(r.Dir, "logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, c))
-		cmdErr, err := command(ctx, r, n.ID, repo, dir, r.Setup.Pack.Checks[c], time.Duration(n.Timeout), logPath)
+		cmdErr, err := command(ctx, r, n.ID, repo, dir, argv, time.Duration(n.Timeout), logPath)
 		if err != nil {
 			return err
 		}
@@ -278,10 +348,22 @@ func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, name
 			return err
 		}
 		if cmdErr != nil {
-			return fmt.Errorf("check %s failed: %v (output: %s)", c, cmdErr, logPath)
+			return &checkFailed{name: c, err: cmdErr, log: logPath}
 		}
 	}
 	return nil
+}
+
+// checkFailed is a check that ran and failed: the work's failure, which a gate may send back to the
+// loop that made it. Any other error of the checks is Odin's own, and fails the node (review I-5).
+type checkFailed struct {
+	name string
+	err  error
+	log  string
+}
+
+func (c *checkFailed) Error() string {
+	return fmt.Sprintf("check %s failed: %v (output: %s)", c.name, c.err, c.log)
 }
 
 // checkpoint commits node n's work in its leaf to the run's branch, and records the commit in

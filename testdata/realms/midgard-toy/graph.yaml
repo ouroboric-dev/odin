@@ -1,0 +1,25 @@
+# The toy lead graph (spec §4.2 in small): stages that write documents in scratch workspaces, Odin
+# publishing them after the approval points, the plan read into tasks, the leaves created, and then a
+# task shape that repeats for every task, in the leaf and the realm the task names.
+name: midgard-toy
+version: 0.1.0
+nodes:
+  - { id: design, kind: agent, role: planner, prompt: prompts/design.md, scratch: true }
+  - { id: design-gate, kind: gate, gate: design }
+  - { id: design-docs, kind: publish, from: design, to: docs }
+  - { id: spec, kind: agent, role: planner, prompt: prompts/spec.md, scratch: true, inputs: [docs/1-product] }
+  - { id: spec-gate, kind: gate, gate: spec }
+  - { id: spec-docs, kind: publish, from: spec, to: docs }
+  - { id: plan, kind: agent, role: planner, prompt: prompts/plan.md, scratch: true, inputs: [docs/2-engineering/specs, docs/leaves.yaml] }
+  - { id: plan-docs, kind: publish, from: plan, to: docs }
+  - { id: ready, kind: tasks, from: docs/2-engineering/plans/*/tasks.md, leaves: docs/leaves.yaml, back_to: plan }
+  - { id: leaves, kind: init, from: docs/leaves.yaml }
+  - { id: plan-gate, kind: gate, gate: plan, reruns: plan }
+  - id: tasks
+    kind: foreach
+    over: tasks
+    nodes:
+      - { id: implement, kind: loop, realm: leaf, role: implementer, attempts: 2 }
+      - { id: feature-gate, kind: gate, gate: feature }
+      - { id: land, kind: merge, realm: leaf, back_to: implement }
+      - { id: move, kind: pointer, realm: leaf, acceptance: [accept], back_to: implement }

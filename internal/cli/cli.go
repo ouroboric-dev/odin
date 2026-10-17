@@ -27,17 +27,19 @@ const (
 	ExitRefused = 2 // bad usage or config: nothing ran
 	ExitStopped = 3 // the run waits at an approval point
 	ExitPaused  = 4 // the run waits for the provider's quota; resume it once the quota is back
+	ExitBlocked = 5 // an unattended run finished, and gave up tasks whose loops gave up: they are listed first
 )
 
 const usage = `usage:
-  ygg run     --realm <dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
+  ygg run     --realm <name|dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
   ygg resume  <run-id> [--project <dir>] [--mode <mode>]
   ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
   ygg status  <run-id> [--project <dir>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
-  ygg sandbox build --realm <dir> [--config <factory.yaml>]
-exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused: the provider's quota is used up
+  ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
+exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused: the provider's quota is used up,
+  5 done, with tasks given up (unattended)
 `
 
 // Main runs one ygg command and returns its exit code.
@@ -67,6 +69,8 @@ type command struct {
 // flags holds every flag; each command reads the ones it defines.
 type flags struct {
 	project, config, realm, brief, mode, note, reason, root string
+	realms                                                  []string        // sandbox build: every --realm given
+	all                                                     bool            // sandbox build: --all
 	set                                                     map[string]bool // the flags given
 }
 
@@ -119,7 +123,7 @@ func (c *command) refuse(err error) int {
 func (c *command) run(args []string) int {
 	f, _, ok := c.parse("run", args, 0, func(fs *flag.FlagSet, f *flags) {
 		fs.StringVar(&f.config, "config", "factory.yaml", "the factory config")
-		fs.StringVar(&f.realm, "realm", "", "the realm directory (holds pack.yaml)")
+		fs.StringVar(&f.realm, "realm", "", "the lead realm: a name found in factory.yaml's realms.dir, or the directory that holds pack.yaml")
 		fs.StringVar(&f.brief, "brief", "", "the brief")
 	})
 	if !ok {
@@ -238,6 +242,10 @@ func (c *command) advance(r *run.Run) int {
 	}
 	switch out.Status {
 	case run.StatusDone:
+		if blocked := blockedTasks(r.State); len(blocked) > 0 {
+			fmt.Fprintf(c.out, "Run %s is done, with %d task(s) given up. They are listed first, because they need you:\n%s", id, len(blocked), strings.Join(blocked, ""))
+			return ExitBlocked
+		}
 		fmt.Fprintf(c.out, "Run %s is done.\n", id)
 		return ExitDone
 	case run.StatusStopped:
@@ -293,8 +301,24 @@ func (c *command) status(args []string) int {
 	if s.Pending != "" {
 		fmt.Fprintf(c.out, "waiting:  %s (%s)\n", s.Pending, s.PendingGate)
 	}
+	for _, line := range blockedTasks(s) {
+		fmt.Fprintf(c.out, "blocked:  %s", line)
+	}
 	for _, p := range slices.Sorted(maps.Keys(s.Leaves)) {
-		fmt.Fprintf(c.out, "leaf:     %s on %s at %.12s\n", p, s.Leaves[p].Branch, s.Leaves[p].Checkpoint)
+		l := s.Leaves[p]
+		from := ""
+		if l.Realm != "" {
+			from = fmt.Sprintf(" (%s %s)", l.Realm, l.RealmVersion)
+		}
+		fmt.Fprintf(c.out, "leaf:     %s on %s at %.12s%s\n", p, l.Branch, l.Checkpoint, from)
+	}
+	if len(s.Features) > 0 {
+		counts := map[schema.TaskStatus]int{}
+		for _, f := range s.Features {
+			counts[f.Status]++
+		}
+		fmt.Fprintf(c.out, "tasks:    %d (%d done, %d doing, %d to do, %d blocked)\n", len(s.Features),
+			counts[schema.TaskDone], counts[schema.TaskDoing], counts[schema.TaskTodo], counts[schema.TaskBlocked])
 	}
 	for _, id := range slices.Sorted(maps.Keys(s.Loops)) {
 		l := s.Loops[id]
@@ -320,6 +344,17 @@ func (c *command) status(args []string) int {
 		fmt.Fprintf(c.out, "caps:     %s\n", line)
 	}
 	return ExitDone
+}
+
+// blockedTasks lists the tasks the run gave up, one line each, with why.
+func blockedTasks(s *run.State) []string {
+	var out []string
+	for _, f := range s.Features {
+		if f.Status == schema.TaskBlocked {
+			out = append(out, fmt.Sprintf("%s: %s\n", f.ID, f.Why))
+		}
+	}
+	return out
 }
 
 // capsLine says how much of the caps the run and the day have used, from the run's config as it is now.

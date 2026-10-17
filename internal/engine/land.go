@@ -10,6 +10,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/leaf"
+	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/merge"
 	"github.com/ouroboric-dev/odin/internal/pointer"
@@ -47,10 +48,15 @@ func runMerge(ctx context.Context, r *run.Run, n schema.Node) error {
 	if leaf.IsPolicy(landErr) { // a check rewrote the leaf's .git or planted a repository
 		return &hardStop{gate: gungnir.GatePolicyViolation, err: landErr}
 	}
-	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt,
+	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Task: n.Task,
 		DurationMS: time.Since(began).Milliseconds()}
 	if landErr != nil {
-		return failLanding(r, ev, landErr)
+		if workRefused(landErr) && res.Checked != "" {
+			// The branch, with the base merged in, is what the checks refused: the loop goes on from there.
+			rec.Checkpoint = res.Checked
+			r.State.Leaves[n.Repo] = rec
+		}
+		return failLanding(r, n, ev, landErr)
 	}
 	rec.Checkpoint = res.Merged
 	r.State.Leaves[n.Repo] = rec
@@ -109,24 +115,47 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	if errors.As(moveErr, &hs) { // the sandbox broke a hardening rule
 		return hs
 	}
+	// A waiver is for the next move only: whatever came of it, a later move is not waived (backlog B-010).
+	delete(s.Waived, n.ID)
 	var se *shrink.Error
 	if errors.As(moveErr, &se) {
+		// The attempt the node_started line opened closes in the ledger (backlog B-010).
+		fail := gungnir.Event{Name: gungnir.EventNodeFailed, Node: n.ID, Attempt: attempt, Task: n.Task, Result: moveErr.Error(),
+			DurationMS: time.Since(began).Milliseconds()}
+		if err := r.Log(fail); err != nil {
+			return err
+		}
 		return &hardStop{gate: gungnir.GateShrinkGuard, err: moveErr}
 	}
 	if leaf.IsPolicy(moveErr) { // a check rewrote the leaf's .git or planted a repository
 		return &hardStop{gate: gungnir.GatePolicyViolation, err: moveErr}
 	}
-	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt,
+	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Task: n.Task,
 		DurationMS: time.Since(began).Milliseconds()}
 	if moveErr != nil {
-		return failLanding(r, ev, moveErr)
+		return failLanding(r, n, ev, moveErr)
 	}
-	delete(s.Waived, n.ID)
 	if res.Commit != "" {
-		moved := gungnir.Event{Name: gungnir.EventPointerMoved, Node: n.ID, Attempt: attempt, Commit: res.Commit,
+		moved := gungnir.Event{Name: gungnir.EventPointerMoved, Node: n.ID, Attempt: attempt, Task: n.Task, Commit: res.Commit,
 			Note: fmt.Sprintf("%s: %.12s -> %.12s", filepath.Join(parentRepo, child), res.From, res.To)}
 		if err := r.Log(moved); err != nil {
 			return err
+		}
+	} else if attempt > 1 {
+		// The pointer is already there on a later attempt: an earlier attempt moved it, and the ledger may
+		// not have the line, if the process died between the commit and the line (backlog B-010).
+		logged, err := ledger.Has(filepath.Join(r.Dir, "ledger.jsonl"), func(e gungnir.Event) bool {
+			return e.Name == gungnir.EventPointerMoved && e.Node == n.ID
+		})
+		if err != nil {
+			return err
+		}
+		if !logged {
+			moved := gungnir.Event{Name: gungnir.EventPointerMoved, Node: n.ID, Attempt: attempt, Task: n.Task,
+				Note: fmt.Sprintf("%s: already at %.12s; an earlier attempt moved it and the run didn't record it", filepath.Join(parentRepo, child), res.To)}
+			if err := r.Log(moved); err != nil {
+				return err
+			}
 		}
 	}
 	ev.Result, ev.Commit = "moved "+child, res.Commit
@@ -138,8 +167,12 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 }
 
 // failLanding fails a merge or pointer node that the gate refused, or whose target another process
-// holds. Anything else is a failure of Odin itself.
-func failLanding(r *run.Run, ev gungnir.Event, err error) error {
+// holds. Anything else is a failure of Odin itself. A gate that refused because a check ran and failed on
+// the work sends the work back into the loop that made it when the node names one (spec §4.5, back_to); a
+// base that doesn't merge cleanly, a target another process holds, and a refusal for Odin's own failure
+// under the checks (an interrupt, a sandbox that failed, a check the realm lacks, a leaf that couldn't be
+// tidied) fail the node, since the implementer can't fix any of them (review I-5).
+func failLanding(r *run.Run, n schema.Node, ev gungnir.Event, err error) error {
 	var mr *merge.Refused
 	var pr *pointer.Refused
 	if !errors.As(err, &mr) && !errors.As(err, &pr) && !errors.Is(err, lock.ErrHeld) {
@@ -149,7 +182,24 @@ func failLanding(r *run.Run, ev gungnir.Event, err error) error {
 	if lerr := r.Log(ev); lerr != nil {
 		return lerr
 	}
+	if workRefused(err) {
+		if sent, serr := sendBack(r, n, err.Error()); sent || serr != nil {
+			return serr
+		}
+	}
 	return &nodeFailure{err}
+}
+
+// workRefused reports whether a gate refused the work because one of its checks ran and failed: a merge
+// gate's checks, or a pointer move's checks or acceptance.
+func workRefused(err error) bool {
+	var mr *merge.Refused
+	var pr *pointer.Refused
+	var cf *checkFailed
+	if !errors.As(err, &cf) {
+		return false
+	}
+	return (errors.As(err, &mr) && mr.Why == merge.WhyChecks) || errors.As(err, &pr)
 }
 
 // tidied returns the checks' own result, after putting the leaf back to the commit they ran on, so

@@ -93,6 +93,13 @@ func TestPrepareRefusesWhatWouldRunOutsideTheSandbox(t *testing.T) {
 	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: acceptance}); err == nil || !strings.Contains(err.Error(), "runs acceptance checks") {
 		t.Errorf("a realm with acceptance checks and a sandbox: %v", err)
 	}
+	// The same in a task shape, whose nodes are the body of a foreach node.
+	inBody := variant(t, "graph.yaml", func(g string) string {
+		return g + "  - { id: tasks, kind: foreach, over: tasks, nodes: [ { id: move, kind: pointer, realm: leaf, acceptance: [unit] } ] }\n"
+	})
+	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: inBody}); err == nil || !strings.Contains(err.Error(), "node move runs acceptance checks") {
+		t.Errorf("a task shape with acceptance checks and a sandbox: %v", err)
+	}
 	// A pack with no stack can't build an image.
 	noStack := variant(t, "pack.yaml", func(p string) string { return strings.SplitN(p, "sandbox:", 2)[0] })
 	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: noStack}); err == nil || !strings.Contains(err.Error(), "names no sandbox stack") {
