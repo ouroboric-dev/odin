@@ -30,7 +30,16 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   (`back_to`, a few times). An unattended run gives up a task whose loop gave up, keeps its work on a
   ref, and goes on with the tasks that do not depend on it.
 - Starts each leaf's sandbox on its realm's stack, with the services of its realm and of the leaves it
-  consumes (spec §6.1, §9.2).
+  consumes (spec §6.1, §9.2). A realm's stack is an image pinned by digest or one that `ygg sandbox build`
+  builds from the realm's own build context (change realm-content); the tag is a hash of the context.
+- Runs a pointer move's acceptance checks, when the run has a sandbox, in a sandbox that holds a snapshot
+  of the project: the committed files of the umbrella and of each leaf, at the commits they are on, in a
+  plain folder with no git directory, on the lead realm's acceptance stack and with the services of every
+  leaf's realm. What a leaf's working copy holds beyond its commits never reaches it.
+- Reads the design-conformance verdict (`out/conformance.json` of a scratch reviewer that reviews another
+  scratch agent's output, which it finds as `reviewed/`) and gives it to the spec gate: a deviation stops the
+  gate in every mode, with the proposed amendment in the gate file; a verdict that cannot be read is asked
+  for once more and then stops the run, never a pass (spec §4.2, §4.6).
 - Counts every session's usage, a failed one's too, in the run and in a daily spend journal outside
   any project, and stops the run at the hard approval point `budget-cap` before a session would start
   over a cap (spec §7.4). Pauses the run when the provider's quota is used up (spec §12).
