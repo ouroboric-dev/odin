@@ -275,15 +275,16 @@ func (s *Setup) Leaves() []string {
 
 // Run is an open run: its directory, state, setup, ledger and locks.
 type Run struct {
-	Project string
-	Dir     string
-	State   *State
-	Setup   *Setup
-	Ledger  *ledger.Ledger
-	unlock  func()
-	changes []gungnir.Event // a mode or config switch Open found, not yet in the ledger
-	Saved   []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
-	Sandbox gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
+	Project  string
+	Dir      string
+	State    *State
+	Setup    *Setup
+	Ledger   *ledger.Ledger
+	unlock   func()
+	changes  []gungnir.Event // a mode or config switch Open found, not yet in the ledger
+	Saved    []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
+	SetAside []string        // the notes of Saved from the set-aside of a session whose spend the journal couldn't take, for its gate (review I4)
+	Sandbox  gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
 }
 
 // Meter returns the budget of this run: its caps against its own usage and the day's journal.
@@ -302,11 +303,13 @@ func (r *Run) Spend(node string, u gungnir.Usage) error {
 	jerr, serr := r.appendPending(r.Save)
 	if u != (gungnir.Usage{}) {
 		e := r.Setup.Journal.Stamp(budget.Entry{Run: r.State.ID, Project: r.Project, Node: node, Usage: u})
-		if jerr == nil {
+		// Behind the pending ones, if any are left, so the journal keeps the order.
+		waits := len(r.State.PendingSpend) > 0
+		if !waits {
 			jerr = r.Setup.Journal.Append(e)
 		}
 		r.State.Usage = r.State.Usage.Add(u)
-		if jerr != nil {
+		if waits || jerr != nil {
 			r.State.PendingSpend = append(r.State.PendingSpend, e)
 			serr = errors.Join(serr, r.Save())
 		}
@@ -319,7 +322,13 @@ func (r *Run) Spend(node string, u gungnir.Usage) error {
 // stays pending: jerr is the journal's error, serr a failed save.
 func (r *Run) appendPending(save func() error) (jerr, serr error) {
 	for len(r.State.PendingSpend) > 0 {
-		if err := r.Setup.Journal.Append(r.State.PendingSpend[0]); err != nil {
+		e := r.State.PendingSpend[0]
+		// The journal may hold it already: the process can stop between the append and the save.
+		has, err := r.Setup.Journal.Has(e)
+		if err == nil && !has {
+			err = r.Setup.Journal.Append(e)
+		}
+		if err != nil {
 			return err, nil
 		}
 		r.State.PendingSpend = r.State.PendingSpend[1:]
@@ -648,6 +657,14 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 		s.Exec = nil
 	}
 	r := &Run{Project: setup.Project.Dir, Dir: dir, State: s, Setup: setup, Ledger: l, unlock: func() {}}
+	// The spends the journal missed are written before the run goes on, so the day's cap counts them,
+	// and before anything else changes, so a refusal while the journal is still broken leaves the
+	// sandboxes and the leaves as they are. run.json is written as it was loaded, less what was
+	// written: no switch is applied yet.
+	if jerr, serr := r.appendPending(func() error { return s.Save(dir) }); jerr != nil || serr != nil {
+		l.Close()
+		return nil, errors.Join(r.journalError(jerr), serr)
+	}
 	if err := r.openSandbox(setup.newSandbox); err != nil {
 		l.Close()
 		return nil, err
@@ -660,12 +677,6 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	if err := r.restoreLeaves(ctx); err != nil {
 		l.Close()
 		return nil, err
-	}
-	// The spends the journal missed are written before the run goes on, so the day's cap counts them.
-	// run.json is written as it was loaded, less what was written: no switch is applied yet.
-	if jerr, serr := r.appendPending(func() error { return s.Save(dir) }); jerr != nil || serr != nil {
-		l.Close()
-		return nil, errors.Join(r.journalError(jerr), serr)
 	}
 	// The switches apply in memory now, and reach the ledger and run.json with the command's first
 	// write (Log or Save). A refused command writes nothing, so it switches nothing.

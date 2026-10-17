@@ -239,6 +239,7 @@ func TestASpendTheJournalCannotTakeStopsAtBudgetCapWithTheWorkSetAside(t *testin
 	script := strings.Replace(spendScript, "  b:\n", again+"  b:\n", 1)
 	r := startWith(t, setup{nodes: twoNodes, script: script, journal: journal})
 	r.Setup.Agents["planner"] = journalBreaker{Agent: r.Setup.Agents["planner"], dir: journal}
+	r.Saved = []string{"repos/app: an earlier discard in this process"} // not this stop's: the gate must not list it
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateBudgetCap || out.Gate != "a" {
 		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at budget-cap at node a", out, err, r.State.PendingGate)
@@ -260,12 +261,12 @@ func TestASpendTheJournalCannotTakeStopsAtBudgetCapWithTheWorkSetAside(t *testin
 		t.Errorf("the leaf is at %s with changes %q; want it back at its checkpoint %s", head, st, s.Leaves["repos/app"].Checkpoint)
 	}
 	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "a-1.md"))
-	for _, want := range []string{journal, "ygg doctor", "run.json", "refs/ygg/" + s.ID + "/discarded/"} {
+	for _, want := range []string{journal, "ygg doctor checks only today's journal file", "run.json", "refs/ygg/" + s.ID + "/discarded/"} {
 		if !strings.Contains(string(gate), want) {
 			t.Errorf("the gate file doesn't name %q:\n%s", want, gate)
 		}
 	}
-	for _, wrong := range []string{"Raise the cap", "wait until"} {
+	for _, wrong := range []string{"Raise the cap", "wait until", "an earlier discard"} {
 		if strings.Contains(string(gate), wrong) {
 			t.Errorf("the gate file says %q, which doesn't help a journal that can't be written:\n%s", wrong, gate)
 		}

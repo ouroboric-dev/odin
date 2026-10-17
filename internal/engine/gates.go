@@ -242,12 +242,13 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 	case h.gate == gungnir.GateBudgetCap && journalCap(h.err) && len(s.PendingSpend) > 0:
 		// A session's spend the journal couldn't take (review I4): the session ran, and its leaf was put back.
 		c, _ := jormungandr.IsCap(h.err)
-		fmt.Fprintf(&b, "The day's spend journal can't be written (%s), so the per-day cap can't be kept. ygg doctor checks it. "+
+		fmt.Fprintf(&b, "The spend journal can't be written (%s), so the per-day cap can't be kept. "+
+			"ygg doctor checks only today's journal file, and a pending spend goes to the file of the day it was spent: the reason above names the path that failed. "+
 			"The session's usage is kept in run.json, and is written to the journal first when the run goes on. ", c.Note)
-		if len(r.Saved) == 0 {
+		if len(r.SetAside) == 0 {
 			b.WriteString("The session left no uncommitted changes to set aside. ")
 		} else {
-			fmt.Fprintf(&b, "The session's uncommitted changes were set aside:\n\n- %s\n\n", strings.Join(r.Saved, "\n- "))
+			fmt.Fprintf(&b, "The session's uncommitted changes were set aside:\n\n- %s\n\n", strings.Join(r.SetAside, "\n- "))
 		}
 		fmt.Fprintf(&b, "Once the journal can be written, approve: the run runs %s again.\n", n.ID)
 	case h.gate == gungnir.GateBudgetCap && journalCap(h.err):

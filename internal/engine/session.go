@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
@@ -118,9 +119,11 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 			// back to its checkpoint first, as for a retry, so a resume or an approval doesn't refuse it as
 			// changed while the run waited.
 			if _, ok := jormungandr.IsCap(err); ok {
+				from := len(r.Saved)
 				if serr := setAside(ctx, r, sp); serr != nil {
 					return stop(serr)
 				}
+				r.SetAside = slices.Clone(r.Saved[from:]) // this set-aside's notes only, for the gate
 			}
 			return stop(err)
 		}
