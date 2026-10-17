@@ -10,6 +10,7 @@ import (
 const (
 	goStack   = "docker.io/library/golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514"
 	nodeStack = "docker.io/library/node:24.1.0-bookworm@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	pgImage   = "docker.io/library/postgres:17.2@sha256:1111111111111111111111111111111111111111111111111111111111111111"
 )
 
 // realmsStore writes a realm store: midgard-react and helheim-go on stacks of their own, a third realm on
@@ -21,6 +22,9 @@ func realmsStore(t *testing.T) (store, config string) {
 		body := "name: " + name + "\nversion: 0.1.0\n"
 		if stack != "" {
 			body += "sandbox:\n  stack: " + stack + "\n"
+		}
+		if name != "midgard-react" { // two realms share one service image, a third has none
+			body += "services:\n  postgres:\n    image: " + pgImage + "\n    ports: [5432]\n"
 		}
 		if err := os.MkdirAll(filepath.Join(store, name), 0o755); err != nil {
 			t.Fatal(err)
@@ -49,6 +53,17 @@ func builds(log string) []string {
 	return out
 }
 
+func pulls(log string) []string {
+	b, _ := os.ReadFile(log)
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "podman pull ") && strings.HasSuffix(line, pgImage) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 func TestSandboxBuildBuildsTheStackOfEveryRealmNamed(t *testing.T) {
 	log := stubEngine(t)
 	_, config := realmsStore(t)
@@ -62,6 +77,9 @@ func TestSandboxBuildBuildsTheStackOfEveryRealmNamed(t *testing.T) {
 	}
 	if strings.Count(out, "Built:") != 2 {
 		t.Errorf("output:\n%s", out)
+	}
+	if got := pulls(log); len(got) != 1 || !strings.Contains(out, "Pulling the service image "+pgImage) {
+		t.Errorf("the service image was pulled %d times; helheim-go has one, midgard-react none:\n%s", len(got), out)
 	}
 }
 
@@ -77,6 +95,9 @@ func TestSandboxBuildAllBuildsEachStackOnceAndSkipsRealmsWithNone(t *testing.T) 
 	}
 	if !strings.Contains(out, "asgard names no sandbox stack; skipped") {
 		t.Errorf("output lacks the skipped realm:\n%s", out)
+	}
+	if got := pulls(log); len(got) != 1 {
+		t.Errorf("the service image shared by two realms was pulled %d times, want once:\n%s", len(got), strings.Join(got, "\n"))
 	}
 }
 

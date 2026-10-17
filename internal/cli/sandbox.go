@@ -42,7 +42,7 @@ func (c *command) sandbox(args []string) int {
 	if cfg.Sandbox == nil {
 		return c.refuse(fmt.Errorf("%s has no sandbox section", f.config))
 	}
-	stacks, skipped, err := stacksToBuild(cfg, f.realms, f.all)
+	stacks, services, skipped, err := stacksToBuild(cfg, f.realms, f.all)
 	if err != nil {
 		return c.refuse(err)
 	}
@@ -67,13 +67,21 @@ func (c *command) sandbox(args []string) int {
 		}
 		fmt.Fprintf(c.out, "Built:\n  %s\n  %s\n", imgs.Work, imgs.Firewall)
 	}
+	for _, image := range services {
+		fmt.Fprintf(c.out, "Pulling the service image %s.\n", image)
+		if err := d.Pull(c.ctx, image); err != nil {
+			fmt.Fprintf(c.err, "ygg: pulling a service image failed: %v\n", err)
+			return ExitFailed
+		}
+	}
 	return ExitDone
 }
 
 // stacksToBuild returns the distinct sandbox stacks of the realms named, in the order named, or of every
-// realm in the store with --all. A realm named on purpose that has no stack is an error; with --all it
-// is skipped, and the skip is returned for the output.
-func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks, skipped []string, err error) {
+// realm in the store with --all, and the distinct images of their services, which a sandbox uses without
+// ever pulling them. A realm named on purpose that has no stack is an error; with --all it is skipped,
+// and the skip is returned for the output.
+func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks, services, skipped []string, err error) {
 	var store *realm.Store
 	if cfg.Realms != nil {
 		store = &realm.Store{Dir: cfg.Realms.Dir}
@@ -81,11 +89,11 @@ func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks, skippe
 	var dirs []string
 	if all {
 		if store == nil {
-			return nil, nil, errors.New("--all needs factory.yaml's realms section, which says where the realm leaves are")
+			return nil, nil, nil, errors.New("--all needs factory.yaml's realms section, which says where the realm leaves are")
 		}
 		entries, err := os.ReadDir(store.Dir)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		for _, e := range entries {
 			if _, err := os.Stat(filepath.Join(store.Dir, e.Name(), "pack.yaml")); err == nil {
@@ -96,23 +104,30 @@ func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks, skippe
 	for _, ref := range refs {
 		dir, _, err := realm.Resolve(ref, store)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		dirs = append(dirs, dir)
 	}
 	for _, dir := range dirs {
 		pack, err := schema.LoadPack(dir)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		switch {
 		case pack.Sandbox == nil && all:
 			skipped = append(skipped, fmt.Sprintf("The realm %s names no sandbox stack; skipped.", pack.Name))
 		case pack.Sandbox == nil:
-			return nil, nil, fmt.Errorf("the realm %s names no sandbox stack in its pack.yaml", pack.Name)
+			return nil, nil, nil, fmt.Errorf("the realm %s names no sandbox stack in its pack.yaml", pack.Name)
 		case !slices.Contains(stacks, pack.Sandbox.Stack):
 			stacks = append(stacks, pack.Sandbox.Stack)
 		}
+		if pack.Sandbox != nil {
+			for _, v := range pack.ServiceList() {
+				if !slices.Contains(services, v.Image) {
+					services = append(services, v.Image)
+				}
+			}
+		}
 	}
-	return stacks, skipped, nil
+	return stacks, services, skipped, nil
 }
