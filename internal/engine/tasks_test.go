@@ -197,3 +197,13 @@ func TestARejectionGivesARefusalItsReturnsAgain(t *testing.T) {
 		t.Errorf("Advance() = %+v, %v (planner ran %d times); want the plan back at the gate after one more return", out, err, r.State.Attempts["plan"])
 	}
 }
+
+func TestAPlanInAProjectWithNoLeafIsCheckedAgainstNoLeavesNotNotAtAll(t *testing.T) {
+	r := startRealms(t, realmsSetup{nodes: "  - { id: ready, kind: tasks, from: tasks.md }\n", script: "steps: {}\n",
+		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web.")}})
+	os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte(readyPlan+taskMD("p-T1", "repos/anything", "S", "nothing")), 0o644)
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), `layer "repos/anything" is not a leaf of this project ()`) {
+		t.Errorf("Advance() = %+v, %v", out, err)
+	}
+}

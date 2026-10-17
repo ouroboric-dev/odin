@@ -113,6 +113,7 @@ func readPlan(r *run.Run, n schema.Node) (fs []schema.Feature, source, sum, refu
 // planLeaves returns the leaves a task may work in: those the project has, and those the spec stage named
 // in the leaves file the node points at, which init has not created yet.
 func planLeaves(r *run.Run, n schema.Node) (leaves []string, refusal string, err error) {
+	leaves = []string{} // never nil: no leaf at all is a list a layer is checked against, not no check
 	if u := r.Setup.Project.Umbrella; u != nil {
 		for _, p := range u.Paths() {
 			if u.Children[p].Kind == schema.ChildLeaf {
