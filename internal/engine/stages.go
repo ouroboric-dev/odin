@@ -202,3 +202,92 @@ func setTask(r *run.Run, slug string, to schema.TaskStatus, event gungnir.EventN
 	}
 	return r.Save()
 }
+
+// blocksTasks reports whether the run gives a task up when its loop does, and goes on with the rest:
+// an unattended run's answer to an exhausted loop, where the other modes stop and ask (spec §7.3).
+func blocksTasks(r *run.Run, n schema.Node) bool {
+	return r.State.Mode == gungnir.ModeUnattended && n.Task != ""
+}
+
+// blockTask gives up the task node n works for: the task is blocked, with the reason, the leaf is put
+// back to its main with what the task did kept on a ref for the operator, and Position moves past the
+// task's nodes. The tasks that depend on it are blocked when the walk reaches them (skipBlocked).
+func blockTask(ctx context.Context, r *run.Run, nodes []schema.Node, n schema.Node, why string) error {
+	s := r.State
+	if rec, ok := s.Leaves[n.Repo]; ok && n.Repo != "" {
+		l, err := r.Leaf(n.Repo)
+		if err != nil {
+			return err
+		}
+		base, err := l.Rev(ctx, "main")
+		if err != nil {
+			return err
+		}
+		ref := "refs/ygg/" + s.ID + "/blocked/" + n.Task
+		if _, err := l.Git(ctx, "update-ref", ref, rec.Checkpoint); err != nil {
+			return err
+		}
+		if err := l.Reset(ctx, rec.Branch, base); err != nil {
+			return err
+		}
+		rec.Checkpoint = base
+		s.Leaves[n.Repo] = rec
+		why += fmt.Sprintf(" What the task did is kept on %s (git -C %s log %s).", ref, r.RepoDir(n.Repo), ref)
+	}
+	if err := markBlocked(r, n.Task, why); err != nil {
+		return err
+	}
+	for s.Position < len(nodes) && nodes[s.Position].Task == n.Task {
+		s.Position++
+	}
+	s.Pending, s.PendingGate = "", ""
+	return r.Save()
+}
+
+// markBlocked records the task as blocked, in features.json and the ledger.
+func markBlocked(r *run.Run, slug, why string) error {
+	s := r.State
+	i := slices.IndexFunc(s.Features, func(f schema.FeatureRecord) bool { return f.Slug() == slug })
+	if i < 0 || s.Features[i].Status == schema.TaskBlocked {
+		return nil
+	}
+	s.Features[i].Status, s.Features[i].Why = schema.TaskBlocked, why
+	if err := writeFeatures(r); err != nil {
+		return err
+	}
+	return r.Log(gungnir.Event{Name: gungnir.EventTaskBlocked, Task: slug, Result: "blocked", Note: firstLine(why)})
+}
+
+// skipBlocked blocks, without starting it, the task whose nodes come next if a task it depends on is
+// blocked, and moves Position past the task's nodes. It returns whether it moved.
+func skipBlocked(r *run.Run, nodes []schema.Node) (bool, error) {
+	s := r.State
+	moved := false
+	for s.Position < len(nodes) && nodes[s.Position].Task != "" {
+		slug := nodes[s.Position].Task
+		i := slices.IndexFunc(s.Features, func(f schema.FeatureRecord) bool { return f.Slug() == slug })
+		if i < 0 {
+			return moved, nil
+		}
+		f := s.Features[i]
+		if f.Status != schema.TaskBlocked {
+			dep := slices.IndexFunc(s.Features, func(g schema.FeatureRecord) bool {
+				return g.Status == schema.TaskBlocked && slices.Contains(f.DependsOn, g.ID)
+			})
+			if dep < 0 {
+				return moved, nil
+			}
+			if err := markBlocked(r, slug, fmt.Sprintf("it depends on %s, which is blocked", s.Features[dep].ID)); err != nil {
+				return moved, err
+			}
+		}
+		for s.Position < len(nodes) && nodes[s.Position].Task == slug {
+			s.Position++
+		}
+		moved = true
+	}
+	if moved {
+		return true, r.Save()
+	}
+	return false, nil
+}

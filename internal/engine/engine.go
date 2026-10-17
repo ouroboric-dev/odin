@@ -58,6 +58,11 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 	}
 	for {
 		nodes := r.Nodes()
+		if moved, err := skipBlocked(r, nodes); err != nil {
+			return Outcome{}, err
+		} else if moved {
+			continue
+		}
 		if err := settleTasks(r, nodes); err != nil {
 			return Outcome{}, err
 		}
@@ -104,6 +109,13 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		}
 		var esc *escalation
 		if errors.As(err, &esc) {
+			if blocksTasks(r, n) {
+				// Unattended: give the task up and go on with the tasks that don't depend on it (spec §7.3).
+				if err := blockTask(ctx, r, nodes, n, "its loop gave up ("+esc.out.Reason+"): "+esc.out.Detail+"."); err != nil {
+					return Outcome{}, err
+				}
+				continue
+			}
 			return stopEscalation(r, n, esc)
 		}
 		if err != nil {
@@ -118,10 +130,24 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		}
 	}
 	s.Status = run.StatusDone
-	if err := r.Log(gungnir.Event{Name: gungnir.EventRunFinished, Result: "done"}.WithUsage(s.Usage)); err != nil {
+	if err := r.Log(gungnir.Event{Name: gungnir.EventRunFinished, Result: doneResult(s)}.WithUsage(s.Usage)); err != nil {
 		return Outcome{}, err
 	}
 	return Outcome{Status: run.StatusDone}, r.Save()
+}
+
+// doneResult is how a finished run is described: "done", or the tasks it gave up, listed first (spec §7.3).
+func doneResult(s *run.State) string {
+	var blocked []string
+	for _, f := range s.Features {
+		if f.Status == schema.TaskBlocked {
+			blocked = append(blocked, f.ID)
+		}
+	}
+	if len(blocked) == 0 {
+		return "done"
+	}
+	return fmt.Sprintf("done, with %d task(s) blocked: %s", len(blocked), strings.Join(blocked, ", "))
 }
 
 // nodeFailure is a node that failed; the run stops failed, and resume re-runs the node.
