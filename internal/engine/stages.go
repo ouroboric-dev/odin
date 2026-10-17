@@ -14,6 +14,8 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/leaf"
+	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -224,12 +226,26 @@ func finishTask(r *run.Run, nodes []schema.Node) error {
 	return nil
 }
 
-func startTask(r *run.Run, nodes []schema.Node) error {
+func startTask(ctx context.Context, r *run.Run, nodes []schema.Node) error {
 	s := r.State
-	if s.Position < len(nodes) && nodes[s.Position].Task != "" {
-		return setTask(r, nodes[s.Position].Task, schema.TaskDoing, gungnir.EventTaskStarted)
+	if s.Position >= len(nodes) || nodes[s.Position].Task == "" {
+		return nil
 	}
-	return nil
+	n := nodes[s.Position]
+	i := slices.IndexFunc(s.Features, func(f schema.FeatureRecord) bool { return f.Slug() == n.Task })
+	if rec, ok := s.Leaves[n.Repo]; ok && n.Repo != "" && i >= 0 && s.Features[i].Status == schema.TaskTodo {
+		// Where the leaf's main is as the task starts, saved with the task's start: blockTask puts main back
+		// there if the task is given up after its merge landed.
+		l, err := r.Leaf(n.Repo)
+		if err != nil {
+			return err
+		}
+		if rec.TaskBase, err = l.Rev(ctx, "main"); err != nil {
+			return err
+		}
+		s.Leaves[n.Repo] = rec
+	}
+	return setTask(r, n.Task, schema.TaskDoing, gungnir.EventTaskStarted)
 }
 
 // setTask moves the task with the node id slug to status, if that moves it forward: todo to doing, and
@@ -262,8 +278,10 @@ func blocksTasks(r *run.Run, n schema.Node) bool {
 }
 
 // blockTask gives up the task node n works for: the task is blocked, with the reason, the leaf is put
-// back to its main with what the task did kept on a ref for the operator, and Position moves past the
-// task's nodes. The tasks that depend on it are blocked when the walk reaches them (skipBlocked).
+// back to its main as it was when the task started, with what the task did kept on a ref for the
+// operator, and Position moves past the task's nodes. A merge of the task that landed is taken off main
+// too, so no later task builds on work a gate refused. The tasks that depend on it are blocked when the
+// walk reaches them (skipBlocked).
 func blockTask(ctx context.Context, r *run.Run, nodes []schema.Node, n schema.Node, why string) error {
 	s := r.State
 	if rec, ok := s.Leaves[n.Repo]; ok && n.Repo != "" {
@@ -271,18 +289,18 @@ func blockTask(ctx context.Context, r *run.Run, nodes []schema.Node, n schema.No
 		if err != nil {
 			return err
 		}
-		base, err := l.Rev(ctx, "main")
-		if err != nil {
-			return err
-		}
 		ref := "refs/ygg/" + s.ID + "/blocked/" + n.Task
 		if _, err := l.Git(ctx, "update-ref", ref, rec.Checkpoint); err != nil {
+			return err
+		}
+		base, err := mainBack(ctx, r, l, n.Repo, rec.TaskBase)
+		if err != nil {
 			return err
 		}
 		if err := l.Reset(ctx, rec.Branch, base); err != nil {
 			return err
 		}
-		rec.Checkpoint = base
+		rec.Checkpoint, rec.TaskBase = base, ""
 		s.Leaves[n.Repo] = rec
 		why += fmt.Sprintf(" What the task did is kept on %s (git -C %s log %s).", ref, r.RepoDir(n.Repo), ref)
 	}
@@ -294,6 +312,30 @@ func blockTask(ctx context.Context, r *run.Run, nodes []schema.Node, n schema.No
 	}
 	s.Pending, s.PendingGate = "", ""
 	return r.Save()
+}
+
+// mainBack moves the leaf's main back to taskBase, under the leaf's lock, and returns where main is. A
+// main that has moved on since the task started holds only the task's merge, since tasks run one at a
+// time; taskBase must be an ancestor of it all the same, or main stays where it is. An empty taskBase
+// (a run.json from before it was recorded) leaves main as it is.
+func mainBack(ctx context.Context, r *run.Run, l *leaf.Leaf, repo, taskBase string) (string, error) {
+	release, err := lock.Take(r.LockFile(repo))
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	main, err := l.Rev(ctx, "main")
+	if err != nil || taskBase == "" || taskBase == main {
+		return main, err
+	}
+	if _, err := l.Git(ctx, "merge-base", "--is-ancestor", taskBase, main); err != nil {
+		return "", fmt.Errorf("the leaf's main is at %s, which doesn't hold %s, where it was when the task started: %w", main, taskBase, err)
+	}
+	// update-ref with the old value moves main only if it is still where it was read.
+	if _, err := l.Git(ctx, "update-ref", "refs/heads/main", taskBase, main); err != nil {
+		return "", err
+	}
+	return taskBase, nil
 }
 
 // markBlocked records the task as blocked, in features.json and the ledger.

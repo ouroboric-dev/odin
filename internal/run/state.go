@@ -126,6 +126,9 @@ type LeafRecord struct {
 	Branch     string `json:"branch"`     // the run's branch: ygg/<run id>
 	Base       string `json:"base"`       // the leaf's main when the run started
 	Checkpoint string `json:"checkpoint"` // the last checkpoint commit; resume resets the leaf to it
+	// TaskBase is the leaf's main when the task working in it now started: a task given up after its
+	// merge landed puts main back there (spec §7.3).
+	TaskBase string `json:"task_base,omitempty"`
 	// Realm and RealmVersion are the realm leaf that provides this leaf, as the run used it (the lead
 	// realm's, for a leaf with no pin).
 	Realm        string `json:"realm,omitempty"`

@@ -66,7 +66,7 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		} else if moved {
 			continue
 		}
-		if err := startTask(r, nodes); err != nil {
+		if err := startTask(ctx, r, nodes); err != nil {
 			return Outcome{}, err
 		}
 		if s.Position >= len(nodes) {

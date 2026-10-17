@@ -132,3 +132,45 @@ func TestATaskDoneJustBeforeTasksThatAreSkippedIsStillDone(t *testing.T) {
 		t.Errorf("statuses = %v", got)
 	}
 }
+
+func TestATaskBlockedAfterItsMergeLandedPutsTheLeafsMainBackToWhereTheTaskFoundIt(t *testing.T) {
+	// The task's work passes its loop and lands on the leaf's main; the pointer's acceptance refuses it and
+	// sends it back, and the loop then gives up. Its work must not stay on main for a later task to build on.
+	shape := strings.Replace(taskShape, "realm: leaf, role: implementer }", "realm: leaf, role: implementer, attempts: 2 }", 1)
+	shape = strings.Replace(shape, "      - { id: move, kind: pointer, realm: leaf }\n", "      - { id: move, kind: pointer, realm: leaf, acceptance: [accept], back_to: implement }\n", 1)
+	lead := recipeRealm("midgard-react", "0.1.0", "web.txt", "Web implementer prompt.")
+	lead.pack = strings.Replace(lead.pack, "checks:\n", "checks:\n  accept: [sh, -c, \"test -f repos/web/never.txt\"]\n", 1)
+	script := "steps:\n  p-t1-implement:\n" +
+		"    - actions: [ { write: { path: web.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote web.txt }\n" +
+		"    - actions: [ { remove: web.txt } ]\n      result: { status: ok, summary: removed web.txt }\n" +
+		"    - result: { status: ok, summary: did nothing }\n    - result: { status: ok, summary: did nothing }\n"
+	r := startRealms(t, realmsSetup{mode: "unattended", nodes: shape, script: script, realms: []realmFiles{lead},
+		leaves: map[string]string{"repos/web": "midgard-react"}})
+	if err := os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte("# Tasks\n\n"+taskMD("p-T1", "repos/web", "S", "nothing")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	out, err := Advance(ctx, r)
+	if err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v; want the run done, with the task given up", out, err)
+	}
+	if r.State.Returns["p-t1-move"] != 1 || r.State.Features[0].Status != schema.TaskBlocked {
+		t.Fatalf("returns %d, task %s; want the pointer's refusal sent back once and the task blocked", r.State.Returns["p-t1-move"], r.State.Features[0].Status)
+	}
+	// The leaf joined the run with the plan, at its main then, and the task is the first in it.
+	web, _ := r.Leaf("repos/web")
+	before := r.State.Leaves["repos/web"].Base
+	if main, _ := web.Rev(ctx, "main"); main != before {
+		t.Errorf("repos/web's main is at %s, want %s, where it was before the task: the work the pointer refused is still on main", main, before)
+	}
+	if head, _ := web.Head(ctx); head != before || r.State.Leaves["repos/web"].Checkpoint != before {
+		t.Errorf("repos/web is at %s with checkpoint %s, want %s", head, r.State.Leaves["repos/web"].Checkpoint, before)
+	}
+	if _, err := web.Git(ctx, "show", "main:web.txt"); err == nil {
+		t.Error("main holds web.txt, which the pointer refused")
+	}
+	ref := "refs/ygg/" + r.State.ID + "/blocked/p-t1"
+	if landed, err := web.Git(ctx, "log", "--format=%H", "-1", ref, "--", "web.txt"); err != nil || landed == "" {
+		t.Errorf("the work the task landed is not kept on %s: %q, %v", ref, landed, err)
+	}
+}
