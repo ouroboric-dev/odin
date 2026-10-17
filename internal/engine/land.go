@@ -51,8 +51,7 @@ func runMerge(ctx context.Context, r *run.Run, n schema.Node) error {
 	ev := gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Task: n.Task,
 		DurationMS: time.Since(began).Milliseconds()}
 	if landErr != nil {
-		var mr *merge.Refused
-		if errors.As(landErr, &mr) && mr.Why == merge.WhyChecks && res.Checked != "" {
+		if workRefused(landErr) && res.Checked != "" {
 			// The branch, with the base merged in, is what the checks refused: the loop goes on from there.
 			rec.Checkpoint = res.Checked
 			r.State.Leaves[n.Repo] = rec
@@ -168,10 +167,11 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 }
 
 // failLanding fails a merge or pointer node that the gate refused, or whose target another process
-// holds. Anything else is a failure of Odin itself. A gate that refused because the work fails its checks
-// sends the work back into the loop that made it when the node names one (spec §4.5, back_to); a base that
-// doesn't merge cleanly, or a target another process holds, fails the node, since the implementer can't
-// fix either.
+// holds. Anything else is a failure of Odin itself. A gate that refused because a check ran and failed on
+// the work sends the work back into the loop that made it when the node names one (spec §4.5, back_to); a
+// base that doesn't merge cleanly, a target another process holds, and a refusal for Odin's own failure
+// under the checks (an interrupt, a sandbox that failed, a check the realm lacks, a leaf that couldn't be
+// tidied) fail the node, since the implementer can't fix any of them (review I-5).
 func failLanding(r *run.Run, n schema.Node, ev gungnir.Event, err error) error {
 	var mr *merge.Refused
 	var pr *pointer.Refused
@@ -182,12 +182,24 @@ func failLanding(r *run.Run, n schema.Node, ev gungnir.Event, err error) error {
 	if lerr := r.Log(ev); lerr != nil {
 		return lerr
 	}
-	if (mr != nil && mr.Why == merge.WhyChecks) || pr != nil {
+	if workRefused(err) {
 		if sent, serr := sendBack(r, n, err.Error()); sent || serr != nil {
 			return serr
 		}
 	}
 	return &nodeFailure{err}
+}
+
+// workRefused reports whether a gate refused the work because one of its checks ran and failed: a merge
+// gate's checks, or a pointer move's checks or acceptance.
+func workRefused(err error) bool {
+	var mr *merge.Refused
+	var pr *pointer.Refused
+	var cf *checkFailed
+	if !errors.As(err, &cf) {
+		return false
+	}
+	return (errors.As(err, &mr) && mr.Why == merge.WhyChecks) || errors.As(err, &pr)
 }
 
 // tidied returns the checks' own result, after putting the leaf back to the commit they ran on, so

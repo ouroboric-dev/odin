@@ -320,7 +320,7 @@ func runCheck(ctx context.Context, r *run.Run, node, repo, dir string, spec chec
 }
 
 // runChecks runs the pack checks names in order, for the given attempt of node n, and logs each
-// result. The first failing check is the error. repo is the leaf they check, whose sandbox runs them
+// result. The first failing check is the error, a *checkFailed; any other error is Odin's own. repo is the leaf they check, whose sandbox runs them
 // when the run has one; the pointer node's acceptance checks pass "" and the umbrella's dir, and run
 // on the host.
 func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, repo, dir string) error {
@@ -348,10 +348,22 @@ func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, name
 			return err
 		}
 		if cmdErr != nil {
-			return fmt.Errorf("check %s failed: %v (output: %s)", c, cmdErr, logPath)
+			return &checkFailed{name: c, err: cmdErr, log: logPath}
 		}
 	}
 	return nil
+}
+
+// checkFailed is a check that ran and failed: the work's failure, which a gate may send back to the
+// loop that made it. Any other error of the checks is Odin's own, and fails the node (review I-5).
+type checkFailed struct {
+	name string
+	err  error
+	log  string
+}
+
+func (c *checkFailed) Error() string {
+	return fmt.Sprintf("check %s failed: %v (output: %s)", c.name, c.err, c.log)
 }
 
 // checkpoint commits node n's work in its leaf to the run's branch, and records the commit in

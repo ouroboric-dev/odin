@@ -1,11 +1,14 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -119,4 +122,62 @@ func TestAPointerMoveWhoseAcceptanceFailsSendsTheWorkBackIntoTheLoop(t *testing.
 	if got, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app"); got != main {
 		t.Errorf("the project points at %s, want main %s", got, main)
 	}
+}
+
+// A failure of Odin's own under a gate's checks is not the implementer's to fix (review I-5): the node
+// fails as it did before refusals went back, and no return is spent.
+func checkNotSentBack(t *testing.T, r *run.Run, out Outcome, err error, want string) {
+	t.Helper()
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), want) {
+		t.Fatalf("Advance() = %+v, %v; want the node failed with %q", out, err, want)
+	}
+	if r.State.Returns["merge"] != 0 || r.State.Attempts["build"] != 1 || r.State.Refusals["build"] != "" {
+		t.Errorf("returns %d, implementer ran %d times, refusal %q; Odin's own failure is not sent back", r.State.Returns["merge"], r.State.Attempts["build"], r.State.Refusals["build"])
+	}
+	if text := ledgerText(t, r); strings.Contains(text, `"event":"node_returned"`) {
+		t.Errorf("the ledger has node_returned:\n%s", text)
+	}
+}
+
+const sandboxedGate = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit] }\n" +
+	"  - { id: merge, kind: merge, repo: repos/app, checks: [junk], back_to: build }\n"
+
+const loopBuildScript = "steps:\n  build:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built }\n" +
+	"    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built again }\n"
+
+func TestACheckTheRealmDoesNotDefineFailsTheGateAndIsNotSentBack(t *testing.T) {
+	nodes := loopOfBuild + "  - { id: merge, kind: merge, repo: repos/app, checks: [late], back_to: build }\n"
+	r := startPack(t, "key-points", "", gateChecks, nodes, fixScript)
+	// The graph is checked against the pack when the run starts; a realm that lost the check since is the
+	// case left, which a node meets when it runs.
+	delete(r.Setup.Realm("").Pack.Checks, "late")
+	out, err := Advance(bg, r)
+	checkNotSentBack(t, r, out, err, "defines no check late")
+}
+
+func TestASandboxThatFailsUnderAGateCheckFailsTheGateAndIsNotSentBack(t *testing.T) {
+	r, fake := startSandboxed(t, sandboxedGate, loopBuildScript)
+	fake.Fail = func(c gungnir.Cmd) error {
+		if strings.Contains(strings.Join(c.Argv, " "), "junk.txt") {
+			return errors.New("podman exited 125")
+		}
+		return nil
+	}
+	out, err := Advance(bg, r)
+	checkNotSentBack(t, r, out, err, "podman exited 125")
+}
+
+func TestAnInterruptDuringAGateCheckFailsTheGateAndIsNotSentBack(t *testing.T) {
+	r, fake := startSandboxed(t, sandboxedGate, loopBuildScript)
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	fake.Fail = func(c gungnir.Cmd) error {
+		if strings.Contains(strings.Join(c.Argv, " "), "junk.txt") {
+			cancel() // the operator's interrupt, while the gate's check runs
+			return context.Canceled
+		}
+		return nil
+	}
+	out, err := Advance(ctx, r)
+	checkNotSentBack(t, r, out, err, "context canceled")
 }
