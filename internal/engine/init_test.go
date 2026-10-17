@@ -235,3 +235,28 @@ func TestARefusedLeavesFileDoesNotMakeTheRunTakeItsRealms(t *testing.T) {
 		t.Errorf("run.json holds %v after a leaves file that was refused; the run took no realm", r.State.Realms)
 	}
 }
+
+func TestInitRefusesALeafInsideOrHoldingAChildTheProjectHasBeforeItCreatesAnything(t *testing.T) {
+	// aa/api sorts first, so a refusal that came from the remote, leaf by leaf, would come after it was made.
+	first := "leaves:\n  aa/api:\n    realm: helheim-go\n    realm_version: 0.2.0\n    description: The API.\n"
+	for name, path := range map[string]string{"inside a leaf": "repos/app/sub", "holding a leaf": "repos"} {
+		r := startRealms(t, realmsSetup{nodes: initNode, script: "steps: {}\n",
+			realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")},
+			leaves: map[string]string{"repos/app": "midgard-react"}})
+		leaves := first + "  " + path + ":\n    realm: midgard-react\n    realm_version: 0.1.0\n    description: The web app.\n"
+		if err := os.MkdirAll(filepath.Join(r.Project, "docs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(r.Project, "docs", "leaves.yaml"), []byte(leaves), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := Advance(context.Background(), r)
+		if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), path+": it would be inside repos/app or hold it") ||
+			!strings.Contains(out.Err.Error(), "nothing was created") {
+			t.Errorf("%s: Advance() = %+v, %v; want a refusal of %s", name, out, err, path)
+		}
+		if u, _ := schema.LoadUmbrella(r.Project); len(u.Children) != 1 {
+			t.Errorf("%s: the project lists %v; init created leaves before refusing", name, u.Paths())
+		}
+	}
+}

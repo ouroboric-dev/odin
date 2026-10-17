@@ -83,11 +83,21 @@ func readLeaves(r *run.Run, n schema.Node) (*schema.Leaves, error) {
 }
 
 // checkLeaves checks, before anything is created, that each leaf can be: its realm offers a leaf recipe,
-// one that exists already is pinned as the file says, and what a leaf consumes will exist.
+// one that exists already is pinned as the file says, a new one is neither inside a child the project has
+// nor holds one, and what a leaf consumes will exist. (The file's own paths are checked against each other
+// when it is parsed.)
 func checkLeaves(r *run.Run, set *realm.Set, spec *schema.Leaves) error {
 	var problems []string
-	have := r.Setup.Project.Umbrella.Children
+	u := r.Setup.Project.Umbrella
+	have := u.Children
 	for _, p := range spec.Paths() {
+		if _, ok := have[p]; !ok {
+			for _, q := range u.Paths() {
+				if strings.HasPrefix(p, q+"/") || strings.HasPrefix(q, p+"/") {
+					problems = append(problems, fmt.Sprintf("%s: it would be inside %s or hold it, and a child of the project is never inside another", p, q))
+				}
+			}
+		}
 		l := spec.Leaves[p]
 		rl := set.Realms[l.Realm]
 		if rl.Pack.Leaf == nil {
