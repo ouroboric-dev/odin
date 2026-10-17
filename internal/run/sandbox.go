@@ -50,8 +50,12 @@ func (r *Run) Runner(ctx context.Context, repo string) (gungnir.Runner, error) {
 		return nil, err
 	}
 	parent, leaf := nodes[len(nodes)-2], nodes[len(nodes)-1]
+	stack, egress, services, err := r.Setup.SandboxFor(repo)
+	if err != nil {
+		return nil, err
+	}
 	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: repo, Parent: parent.Dir, Leaf: leaf.Dir,
-		GitDir: leaf.GitDir, Egress: r.Setup.Sandbox.Egress})
+		GitDir: leaf.GitDir, Egress: egress, Stack: stack, Services: services})
 	if err != nil {
 		return nil, err
 	}
