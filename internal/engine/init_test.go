@@ -122,6 +122,29 @@ func TestInitCreatesWhatALeafConsumesFirst(t *testing.T) {
 	}
 }
 
+func TestInitRefusesBeforeItCreatesAnything(t *testing.T) {
+	cases := map[string]struct{ leaves, want string }{
+		"a pin of the lead realm at another version": {strings.Replace(galleryLeaves, "realm_version: 0.1.0", "realm_version: 0.3.0", 1), "midgard-react is pinned at 0.1.0 by . and at 0.3.0 by repos/web"},
+		"a realm the store lacks":                    {strings.Replace(galleryLeaves, "helheim-go", "asgard", 1), "asgard"},
+		"a leaf that consumes a leaf nobody has":     {strings.Replace(galleryLeaves, "consumes: [repos/api]", "consumes: [repos/db]", 1), "it consumes repos/db"},
+		"no leaves file":                             {"", "is not there as a regular file"},
+	}
+	for name, c := range cases {
+		r := initRun(t, c.leaves)
+		if c.leaves == "" {
+			os.Remove(filepath.Join(r.Project, "docs", "leaves.yaml"))
+		}
+		out, err := Advance(context.Background(), r)
+		if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), c.want) {
+			t.Errorf("%s: Advance() = %+v, %v; want a failure mentioning %q", name, out, err, c.want)
+		}
+		u, _ := schema.LoadUmbrella(r.Project)
+		if len(u.Children) != 0 {
+			t.Errorf("%s: init created %v before refusing", name, u.Paths())
+		}
+	}
+}
+
 func TestInitRefusesARealmWithNoLeafRecipe(t *testing.T) {
 	bare := realmFiles{name: "helheim-go", version: "0.2.0"}
 	r := initRun(t, galleryLeaves, recipeRealm("midgard-react", "0.1.0", "web.txt", "Web."), bare)
@@ -131,5 +154,39 @@ func TestInitRefusesARealmWithNoLeafRecipe(t *testing.T) {
 	}
 	if u, _ := schema.LoadUmbrella(r.Project); len(u.Children) != 0 {
 		t.Errorf("init created %v for a realm that can't provide a leaf", u.Paths())
+	}
+}
+
+func TestInitLeavesALeafThatExistsAsItIsAndRefusesToRepinIt(t *testing.T) {
+	r := initRun(t, galleryLeaves)
+	ctx := context.Background()
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	// The implementer's work on the leaf must not be undone by a second pass through init.
+	api, _ := r.Leaf("repos/api")
+	os.WriteFile(filepath.Join(api.Dir(), "api.txt"), []byte("work\n"), 0o644)
+	os.Remove(filepath.Join(api.Dir(), "AGENTS.md"))
+	if _, _, err := api.Checkpoint(ctx, "work"); err != nil {
+		t.Fatal(err)
+	}
+	r.State.Position = 0
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("the second Advance() = %+v, %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(api.Dir(), "AGENTS.md")); err == nil {
+		t.Error("init put the template back into a leaf that has history")
+	}
+	if got := r.State.Summaries["leaves"]; !strings.Contains(got, "created 0 leaf(s) ()") || !strings.Contains(got, "2 already there") {
+		t.Errorf("summary = %q", got)
+	}
+	// Another realm for a leaf that exists is a change of the project, not of a run.
+	if err := os.WriteFile(filepath.Join(r.Project, "docs", "leaves.yaml"), []byte(strings.Replace(galleryLeaves, "helheim-go\n    realm_version: 0.2.0", "midgard-react\n    realm_version: 0.1.0", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.State.Position = 0
+	out, err := Advance(ctx, r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "the project has this leaf from helheim-go 0.2.0, and the leaves file names midgard-react 0.1.0") {
+		t.Errorf("Advance() = %+v, %v", out, err)
 	}
 }

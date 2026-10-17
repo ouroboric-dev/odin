@@ -37,10 +37,8 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.AddRealms(spec.Pins()); err != nil {
 		return &nodeFailure{err}
 	}
-	for _, p := range spec.Paths() {
-		if r.Setup.Realms.Realms[spec.Leaves[p].Realm].Pack.Leaf == nil {
-			return &nodeFailure{fmt.Errorf("%s: the realm %s offers no leaf recipe, so it can't provide a leaf", p, spec.Leaves[p].Realm)}
-		}
+	if err := checkLeaves(r, spec); err != nil {
+		return &nodeFailure{err}
 	}
 	var created, kept []string
 	for _, p := range initOrder(spec) {
@@ -75,6 +73,43 @@ func readLeaves(r *run.Run, n schema.Node) (*schema.Leaves, error) {
 		return nil, err
 	}
 	return schema.ParseLeaves(n.From, data)
+}
+
+// checkLeaves checks, before anything is created, that each leaf can be: its realm offers a leaf recipe,
+// one that exists already is pinned as the file says, and what a leaf consumes will exist.
+func checkLeaves(r *run.Run, spec *schema.Leaves) error {
+	var problems []string
+	have := r.Setup.Project.Umbrella.Children
+	for _, p := range spec.Paths() {
+		l := spec.Leaves[p]
+		rl := r.Setup.Realms.Realms[l.Realm]
+		if rl.Pack.Leaf == nil {
+			problems = append(problems, fmt.Sprintf("%s: the realm %s offers no leaf recipe (a template, an implementer prompt and checks), so it can't provide a leaf", p, l.Realm))
+		}
+		if c, ok := have[p]; ok {
+			realmName, version := c.Realm, c.RealmVersion
+			if realmName == "" { // a leaf with no pin is the lead realm's
+				realmName, version = r.Setup.Lead.Name, r.Setup.Lead.Version
+			}
+			switch {
+			case c.Kind != schema.ChildLeaf:
+				problems = append(problems, fmt.Sprintf("%s: the project has an umbrella there, not a leaf", p))
+			case realmName != l.Realm || version != l.RealmVersion:
+				problems = append(problems, fmt.Sprintf("%s: the project has this leaf from %s %s, and the leaves file names %s %s", p, realmName, version, l.Realm, l.RealmVersion))
+			case !slices.Equal(c.Consumes, l.Consumes):
+				problems = append(problems, fmt.Sprintf("%s: the project has this leaf consuming %v, and the leaves file says %v; rewiring a leaf that exists is not something a run does", p, c.Consumes, l.Consumes))
+			}
+		}
+		for _, q := range l.Consumes {
+			if _, listed := spec.Leaves[q]; !listed && have[q].Kind != schema.ChildLeaf {
+				problems = append(problems, fmt.Sprintf("%s: it consumes %s, which neither the file nor the project has as a leaf", p, q))
+			}
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("the leaves file can't be made real, so nothing was created:\n  %s", strings.Join(problems, "\n  "))
+	}
+	return nil
 }
 
 // initOrder puts the leaves a leaf consumes before it, since a remote records a leaf's consumers only if
