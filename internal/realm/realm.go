@@ -26,17 +26,18 @@ type Realm struct {
 	Pack    *schema.Pack
 }
 
-// Load reads the pack in dir and hashes the realm.
+// Load hashes the realm in dir and reads its pack. The hash comes first: it refuses a symlink anywhere in
+// the realm before anything in it is read.
 func Load(dir string) (*Realm, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
 	}
-	p, err := schema.LoadPack(abs)
+	h, err := Hash(abs)
 	if err != nil {
 		return nil, err
 	}
-	h, err := Hash(abs)
+	p, err := schema.LoadPack(abs)
 	if err != nil {
 		return nil, err
 	}
@@ -50,8 +51,11 @@ type limits struct{ files, bytes int64 }
 var defaultLimits = limits{files: 5000, bytes: 64 << 20}
 
 // Hash returns a SHA-256 over every file of the realm but the contents of .git: each file's path, its
-// executable bit and its bytes, and each symlink's path and target, in path order. A run records it, and
-// a resume refuses a realm whose hash changed (spec §4.3: the run's positions mean what they meant).
+// executable bit and its bytes, in path order. A run records it, and a resume refuses a realm whose hash
+// changed (spec §4.3: the run's positions mean what they meant). A realm holds regular files and folders
+// only: a symlink anywhere in it is refused, since a run reads prompts, first-commit files and the
+// template by following links, so a link could read outside the realm, and a change at its target would
+// not change the hash (review M-7).
 func Hash(dir string) (string, error) { return hashLimited(dir, defaultLimits) }
 
 func hashLimited(dir string, lim limits) (string, error) {
@@ -68,6 +72,9 @@ func hashLimited(dir string, lim limits) (string, error) {
 		if rel == "." {
 			return nil
 		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink; a realm holds its own files and folders, and a link could lead out of it", p)
+		}
 		if d.IsDir() {
 			if rel == ".git" {
 				return filepath.SkipDir
@@ -79,16 +86,8 @@ func hashLimited(dir string, lim limits) (string, error) {
 			return fmt.Errorf("%s holds more than %d files; a realm is a few hundred small ones, so this is not one", dir, lim.files)
 		}
 		rel = filepath.ToSlash(rel)
-		if d.Type()&fs.ModeSymlink != 0 {
-			target, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(h, "link\x00%s\x00%s\x00", rel, target)
-			return nil
-		}
 		if !d.Type().IsRegular() {
-			return fmt.Errorf("%s is neither a file nor a symlink", p)
+			return fmt.Errorf("%s is %s, not a regular file", p, d.Type())
 		}
 		info, err := d.Info()
 		if err != nil {
