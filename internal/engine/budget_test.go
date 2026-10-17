@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -241,5 +242,43 @@ func TestASpendTheJournalCannotTakeStillCountsInTheRun(t *testing.T) {
 	}
 	if s.Usage.InTok != 100 || s.Usage.Turns != 3 {
 		t.Errorf("run.json usage = %+v; the session's spend counts though the journal didn't take it", s.Usage)
+	}
+}
+
+// countingAgent counts the sessions its agent was asked to run.
+type countingAgent struct {
+	gungnir.Agent
+	calls *int
+}
+
+func (c countingAgent) Run(ctx context.Context, t gungnir.Task) (gungnir.Result, error) {
+	*c.calls++
+	return c.Agent.Run(ctx, t)
+}
+
+// Review M3: another run can spend the day's last turns after the meter let a session start. The
+// session must not then start with no turn bound, which a MaxTurns of 0 would mean.
+func TestASessionTheCapsLeaveNoTurnsForDoesNotStart(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	r := startWith(t, setup{nodes: twoNodes, script: spendScript, budget: caps(100000, 100, 200000, 5)})
+	var calls int
+	r.Setup.Agents["planner"] = countingAgent{Agent: r.Setup.Agents["planner"], calls: &calls}
+	// The meter has let the session start; then another run spends the day's last turns.
+	spend := func() error {
+		return r.Setup.Journal.Append(budget.Entry{Run: "20261016-090000-aaaaaa", Project: "/another/project", Node: "x", Usage: gungnir.Usage{InTok: 10, OutTok: 1, Turns: 5}})
+	}
+	_, _, err := session(context.Background(), r, sessionSpec{key: "a", role: "planner", repo: "repos/app", text: "Do the work.", started: spend})
+	if calls != 0 {
+		t.Errorf("the agent ran %d session(s) though the caps left no turns", calls)
+	}
+	c, ok := jormungandr.IsCap(err)
+	if !ok || c.Dimension != gungnir.CapTurns || c.Scope != gungnir.CapDay || c.Used != 5 || c.Limit != 5 {
+		t.Fatalf("session() error = %v (%+v); want the per-day turns cap, 5 used of 5", err, c)
+	}
+	if r.State.Attempts["a"] != 0 {
+		t.Errorf("attempts = %d; a session that never started counts none", r.State.Attempts["a"])
+	}
+	if strings.Contains(ledgerText(t, r), `"event":"node_started"`) {
+		t.Errorf("the ledger says a session started that never did:\n%s", ledgerText(t, r))
 	}
 }

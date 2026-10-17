@@ -34,15 +34,22 @@ func (m *Meter) Check() *gungnir.CapError {
 func (m *Meter) Today() (gungnir.Usage, error) { return m.Journal.Today() }
 
 // RemainingTurns returns how many turns the caps still allow: the lesser of the run's and the
-// day's, and never below zero. It bounds the turns of a session, so one session can't run far past a
-// cap that Check only sees afterwards. An unreadable journal leaves none.
-func (m *Meter) RemainingTurns() int64 {
-	left := m.Caps.PerRun.Turns - m.Run.Turns
+// day's, always above zero. It bounds the turns of a session, so one session can't run far past a
+// cap that Check only sees afterwards. When no turn is left it returns the cap that says why, the
+// run's before the day's, as Check does; an unreadable journal leaves none (gungnir.CapJournal).
+// The turns can run out after Check let a session start: another run can spend the day's last ones.
+func (m *Meter) RemainingTurns() (int64, *gungnir.CapError) {
+	if m.Run.Turns >= m.Caps.PerRun.Turns {
+		return 0, &gungnir.CapError{Scope: gungnir.CapRun, Dimension: gungnir.CapTurns, Used: float64(m.Run.Turns), Limit: float64(m.Caps.PerRun.Turns)}
+	}
 	day, err := m.Today()
 	if err != nil {
-		return 0
+		return 0, &gungnir.CapError{Scope: gungnir.CapDay, Dimension: gungnir.CapJournal, Note: err.Error()}
 	}
-	return max(min(left, m.Caps.PerDay.Turns-day.Turns), 0)
+	if day.Turns >= m.Caps.PerDay.Turns {
+		return 0, &gungnir.CapError{Scope: gungnir.CapDay, Dimension: gungnir.CapTurns, Used: float64(day.Turns), Limit: float64(m.Caps.PerDay.Turns)}
+	}
+	return min(m.Caps.PerRun.Turns-m.Run.Turns, m.Caps.PerDay.Turns-day.Turns), nil
 }
 
 // Near returns the caps that are at least frac of the way reached, and not yet reached, for a
