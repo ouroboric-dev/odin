@@ -15,14 +15,19 @@ import (
 // api and depends on nothing. Task 2's implementer never writes what its check wants.
 func blockedRun(t *testing.T, mode string) *run.Run {
 	t.Helper()
+	return blockedRunOf(t, mode, "# Tasks\n\n"+taskMD("p-T1", "repos/api", "S", "nothing")+taskMD("p-T2", "repos/web", "M", "p-T1")+
+		taskMD("p-T3", "repos/web", "S", "p-T2")+taskMD("p-T4", "repos/api", "S", "p-T1"))
+}
+
+// blockedRunOf is blockedRun with the plan given.
+func blockedRunOf(t *testing.T, mode, plan string) *run.Run {
+	t.Helper()
 	idle := "    - result: { status: ok, summary: did nothing }\n"
 	script := writeStep("p-t1-implement", "api.txt") + writeStep("p-t4-implement", "api2.txt") +
 		"  p-t2-implement:\n" + strings.Repeat(idle, 3) + writeStep("p-t3-implement", "web2.txt")
 	r := startRealms(t, realmsSetup{mode: mode, nodes: taskShape, script: "steps:\n" + script,
 		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web implementer prompt."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API implementer prompt.")},
 		leaves: map[string]string{"repos/api": "helheim-go", "repos/web": "midgard-react"}})
-	plan := "# Tasks\n\n" + taskMD("p-T1", "repos/api", "S", "nothing") + taskMD("p-T2", "repos/web", "M", "p-T1") +
-		taskMD("p-T3", "repos/web", "S", "p-T2") + taskMD("p-T4", "repos/api", "S", "p-T1")
 	if err := os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte(plan), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -109,5 +114,21 @@ func TestOtherModesStopAtTheLoopThatGaveUp(t *testing.T) {
 		if r.State.Features[1].Status == schema.TaskBlocked {
 			t.Errorf("%s: a task was given up with an operator there to decide", mode)
 		}
+	}
+}
+
+func TestATaskDoneJustBeforeTasksThatAreSkippedIsStillDone(t *testing.T) {
+	// T3 is the last task that runs: T4 comes after it and depends on the blocked T2, so the walk skips it.
+	r := blockedRunOf(t, "unattended", "# Tasks\n\n"+taskMD("p-T1", "repos/api", "S", "nothing")+taskMD("p-T2", "repos/web", "M", "p-T1")+
+		taskMD("p-T3", "repos/api", "S", "p-T1")+taskMD("p-T4", "repos/web", "S", "p-T2"))
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	got := map[string]schema.TaskStatus{}
+	for _, f := range r.State.Features {
+		got[f.ID] = f.Status
+	}
+	if got["p-T3"] != schema.TaskDone || got["p-T4"] != schema.TaskBlocked || got["p-T2"] != schema.TaskBlocked || got["p-T1"] != schema.TaskDone {
+		t.Errorf("statuses = %v", got)
 	}
 }

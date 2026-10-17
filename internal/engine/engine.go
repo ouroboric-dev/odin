@@ -58,12 +58,15 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 	}
 	for {
 		nodes := r.Nodes()
+		if err := finishTask(r, nodes); err != nil {
+			return Outcome{}, err
+		}
 		if moved, err := skipBlocked(r, nodes); err != nil {
 			return Outcome{}, err
 		} else if moved {
 			continue
 		}
-		if err := settleTasks(r, nodes); err != nil {
+		if err := startTask(r, nodes); err != nil {
 			return Outcome{}, err
 		}
 		if s.Position >= len(nodes) {

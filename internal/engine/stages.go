@@ -162,18 +162,22 @@ func expandForeach(ctx context.Context, r *run.Run, n schema.Node) error {
 	return &expanded{}
 }
 
-// settleTasks keeps the record of each task in step with Position: a task is doing once the first node of
-// its shape is next, and done once the walk has left its last node. It writes features.json when a task
-// changes, and a line in the ledger.
-func settleTasks(r *run.Run, nodes []schema.Node) error {
+// finishTask marks done the task whose last node the walk has just left, and startTask marks doing the
+// task whose first node is next. Each writes features.json and a line in the ledger when a task changes.
+// A task that is skipped because one it depends on is blocked is neither: it is blocked, by skipBlocked,
+// which runs between the two.
+func finishTask(r *run.Run, nodes []schema.Node) error {
 	s := r.State
 	if s.Position > 0 && s.Position <= len(nodes) {
 		if prev := nodes[s.Position-1]; prev.Task != "" && (s.Position == len(nodes) || nodes[s.Position].Task != prev.Task) {
-			if err := setTask(r, prev.Task, schema.TaskDone, gungnir.EventTaskDone); err != nil {
-				return err
-			}
+			return setTask(r, prev.Task, schema.TaskDone, gungnir.EventTaskDone)
 		}
 	}
+	return nil
+}
+
+func startTask(r *run.Run, nodes []schema.Node) error {
+	s := r.State
 	if s.Position < len(nodes) && nodes[s.Position].Task != "" {
 		return setTask(r, nodes[s.Position].Task, schema.TaskDoing, gungnir.EventTaskStarted)
 	}
