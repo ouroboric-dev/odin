@@ -293,19 +293,49 @@ func (r *Run) Meter() *budget.Meter {
 
 // Spend counts what a session used, whether or not it succeeded: in the day's journal first, so a
 // crash between the two leaves the spend counted twice at worst, and then in the run's usage. The
-// caller saves run.json. A journal that can't take the line is an error, and the run's usage counts
-// the spend all the same, saved here, since the caller stops on the error (review I4). A usage of
-// nothing is not recorded.
+// caller saves run.json. The spends the journal missed before are written first, in order. A journal
+// that can't take the line is an error, and the run's usage counts the spend all the same; the entry
+// is kept in run.json as pending, saved here, since the caller stops on the error, and the next Spend
+// or Open writes it (review I4). A usage of nothing is not recorded.
 func (r *Run) Spend(node string, u gungnir.Usage) error {
-	if u == (gungnir.Usage{}) {
+	jerr, serr := r.appendPending(r.Save)
+	if u != (gungnir.Usage{}) {
+		e := r.Setup.Journal.Stamp(budget.Entry{Run: r.State.ID, Project: r.Project, Node: node, Usage: u})
+		if jerr == nil {
+			jerr = r.Setup.Journal.Append(e)
+		}
+		r.State.Usage = r.State.Usage.Add(u)
+		if jerr != nil {
+			r.State.PendingSpend = append(r.State.PendingSpend, e)
+			serr = errors.Join(serr, r.Save())
+		}
+	}
+	return errors.Join(r.journalError(jerr), serr)
+}
+
+// appendPending writes the spends the journal missed, oldest first, and drops each from run.json
+// once it is written, saving run.json with save. It stops at the first the journal can't take, which
+// stays pending: jerr is the journal's error, serr a failed save.
+func (r *Run) appendPending(save func() error) (jerr, serr error) {
+	for len(r.State.PendingSpend) > 0 {
+		if err := r.Setup.Journal.Append(r.State.PendingSpend[0]); err != nil {
+			return err, nil
+		}
+		r.State.PendingSpend = r.State.PendingSpend[1:]
+		if err := save(); err != nil {
+			return nil, err
+		}
+	}
+	r.State.PendingSpend = nil
+	return nil, nil
+}
+
+// journalError says that the journal couldn't take a spend; nil stays nil.
+func (r *Run) journalError(err error) error {
+	if err == nil {
 		return nil
 	}
-	jerr := r.Setup.Journal.Append(budget.Entry{Run: r.State.ID, Project: r.Project, Node: node, Usage: u})
-	r.State.Usage = r.State.Usage.Add(u)
-	if jerr != nil {
-		return errors.Join(fmt.Errorf("recording the spend in %s: %w", r.Setup.Journal.Dir, jerr), r.Save())
-	}
-	return nil
+	return fmt.Errorf("recording the spend in %s: %w", r.Setup.Journal.Dir, err)
 }
 
 // Branch is the branch a run works on in every leaf.
@@ -628,6 +658,12 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	if err := r.restoreLeaves(ctx); err != nil {
 		l.Close()
 		return nil, err
+	}
+	// The spends the journal missed are written before the run goes on, so the day's cap counts them.
+	// run.json is written as it was loaded, less what was written: no switch is applied yet.
+	if jerr, serr := r.appendPending(func() error { return s.Save(dir) }); jerr != nil || serr != nil {
+		l.Close()
+		return nil, errors.Join(r.journalError(jerr), serr)
 	}
 	// The switches apply in memory now, and reach the ledger and run.json with the command's first
 	// write (Log or Save). A refused command writes nothing, so it switches nothing.

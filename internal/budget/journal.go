@@ -74,13 +74,20 @@ func (j *Journal) File(t time.Time) string {
 	return filepath.Join(j.Dir, t.In(j.loc()).Format("2006-01-02")+".jsonl")
 }
 
+// Stamp returns e with its time set to now when it has none, so an entry appended later, after the
+// journal failed, still belongs to the day it was spent.
+func (j *Journal) Stamp(e Entry) Entry {
+	if e.Time.IsZero() {
+		e.Time = j.now().UTC()
+	}
+	return e
+}
+
 // Append records one session's usage, now. The line is written with one write to a file opened for
 // appending, and synced, so lines from runs going at once never mix and a crash loses nothing that
 // was returned.
 func (j *Journal) Append(e Entry) error {
-	if e.Time.IsZero() {
-		e.Time = j.now().UTC()
-	}
+	e = j.Stamp(e)
 	line, err := json.Marshal(e)
 	if err != nil {
 		return err
