@@ -1,0 +1,153 @@
+// Package realm loads realm leaves (change realm-leaf-naming): the repos that hold a pack.yaml with a
+// graph, prompts, templates and checks. A run loads its lead realm and each leaf's realm once, at the
+// version the project pins, and records a hash of each so a resume can tell nothing changed under it.
+package realm
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
+)
+
+// Realm is a realm leaf as a run loaded it.
+type Realm struct {
+	Name    string
+	Version string
+	Dir     string // absolute
+	Hash    string // of every file a run could read; see Hash
+	Pack    *schema.Pack
+}
+
+// Load reads the pack in dir and hashes the realm.
+func Load(dir string) (*Realm, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	p, err := schema.LoadPack(abs)
+	if err != nil {
+		return nil, err
+	}
+	h, err := Hash(abs)
+	if err != nil {
+		return nil, err
+	}
+	return &Realm{Name: p.Name, Version: p.Version, Dir: abs, Hash: h, Pack: p}, nil
+}
+
+type limits struct{ files, bytes int64 }
+
+// A realm is a few hundred small files. One with more is not a realm but a folder that holds build
+// output, and hashing it would be slow and its hash would change with every build.
+var defaultLimits = limits{files: 5000, bytes: 64 << 20}
+
+// Hash returns a SHA-256 over every file of the realm but the contents of .git: each file's path, its
+// executable bit and its bytes, and each symlink's path and target, in path order. A run records it, and
+// a resume refuses a realm whose hash changed (spec §4.3: the run's positions mean what they meant).
+func Hash(dir string) (string, error) { return hashLimited(dir, defaultLimits) }
+
+func hashLimited(dir string, lim limits) (string, error) {
+	h := sha256.New()
+	var files, size int64
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if d.IsDir() {
+			if rel == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		files++
+		if files > lim.files {
+			return fmt.Errorf("%s holds more than %d files; a realm is a few hundred small ones, so this is not one", dir, lim.files)
+		}
+		rel = filepath.ToSlash(rel)
+		if d.Type()&fs.ModeSymlink != 0 {
+			target, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "link\x00%s\x00%s\x00", rel, target)
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("%s is neither a file nor a symlink", p)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		size += info.Size()
+		if size > lim.bytes {
+			return fmt.Errorf("%s holds more than %d bytes; a realm is text and small, so this is not one", dir, lim.bytes)
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		mode := "file"
+		if info.Mode()&0o111 != 0 {
+			mode = "exec"
+		}
+		fmt.Fprintf(h, "%s\x00%s\x00%d\x00", mode, rel, len(b))
+		h.Write(b)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// Store is a folder with one checkout of each realm leaf: <Dir>/<name>/pack.yaml (factory.yaml,
+// realms.dir).
+type Store struct{ Dir string }
+
+// Find returns the folder of the realm called name. The pack in it must say it is that realm.
+func (s *Store) Find(name string) (string, error) {
+	if !gungnir.ValidRealm(name) {
+		return "", fmt.Errorf("%q is not a realm name (lower case words joined by dashes)", name)
+	}
+	dir := filepath.Join(s.Dir, name)
+	p, err := schema.LoadPack(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "", fmt.Errorf("there is no realm %s in %s (factory.yaml, realms.dir)", name, s.Dir)
+	case err != nil:
+		return "", err
+	case p.Name != name:
+		return "", fmt.Errorf("%s holds the realm %s, not %s", dir, p.Name, name)
+	}
+	return dir, nil
+}
+
+// Resolve turns what --realm says into a folder. A value with a path separator, or one that starts
+// with a dot, is a path: a realm checked out anywhere, used as it is. Anything else is a realm name,
+// found in the store; byName is true for it. A name with no store is an error that says where to set one.
+func Resolve(ref string, store *Store) (dir string, byName bool, err error) {
+	if strings.ContainsRune(ref, filepath.Separator) || strings.HasPrefix(ref, ".") {
+		return ref, false, nil
+	}
+	if store == nil {
+		return "", true, fmt.Errorf("--realm %s names a realm leaf, but factory.yaml has no realms section to find it in: set realms: {dir: <folder with the realm leaves>}, or give --realm a path", ref)
+	}
+	dir, err = store.Find(ref)
+	return dir, true, err
+}
