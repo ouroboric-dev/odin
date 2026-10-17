@@ -1,0 +1,307 @@
+# The scripted agents' answers for the content smoke run (v0-H15): a one-feature brief (the gallery's
+# version) built in two leaves, with real code and real tests, so that every rung of the realms' check ladders
+# and the acceptance run have something real to judge. The planners write the documents the prompts ask
+# for; the implementers write what a real implementer would, with the commands a real one would run.
+steps:
+  design:
+    - actions:
+        - write:
+            path: out/1-product/design/2026-10-17-version.md
+            content: |
+              ---
+              title: Gallery version design
+              status: draft
+              date: 2026-10-17
+              related: []
+              ---
+              # Gallery version design
+
+              ## Summary
+
+              The gallery tells anyone who asks which version is running, and its web page shows it.
+      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 } }
+  spec:
+    - actions:
+        - write:
+            path: out/2-engineering/specs/2026-10-17-version.md
+            content: |
+              ---
+              title: Gallery version spec
+              status: draft
+              date: 2026-10-17
+              related: [../../1-product/design/2026-10-17-version.md]
+              ---
+              # Gallery version spec
+
+              ## Summary
+
+              `GET /version` answers `{"version": "0.1.0"}`; the home page shows `API version: 0.1.0`.
+
+              ## Deviations from the design doc
+
+              None.
+        - write:
+            path: out/leaves.yaml
+            content: |
+              leaves:
+                repos/api:
+                  realm: helheim-go
+                  realm_version: 0.1.0
+                  description: The gallery's API.
+                repos/web:
+                  realm: midgard-react
+                  realm_version: 0.1.0
+                  description: The gallery's web app.
+                  consumes: [repos/api]
+      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 } }
+  conformance:
+    - actions: [ { write: { path: out/conformance.json, content: '{"deviation": false}' } } ]
+      result: { status: ok, summary: the spec stays inside the design, usage: { in: 500, out: 50, turns: 1 } }
+  plan:
+    - actions:
+        - write:
+            path: out/2-engineering/plans/2026-10-17-version/plan.md
+            content: |
+              ---
+              title: Gallery version plan
+              status: draft
+              date: 2026-10-17
+              related: [../../specs/2026-10-17-version.md]
+              ---
+              # Gallery version plan
+
+              ## Order
+
+              | Task | Leaf | Size | Depends on |
+              |---|---|---|---|
+              | version-T1 | repos/api | S | nothing |
+              | version-T2 | repos/web | S | version-T1 |
+        - write:
+            path: out/2-engineering/plans/2026-10-17-version/tasks.md
+            content: |
+              ---
+              title: Gallery version tasks
+              status: draft
+              date: 2026-10-17
+              related: [plan.md]
+              ---
+              # Tasks
+
+              ## version-T1: the API says its version
+
+              - **Acceptance criteria:**
+                - [ ] `GET /version` answers 200 with the JSON `{"version": "0.1.0"}`
+                - [ ] any other method on `/version` answers 405
+                - [ ] `openapi.yaml` describes `/version`
+              - **Named test:** internal/httpapi/version_test.go TestVersionIsServed
+              - **Layer:** repos/api
+              - **Size:** S
+              - **Depends on:** nothing
+
+              ## version-T2: the home page shows the version
+
+              - **Acceptance criteria:**
+                - [ ] the home page shows `API version: 0.1.0` below the health line
+                - [ ] the web app's copy of the contract has `/version`, exactly as the API describes it
+              - **Named test:** src/version.test.tsx
+              - **Layer:** repos/web
+              - **Size:** S
+              - **Depends on:** version-T1
+      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 } }
+  reuse-review:
+    - actions:
+        - write:
+            path: out/2-engineering/reviews/2026-10-17-version-reuse-review.md
+            content: |
+              ---
+              title: Gallery version reuse review
+              status: draft
+              date: 2026-10-17
+              related: [../plans/2026-10-17-version/plan.md]
+              ---
+              ## Verdict
+
+              Nothing to remove.
+      result: { status: ok, summary: nothing to remove, usage: { in: 500, out: 50, turns: 1 } }
+  version-t1-implement:
+    - actions:
+        - write:
+            path: internal/httpapi/version_test.go
+            content: |
+              package httpapi
+
+              import (
+              	"encoding/json"
+              	"net/http"
+              	"net/http/httptest"
+              	"testing"
+              )
+
+              func TestVersionIsServed(t *testing.T) {
+              	rec := httptest.NewRecorder()
+              	New(Deps{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/version", nil))
+              	if rec.Code != http.StatusOK {
+              		t.Fatalf("GET /version = %d, want 200", rec.Code)
+              	}
+              	var body map[string]string
+              	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["version"] != "0.1.0" {
+              		t.Errorf("body = %s, %v; want {\"version\":\"0.1.0\"}", rec.Body.String(), err)
+              	}
+              }
+
+              func TestOnlyGetReachesVersion(t *testing.T) {
+              	rec := httptest.NewRecorder()
+              	New(Deps{}).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/version", nil))
+              	if rec.Code != http.StatusMethodNotAllowed {
+              		t.Errorf("POST /version = %d, want 405", rec.Code)
+              	}
+              }
+        - write:
+            path: internal/httpapi/version.go
+            content: |
+              package httpapi
+
+              import "net/http"
+
+              // version is the API's version, as /version reports it.
+              const version = "0.1.0"
+
+              func versionHandler(w http.ResponseWriter, _ *http.Request) {
+              	writeJSON(w, http.StatusOK, map[string]string{"version": version})
+              }
+        - run:
+            argv:
+              - sed
+              - -i
+              - 's|^\tmux.HandleFunc("/", notFound)|\tmux.HandleFunc("/version", only(http.MethodGet, versionHandler))\n&|'
+              - internal/httpapi/server.go
+        - run:
+            argv:
+              - sh
+              - -c
+              - |
+                cat >> openapi.yaml <<'EOF'
+                  /version:
+                    get:
+                      operationId: getVersion
+                      summary: Which version the server is
+                      responses:
+                        "200":
+                          description: The server's version.
+                          content:
+                            application/json:
+                              schema:
+                                type: object
+                                required: [version]
+                                properties:
+                                  version:
+                                    type: string
+                                    example: "0.1.0"
+                EOF
+      result: { status: ok, summary: the API serves its version, usage: { in: 2000, out: 200, turns: 4 } }
+  version-t2-implement:
+    - actions:
+        - write:
+            path: src/version.test.tsx
+            content: |
+              import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+              import { render, screen } from "@testing-library/react";
+              import { describe, expect, it, vi } from "vitest";
+              import { VersionBadge } from "@/components/version-badge";
+
+              function renderBadge() {
+                const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+                return render(
+                  <QueryClientProvider client={client}>
+                    <VersionBadge />
+                  </QueryClientProvider>,
+                );
+              }
+
+              describe("VersionBadge", () => {
+                it("shows the version the API reports", async () => {
+                  vi.stubGlobal(
+                    "fetch",
+                    vi.fn(async () => new Response(JSON.stringify({ version: "0.1.0" }), { status: 200, headers: { "Content-Type": "application/json" } })),
+                  );
+                  renderBadge();
+                  expect(await screen.findByText("API version: 0.1.0")).toBeInTheDocument();
+                });
+              });
+        - write:
+            path: src/components/version-badge.tsx
+            content: |
+              import { useQuery } from "@tanstack/react-query";
+              import { api } from "@/lib/api";
+
+              /** The API's version, as /version says it. */
+              async function readVersion(): Promise<string> {
+                const { data } = await api.GET("/version");
+                if (!data) throw new Error("the API did not say its version");
+                return data.version;
+              }
+
+              export function VersionBadge() {
+                const version = useQuery({ queryKey: ["version"], queryFn: readVersion });
+                if (!version.data) return null;
+                return <p className="text-sm text-neutral-600">API version: {version.data}</p>;
+              }
+        - run:
+            argv:
+              - sed
+              - -i
+              - -e
+              - 's|^import { HealthBadge } from "@/components/health-badge";|&\nimport { VersionBadge } from "@/components/version-badge";|'
+              - -e
+              - 's|^      <HealthBadge />|&\n      <VersionBadge />|'
+              - src/routes/index.tsx
+        - run:
+            argv:
+              - sh
+              - -c
+              - |
+                cat >> contracts/api.openapi.yaml <<'EOF'
+                  /version:
+                    get:
+                      operationId: getVersion
+                      summary: Which version the server is
+                      responses:
+                        "200":
+                          description: The server's version.
+                          content:
+                            application/json:
+                              schema:
+                                type: object
+                                required: [version]
+                                properties:
+                                  version:
+                                    type: string
+                                    example: "0.1.0"
+                EOF
+        - run: { argv: [npm, ci, --no-audit, --no-fund] }
+        - run: { argv: [npm, run, gen:api] }
+        - run:
+            argv:
+              - sh
+              - -c
+              - |
+                cat >> e2e/smoke.spec.ts <<'EOF'
+
+                test("the home page shows the API's version", async ({ page }) => {
+                  await page.goto("/");
+                  await expect(page.getByText("API version: 0.1.0")).toBeVisible();
+                });
+                EOF
+      result: { status: ok, summary: the home page shows the version, usage: { in: 2000, out: 200, turns: 4 } }
+  version-t1-implement-spec-compliance:
+    - result: { status: ok, report: [] }
+  version-t1-implement-simplicity:
+    - result: { status: ok, report: [] }
+  version-t1-implement-quality:
+    - result: { status: ok, report: [] }
+  version-t2-implement-spec-compliance:
+    - result: { status: ok, report: [] }
+  version-t2-implement-simplicity:
+    - result: { status: ok, report: [] }
+  version-t2-implement-quality:
+    - result: { status: ok, report: [] }
