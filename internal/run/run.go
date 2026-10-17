@@ -363,8 +363,27 @@ func (s *Setup) loadRealm(name string) (*realm.Realm, error) {
 // extra name. The pins must agree with each other and with what the realm store holds (change
 // realm-leaf-naming), so a mismatch stops the run before anything is created or started.
 func (s *Setup) collectRealms(extra []schema.Pin) (*realm.Set, error) {
-	return realm.Collect(s.Lead, append(s.projectPins(), extra...), s.loadRealm)
+	set, err := realm.Collect(s.Lead, append(s.projectPins(), extra...), s.loadRealm)
+	if err != nil {
+		return nil, err
+	}
+	// A resumed run keeps every realm it recorded, whether or not the project pins it yet: init loads a
+	// realm, and may stop before it has created the leaf that pins it.
+	for name, dir := range s.recorded {
+		if set.Realms[name] == nil {
+			x, err := realm.Load(dir)
+			if err != nil {
+				return nil, err
+			}
+			set.Realms[name] = x
+		}
+	}
+	return set, nil
 }
+
+// PlanRealms loads and checks the realms that extra pins would add to the run, as AddRealms does, and
+// changes nothing: a caller can look at the realms before it commits the run to them.
+func (r *Run) PlanRealms(extra []schema.Pin) (*realm.Set, error) { return r.Setup.collectRealms(extra) }
 
 // AddRealms loads the realms that extra pins name and the run doesn't have yet, after checking that
 // every pin of the project, the old and the new, agrees. The spec stage names the product's leaves and

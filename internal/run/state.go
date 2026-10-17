@@ -310,8 +310,8 @@ func Lock(dir string) (unlock func(), err error) {
 // can't make another process's resume fail.
 func Locked(dir string) bool { return lock.Held(filepath.Join(dir, "lock")) }
 
-// checkRealms refuses a resume when a realm changed under the run, or the project's pins no longer name
-// the realms the run started with: its graph positions and prompts would no longer mean what they meant.
+// checkRealms refuses a resume when a realm changed under the run, or the project now names a realm the run
+// did not load: its graph positions and prompts would no longer mean what they meant.
 func (s *State) checkRealms(setup *Setup) error {
 	if len(s.Realms) == 0 {
 		return nil // a run from before realms were recorded; the graph's hash is all there is
@@ -326,11 +326,6 @@ func (s *State) checkRealms(setup *Setup) error {
 			return fmt.Errorf("the realm %s is at %s, and the run started with %s; start a new run", name, got.Version, want.Version)
 		case got.Hash != want.SHA256:
 			return fmt.Errorf("the realm %s changed since the run started (%s), so the run's prompts and checks are not the ones it began with; start a new run", name, want.Dir)
-		}
-	}
-	for name := range s.Realms {
-		if setup.Realms.Realms[name] == nil {
-			return fmt.Errorf("the run started with the realm %s, which the project no longer names; start a new run", name)
 		}
 	}
 	return nil

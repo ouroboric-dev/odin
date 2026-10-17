@@ -12,6 +12,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -34,10 +35,16 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err != nil {
 		return &nodeFailure{err}
 	}
-	if err := r.AddRealms(spec.Pins()); err != nil {
+	// The realms are loaded and the leaves file is checked against them before the run takes the realms
+	// or anything is created.
+	set, err := r.PlanRealms(spec.Pins())
+	if err != nil {
 		return &nodeFailure{err}
 	}
-	if err := checkLeaves(r, spec); err != nil {
+	if err := checkLeaves(r, set, spec); err != nil {
+		return &nodeFailure{err}
+	}
+	if err := r.AddRealms(spec.Pins()); err != nil {
 		return &nodeFailure{err}
 	}
 	var created, kept []string
@@ -77,12 +84,12 @@ func readLeaves(r *run.Run, n schema.Node) (*schema.Leaves, error) {
 
 // checkLeaves checks, before anything is created, that each leaf can be: its realm offers a leaf recipe,
 // one that exists already is pinned as the file says, and what a leaf consumes will exist.
-func checkLeaves(r *run.Run, spec *schema.Leaves) error {
+func checkLeaves(r *run.Run, set *realm.Set, spec *schema.Leaves) error {
 	var problems []string
 	have := r.Setup.Project.Umbrella.Children
 	for _, p := range spec.Paths() {
 		l := spec.Leaves[p]
-		rl := r.Setup.Realms.Realms[l.Realm]
+		rl := set.Realms[l.Realm]
 		if rl.Pack.Leaf == nil {
 			problems = append(problems, fmt.Sprintf("%s: the realm %s offers no leaf recipe (a template, an implementer prompt and checks), so it can't provide a leaf", p, l.Realm))
 		}

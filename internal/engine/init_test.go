@@ -190,3 +190,48 @@ func TestInitLeavesALeafThatExistsAsItIsAndRefusesToRepinIt(t *testing.T) {
 		t.Errorf("Advance() = %+v, %v", out, err)
 	}
 }
+
+func TestAnInitThatStopsHalfWayCanBeResumedAndFinishes(t *testing.T) {
+	r := initRun(t, galleryLeaves)
+	ctx := context.Background()
+	// repos/web is taken by a folder the project doesn't list, so creating it is refused after repos/api is made.
+	if err := os.MkdirAll(filepath.Join(r.Project, "repos", "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(ctx, r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "exists") {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if u, _ := schema.LoadUmbrella(r.Project); len(u.Children) != 1 {
+		t.Fatalf("the project lists %v; repos/api should be there alone", u.Paths())
+	}
+	id, project := r.State.ID, r.Project
+	r.Close()
+	if err := os.Remove(filepath.Join(project, "repos", "web")); err != nil {
+		t.Fatal(err)
+	}
+	again, err := run.Open(ctx, project, id, "")
+	if err != nil {
+		t.Fatalf("Open() = %v; the run loaded helheim-go before it stopped, and a resume keeps it", err)
+	}
+	defer again.Close()
+	if got := strings.Join(again.Setup.Realms.Names(), ","); got != "helheim-go,midgard-react" {
+		t.Errorf("realms after the resume = %s", got)
+	}
+	if out, err := Advance(ctx, again); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() after the resume = %+v, %v", out, err)
+	}
+	if u, _ := schema.LoadUmbrella(project); len(u.Children) != 2 || u.Children["repos/web"].Realm != "midgard-react" {
+		t.Errorf("the project lists %v after init finished", u.Paths())
+	}
+}
+
+func TestARefusedLeavesFileDoesNotMakeTheRunTakeItsRealms(t *testing.T) {
+	r := initRun(t, strings.Replace(galleryLeaves, "consumes: [repos/api]", "consumes: [repos/db]", 1))
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusFailed {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if len(r.State.Realms) != 1 || len(r.Setup.Realms.Realms) != 1 {
+		t.Errorf("run.json holds %v after a leaves file that was refused; the run took no realm", r.State.Realms)
+	}
+}
