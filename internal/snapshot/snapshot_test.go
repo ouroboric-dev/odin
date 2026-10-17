@@ -111,6 +111,22 @@ func TestExportRefusesWhatCouldLeadOutOfTheSnapshot(t *testing.T) {
 			t.Errorf("Export() into %q = nil, want an error", rel)
 		}
 	}
+	// The leaf's own .gitattributes cannot drop or rewrite what is committed.
+	attr := repo(t, map[string]string{
+		".gitattributes":   "e2e/fail.spec.ts export-ignore\nsubst.txt export-subst\n",
+		"e2e/fail.spec.ts": "fail\n",
+		"subst.txt":        "$Format:%H$\n",
+	})
+	adst := t.TempDir()
+	if err := Export(bg, adst, []Source{{Rel: ".", Repo: attr}}); err != nil {
+		t.Fatalf("Export() with .gitattributes = %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(adst, "e2e/fail.spec.ts")); err != nil || string(b) != "fail\n" {
+		t.Errorf("an export-ignore file: %q, %v", b, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(adst, "subst.txt")); string(b) != "$Format:%H$\n" {
+		t.Errorf("an export-subst file was rewritten: %q", b)
+	}
 	// Two repos that both hold a file at one path: the second never overwrites the first.
 	other := repo(t, map[string]string{"a.txt": "other\n"})
 	if err := Export(bg, t.TempDir(), []Source{{Rel: ".", Repo: plain}, {Rel: ".", Repo: other}}); err == nil {

@@ -5,7 +5,8 @@
 package snapshot
 
 import (
-	"archive/tar"
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/ouroboric-dev/odin/internal/git"
 )
@@ -66,64 +69,103 @@ func Export(ctx context.Context, dst string, sources []Source) error {
 			return fmt.Errorf("a snapshot source at %q: %q is neither HEAD nor a full commit hash", s.Rel, s.Rev)
 		}
 		base := filepath.ToSlash(filepath.Clean(s.Rel))
-		err := s.Repo.Pipe(ctx, func(r io.Reader) error {
-			tr := tar.NewReader(r)
-			for {
-				h, err := tr.Next()
-				if errors.Is(err, io.EOF) {
-					return nil
-				}
-				if err != nil {
-					return err
-				}
-				if h.Typeflag == tar.TypeXGlobalHeader {
-					continue
-				}
-				name := path.Clean(h.Name)
-				if !filepath.IsLocal(name) && name != "." {
-					return fmt.Errorf("%s holds a path that leaves the snapshot: %q", s.Rel, h.Name)
-				}
-				target := path.Join(base, name)
-				switch h.Typeflag {
-				case tar.TypeDir:
-					if err := root.MkdirAll(target, 0o755); err != nil {
-						return err
-					}
-				case tar.TypeReg:
-					if files++; files > maxFiles {
-						return fmt.Errorf("the snapshot would hold more than %d files", maxFiles)
-					}
-					if total += h.Size; h.Size > maxFile || total > maxBytes {
-						return fmt.Errorf("the snapshot would hold more than %d bytes (%s is %d)", maxBytes, name, h.Size)
-					}
-					if err := root.MkdirAll(path.Dir(target), 0o755); err != nil {
-						return err
-					}
-					mode := os.FileMode(0o644)
-					if h.Mode&0o111 != 0 {
-						mode = 0o755
-					}
-					f, err := root.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-					if err != nil {
-						return fmt.Errorf("%s: %w; a file that two repos both hold is refused", target, err)
-					}
-					_, err = io.CopyN(f, tr, h.Size)
-					if cerr := f.Close(); err == nil {
-						err = cerr
-					}
-					if err != nil {
-						return err
-					}
-				default:
-					return fmt.Errorf("%s holds %s, which is not a regular file; a link could lead the snapshot's checks outside it", target, h.Name)
-				}
-			}
-		}, "archive", "--format=tar", rev)
+		err := exportOne(ctx, root, s, rev, base, &files, &total)
 		if err != nil {
 			return fmt.Errorf("exporting %s: %w", s.Rel, err)
 		}
 	}
 	return nil
+}
+
+// entry is one line of git ls-tree: a file, or a submodule's commit, of the committed tree.
+type entry struct {
+	mode, sha, name string
+	size            int64
+}
+
+// exportOne writes the files of s at rev under base. It reads the committed tree itself, with ls-tree
+// and cat-file, and not with git archive: archive obeys the .gitattributes of the tree it archives,
+// where export-ignore drops committed files and export-subst rewrites their contents.
+func exportOne(ctx context.Context, root *os.Root, s Source, rev, base string, files *int, total *int64) error {
+	out, err := s.Repo.Output(ctx, "ls-tree", "-r", "-l", "-z", "--full-tree", rev)
+	if err != nil {
+		return err
+	}
+	var blobs []entry
+	for _, rec := range bytes.Split(out, []byte{0}) {
+		if len(rec) == 0 {
+			continue
+		}
+		meta, name, ok := strings.Cut(string(rec), "\t")
+		f := strings.Fields(meta)
+		if !ok || len(f) != 4 {
+			return fmt.Errorf("git ls-tree gave an entry that is not understood: %q", rec)
+		}
+		e := entry{mode: f[0], sha: f[2], name: path.Clean(name)}
+		if !filepath.IsLocal(e.name) {
+			return fmt.Errorf("%s holds a path that leaves the snapshot: %q", s.Rel, name)
+		}
+		target := path.Join(base, e.name)
+		switch e.mode {
+		case "160000":
+			if err := root.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case "100644", "100755":
+			if e.size, err = strconv.ParseInt(f[3], 10, 64); err != nil {
+				return fmt.Errorf("git ls-tree gave a size that is not understood: %q", rec)
+			}
+			if *files++; *files > maxFiles {
+				return fmt.Errorf("the snapshot would hold more than %d files", maxFiles)
+			}
+			if *total += e.size; e.size > maxFile || *total > maxBytes {
+				return fmt.Errorf("the snapshot would hold more than %d bytes (%s is %d)", maxBytes, e.name, e.size)
+			}
+			blobs = append(blobs, e)
+		default:
+			return fmt.Errorf("%s holds %s, which is not a regular file; a link could lead the snapshot's checks outside it", target, e.name)
+		}
+	}
+	var want strings.Builder
+	for _, e := range blobs {
+		want.WriteString(e.sha + "\n")
+	}
+	return s.Repo.PipeIn(ctx, strings.NewReader(want.String()), func(r io.Reader) error {
+		br := bufio.NewReader(r)
+		for _, e := range blobs {
+			head, err := br.ReadString('\n')
+			if err != nil {
+				return err
+			}
+			f := strings.Fields(head)
+			if len(f) != 3 || f[0] != e.sha || f[1] != "blob" || f[2] != strconv.FormatInt(e.size, 10) {
+				return fmt.Errorf("git cat-file gave %q for %s", strings.TrimSpace(head), e.name)
+			}
+			target := path.Join(base, e.name)
+			if err := root.MkdirAll(path.Dir(target), 0o755); err != nil {
+				return err
+			}
+			mode := os.FileMode(0o644)
+			if e.mode == "100755" {
+				mode = 0o755
+			}
+			f2, err := root.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+			if err != nil {
+				return fmt.Errorf("%s: %w; a file that two repos both hold is refused", target, err)
+			}
+			_, err = io.CopyN(f2, br, e.size)
+			if cerr := f2.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				return err
+			}
+			if _, err := br.Discard(1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, "cat-file", "--batch")
 }
 
 // emptyDir removes everything in dir and keeps dir; a dir that is not there is made.

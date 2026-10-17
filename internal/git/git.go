@@ -99,12 +99,18 @@ func (r Repo) Output(ctx context.Context, args ...string) ([]byte, error) {
 // too big to hold, such as an archive of the repo. read decides how much it takes: if it returns early,
 // git is stopped. An error of git's wins over one of read's only when read saw the end of the output.
 func (r Repo) Pipe(ctx context.Context, read func(io.Reader) error, args ...string) error {
+	return r.PipeIn(ctx, nil, read, args...)
+}
+
+// PipeIn is Pipe with stdin given to git as its standard input, for commands such as cat-file --batch.
+func (r Repo) PipeIn(ctx context.Context, stdin io.Reader, read func(io.Reader) error, args ...string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	full := append(append([]string{}, safe...), "--git-dir="+r.GitDir, "--work-tree="+r.WorkTree)
 	cmd := exec.CommandContext(ctx, "git", append(full, args...)...)
 	cmd.Dir = r.WorkTree
 	cmd.Env = env()
+	cmd.Stdin = stdin
 	var errOut bytes.Buffer
 	cmd.Stderr = &errOut
 	out, err := cmd.StdoutPipe()
