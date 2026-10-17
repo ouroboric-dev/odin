@@ -216,3 +216,84 @@ func TestATasksWordsAreBoundedInAPrompt(t *testing.T) {
 		t.Error("a node with no task, or an unknown one, gets a task block")
 	}
 }
+
+// replanShape plans in repos/web, reads the plan, builds its tasks, and ends at a node after the tasks
+// whose rejection or refusal goes back to the planner.
+const replanShape = "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/web }\n" +
+	"  - { id: ready, kind: tasks, from: repos/web/tasks.md }\n" + "  - id: tasks\n    kind: foreach\n    over: tasks\n    nodes:\n" +
+	"      - { id: implement, kind: loop, realm: leaf, role: implementer }\n      - { id: land, kind: merge, realm: leaf }\n"
+
+// replanRun is a run whose planner writes a plan of one task first, and of two other tasks the second time.
+func replanRun(t *testing.T, tail, pack string) *run.Run {
+	t.Helper()
+	lead := recipeRealm("midgard-react", "0.1.0", "web.txt", "Web implementer prompt.")
+	lead.pack = strings.Replace(lead.pack, "checks:\n", "checks:\n"+pack, 1)
+	script := planScript("# Tasks\n\n"+taskMD("p-T1", "repos/web", "S", "nothing"),
+		"# Tasks\n\n"+taskMD("q-T1", "repos/web", "S", "nothing")+taskMD("q-T2", "repos/web", "S", "q-T1")) +
+		writeStep("p-t1-implement", "web.txt") + writeStep("q-t1-implement", "web.txt") + writeStep("q-t2-implement", "web2.txt")
+	return startRealms(t, realmsSetup{nodes: replanShape + tail, script: script, realms: []realmFiles{lead},
+		leaves: map[string]string{"repos/web": "midgard-react"}})
+}
+
+// checkReplanned checks the run built the second plan's tasks, with the nodes of that plan, and not the first's.
+func checkReplanned(t *testing.T, r *run.Run) {
+	t.Helper()
+	var ids []string
+	for _, n := range r.Nodes() {
+		ids = append(ids, n.ID)
+	}
+	if got := strings.Join(ids, " "); !strings.Contains(got, "q-t1-implement q-t1-land q-t2-implement q-t2-land") || strings.Contains(got, "p-t1") {
+		t.Errorf("the run walks %s; want the nodes of the new plan's tasks", got)
+	}
+	if r.State.Attempts["q-t1-implement"] != 1 || r.State.Attempts["q-t2-implement"] != 1 || r.State.Attempts["p-t1-implement"] != 1 {
+		t.Errorf("attempts = %v; want each task's implementer once, the first plan's before the rejection", r.State.Attempts)
+	}
+	for _, f := range r.State.Features {
+		if f.Status != schema.TaskDone {
+			t.Errorf("task %s is %s", f.ID, f.Status)
+		}
+	}
+}
+
+func TestARejectionBeforeTheTasksNodeExpandsTheTasksAgainAgainstTheNewPlan(t *testing.T) {
+	r := replanRun(t, "  - { id: final, kind: gate, gate: design, reruns: plan }\n", "")
+	ctx := context.Background()
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusStopped || out.Gate != "final" {
+		t.Fatalf("Advance() = %+v, %v; want a stop at final", out, err)
+	}
+	if err := Reject(ctx, r, "final", "plan two tasks instead"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusStopped || out.Gate != "final" {
+		t.Fatalf("Advance() = %+v, %v; want a stop at final again", out, err)
+	}
+	checkReplanned(t, r)
+	want := r.Nodes()
+	id, project := r.State.ID, r.Project
+	r.Close()
+	again, err := run.Open(ctx, project, id, "")
+	if err != nil {
+		t.Fatalf("Open() = %v; a resume must make the nodes the run walked", err)
+	}
+	defer again.Close()
+	got := again.Nodes()
+	if len(got) != len(want) || got[again.State.Position].ID != "final" {
+		t.Fatalf("after Open: %d nodes (want %d), position %d", len(got), len(want), again.State.Position)
+	}
+	for i := range want {
+		if got[i].ID != want[i].ID {
+			t.Errorf("node %d is %s after Open, %s before", i, got[i].ID, want[i].ID)
+		}
+	}
+}
+
+func TestARefusalSentBackBeforeTheTasksNodeExpandsTheTasksAgainAgainstTheNewPlan(t *testing.T) {
+	r := replanRun(t, "  - { id: tail, kind: merge, repo: repos/web, checks: [late], back_to: plan }\n", "  late: [test, -f, web2.txt]\n")
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v; want done", out, err)
+	}
+	if r.State.Returns["tail"] != 1 {
+		t.Errorf("tail's refusal went back %d times, want once", r.State.Returns["tail"])
+	}
+	checkReplanned(t, r)
+}

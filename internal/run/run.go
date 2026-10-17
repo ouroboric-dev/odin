@@ -550,6 +550,32 @@ func (r *Run) Expand(ctx context.Context, id string) error {
 	return r.Save()
 }
 
+// Unexpand undoes the expansion of every foreach node that comes after the tasks node id in the graph,
+// for a walk that goes back to or before that node: it reads the plan again, and the foreach nodes must
+// expand against the plan it then reads, not the old one. The nodes up to the first such foreach node
+// stay where they are, so a Position at or before id indexes the same node. The caller saves run.json.
+func (r *Run) Unexpand(id string) error {
+	s := r.State
+	after, changed := false, false
+	for _, n := range r.Setup.Graph.Nodes {
+		if n.ID == id {
+			after = true
+		} else if after && n.Kind == schema.KindForeach && s.Expanded[n.ID] {
+			delete(s.Expanded, n.ID)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	nodes, err := r.Setup.NodesFor(s)
+	if err != nil {
+		return err
+	}
+	r.nodes = nodes
+	return nil
+}
+
 // NodesFor returns the nodes of the run in the state st: the graph's, with each foreach node that st has
 // expanded replaced by its task shape once for each task, in the order the tasks are built.
 func (s *Setup) NodesFor(st *State) ([]schema.Node, error) {

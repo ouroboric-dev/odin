@@ -207,6 +207,9 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 			}
 			delete(s.Returns, m.ID) // a rejection is a fresh start: a refusal may go back again
 		}
+		if err := replan(r, nodes[s.Position:gate]); err != nil {
+			return err
+		}
 	}
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
 	return r.Save()

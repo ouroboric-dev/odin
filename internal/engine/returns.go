@@ -49,8 +49,22 @@ func sendBack(r *run.Run, n schema.Node, refusal string) (bool, error) {
 		}
 	}
 	s.Position, s.Pending, s.PendingGate = to, "", ""
+	if err := replan(r, nodes[to:at]); err != nil {
+		return false, err
+	}
 	if err := r.Save(); err != nil {
 		return false, err
 	}
 	return true, &sentBack{to: target.ID}
+}
+
+// replan undoes the expansion of the foreach nodes after a tasks node among the nodes the walk goes back
+// over (review I-2): that tasks node reads the plan again, and its tasks must be the ones that run.
+func replan(r *run.Run, over []schema.Node) error {
+	for _, m := range over {
+		if m.Kind == schema.KindTasks {
+			return r.Unexpand(m.ID)
+		}
+	}
+	return nil
 }
