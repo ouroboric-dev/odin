@@ -152,9 +152,10 @@ func emptyDir(dir string) error {
 
 type copyBudget struct{ files, bytes int64 }
 
-// copyTree copies the regular files under src, a path in project, to dst, leaving out .git. It stops at a
-// symlink or any other kind of file, and at more files or bytes than the budget holds. Each file is read
-// as the regular file of the project the walk found, through what is left of the budget (readRegular).
+// copyTree copies the regular files under src, a path in project, to dst, leaving out .git and the
+// project's .factory. It stops at a symlink or any other kind of file, and at more files or bytes than the
+// budget holds. Each file is read as the regular file of the project the walk found, through what is left
+// of the budget (readRegular).
 func copyTree(project, src, dst string, b *copyBudget) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -164,7 +165,12 @@ func copyTree(project, src, dst string, b *copyBudget) error {
 		if err != nil {
 			return err
 		}
-		if d.Name() == ".git" {
+		name, err := filepath.Rel(project, p)
+		if err != nil {
+			return err
+		}
+		// .git anywhere, and the project's .factory even when an input holds the project's root (review M-4).
+		if d.Name() == ".git" || name == ".factory" {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -179,10 +185,6 @@ func copyTree(project, src, dst string, b *copyBudget) error {
 		}
 		if b.files--; b.files < 0 {
 			return fmt.Errorf("more than %d files", maxScratchFiles)
-		}
-		name, err := filepath.Rel(project, p)
-		if err != nil {
-			return err
 		}
 		data, err := readRegular(project, name, b.bytes)
 		var big *tooBigError
