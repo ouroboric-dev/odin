@@ -260,3 +260,49 @@ func TestInitRefusesALeafInsideOrHoldingAChildTheProjectHasBeforeItCreatesAnythi
 		}
 	}
 }
+
+// The leaves file is read by init and by the tasks node through one check: a regular file, reached with no
+// symlink, of at most maxLeavesFile bytes. A longer one is refused, never parsed cut short (review M-3).
+func TestTheLeavesFileIsARegularFileWithinTheLimitForInitAndForTheTasksNode(t *testing.T) {
+	r := initRun(t, galleryLeaves)
+	file := filepath.Join(r.Project, "docs", "leaves.yaml")
+	initNode := schema.Node{ID: "leaves", Kind: schema.KindInit, From: "docs/leaves.yaml"}
+	tasksNode := schema.Node{ID: "ready", Kind: schema.KindTasks, From: "tasks.md", Leaves: "docs/leaves.yaml"}
+	check := func(name, want string) {
+		t.Helper()
+		_, ierr := readLeaves(r, initNode)
+		_, refusal, perr := planLeaves(r, tasksNode)
+		if want == "" {
+			if ierr != nil || refusal != "" || perr != nil {
+				t.Errorf("%s: init: %v; tasks: %q, %v", name, ierr, refusal, perr)
+			}
+			return
+		}
+		if ierr == nil || !strings.Contains(ierr.Error(), want) {
+			t.Errorf("%s: init read it: %v; want a refusal mentioning %q", name, ierr, want)
+		}
+		if perr != nil || !strings.Contains(refusal, want) {
+			t.Errorf("%s: the tasks node read it: %q, %v; want a refusal mentioning %q", name, refusal, perr, want)
+		}
+	}
+	check("a normal file", "")
+	// Valid YAML at any cut: what is past the limit is a comment, so a file read cut short would parse.
+	long := galleryLeaves + "# " + strings.Repeat("x", maxLeavesFile) + "\n"
+	if err := os.WriteFile(file, []byte(long), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	check("a file over the limit", "more than 1048576 bytes")
+	os.Remove(file)
+	if err := os.WriteFile(filepath.Join(r.Project, "docs", "real.yaml"), []byte(galleryLeaves), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.yaml", file); err != nil {
+		t.Fatal(err)
+	}
+	check("a symlink", "symlink")
+	os.Remove(file)
+	if err := os.MkdirAll(file, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	check("a folder", "not a regular file")
+}

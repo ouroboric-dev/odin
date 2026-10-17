@@ -2,8 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -63,23 +63,30 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	return r.Log(gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Result: r.State.Summaries[n.ID]})
 }
 
+// maxLeavesFile is the biggest leaves file Odin reads: a few leaves, each a few lines.
+const maxLeavesFile = 1 << 20
+
 // readLeaves reads and parses the leaves file n names.
 func readLeaves(r *run.Run, n schema.Node) (*schema.Leaves, error) {
-	file := filepath.Join(r.Project, filepath.FromSlash(n.From))
-	st, err := os.Lstat(file)
-	if err != nil || !st.Mode().IsRegular() || noSymlinks(r.Project, file) != nil {
+	data, err := readLeavesFile(r, n.From)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return nil, fmt.Errorf("the leaves file %s is not there as a regular file; the spec stage names the product's leaves in it", n.From)
-	}
-	f, err := os.Open(file)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 1<<20))
-	if err != nil {
-		return nil, err
+	case err != nil:
+		return nil, fmt.Errorf("the leaves file %s can't be read: %w", n.From, err)
 	}
 	return schema.ParseLeaves(n.From, data)
+}
+
+// readLeavesFile reads the leaves file at rel in the project, for init and for the tasks node alike: a
+// regular file reached with no symlink, of at most maxLeavesFile bytes. A longer one is refused, never
+// parsed cut short (review M-3).
+func readLeavesFile(r *run.Run, rel string) ([]byte, error) {
+	file := filepath.Join(r.Project, filepath.FromSlash(rel))
+	if err := noSymlinks(r.Project, file); err != nil {
+		return nil, err
+	}
+	return readRegular(r.Project, filepath.FromSlash(rel), maxLeavesFile)
 }
 
 // checkLeaves checks, before anything is created, that each leaf can be: its realm offers a leaf recipe,
