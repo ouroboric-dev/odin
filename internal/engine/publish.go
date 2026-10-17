@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
@@ -50,7 +51,11 @@ func runPublish(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err != nil {
 		return &nodeFailure{fmt.Errorf("%s publishes what %s wrote, and %w", n.ID, n.From, err)}
 	}
-	if err := scanDocuments(ctx, r, n, files); err != nil {
+	docs, err := readDocuments(out, files)
+	if err != nil {
+		return &nodeFailure{fmt.Errorf("%s publishes what %s wrote, and %w", n.ID, n.From, err)}
+	}
+	if err := scanDocuments(ctx, r, n, files, docs); err != nil {
 		return err
 	}
 	project := r.Project
@@ -60,9 +65,9 @@ func runPublish(ctx context.Context, r *run.Run, n schema.Node) error {
 		return &nodeFailure{fmt.Errorf("the project has staged changes Odin didn't make (%s); commit or unstage them first", strings.ReplaceAll(staged, "\n", ", "))}
 	}
 	var paths []string
-	for _, rel := range files {
+	for i, rel := range files {
 		dst := path.Join(n.To, rel)
-		if err := copyDocument(project, filepath.Join(out, filepath.FromSlash(rel)), filepath.Join(project, filepath.FromSlash(dst))); err != nil {
+		if err := copyDocument(project, docs[i], filepath.Join(project, filepath.FromSlash(dst))); err != nil {
 			return &nodeFailure{fmt.Errorf("publishing %s: %w", dst, err)}
 		}
 		paths = append(paths, dst)
@@ -147,11 +152,35 @@ func listDocuments(out string) ([]string, error) {
 	return files, err
 }
 
+// readDocuments reads each listed document once, as the regular file the listing found, within the limits:
+// these bytes are the ones scanned and published, whatever happens in out/ after.
+func readDocuments(out string, files []string) ([][]byte, error) {
+	docs := make([][]byte, len(files))
+	var total int64
+	for i, rel := range files {
+		b, err := readRegular(out, filepath.FromSlash(rel), maxPublishFile)
+		if err != nil {
+			return nil, err
+		}
+		if total += int64(len(b)); total > maxPublishBytes {
+			return nil, fmt.Errorf("it wrote more than %d bytes", maxPublishBytes)
+		}
+		docs[i] = b
+	}
+	return docs, nil
+}
+
+// publishStage is the folder of the scratch workspace where Odin writes the documents it read, for the
+// scan: out/ as Odin read it, not as it is when the scan runs.
+const publishStage = ".publish"
+
 // scanDocuments looks for secrets in the documents in the scratch sandbox of the node that wrote them,
 // where gitleaks is pinned (spec §14). A run with no sandbox has nowhere to run the scanner, and only
 // scripted agents. Secrets are a hard stop at real-secrets-or-user-data with nothing published; a scan
-// that could not run fails the node, because no answer is never "clean".
-func scanDocuments(ctx context.Context, r *run.Run, n schema.Node, files []string) error {
+// that could not run fails the node, because no answer is never "clean". The scan reads docs, the bytes
+// Odin read and will publish: Odin writes them under publishStage in the workspace, at their paths in
+// out/, and runs the scan there, so its report names them as out/ does.
+func scanDocuments(ctx context.Context, r *run.Run, n schema.Node, files []string, docs [][]byte) error {
 	runner, err := r.ScratchRunner(ctx, n.From)
 	if err != nil {
 		return sandboxStart(err)
@@ -163,7 +192,10 @@ func scanDocuments(ctx context.Context, r *run.Run, n schema.Node, files []strin
 	for i, f := range files {
 		listed[i] = path.Join("out", f)
 	}
-	err = scan.Run(ctx, runner, listed)
+	if err := stageDocuments(filepath.Join(r.ScratchDir(n.From), publishStage), listed, docs); err != nil {
+		return err
+	}
+	err = scan.Run(ctx, inDir{runner, publishStage}, listed)
 	var found *scan.FoundError
 	switch {
 	case err == nil:
@@ -172,6 +204,42 @@ func scanDocuments(ctx context.Context, r *run.Run, n schema.Node, files []strin
 		return &hardStop{gate: gungnir.GateRealSecrets, err: err}
 	}
 	return &nodeFailure{err}
+}
+
+// stageDocuments makes stage anew and writes each document's bytes in it, at its path, as a new file.
+func stageDocuments(stage string, files []string, docs [][]byte) error {
+	if err := emptyDir(stage); err != nil {
+		return err
+	}
+	for i, f := range files {
+		p := filepath.Join(stage, filepath.FromSlash(f))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		w, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(docs[i])
+		if cerr := w.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// inDir runs every command in dir, a folder of the runner's workspace.
+type inDir struct {
+	gungnir.Runner
+	dir string
+}
+
+func (d inDir) Run(ctx context.Context, c gungnir.Cmd) (gungnir.ExecResult, error) {
+	c.Dir = path.Join(d.dir, c.Dir)
+	return d.Runner.Run(ctx, c)
 }
 
 // noSymlinks refuses a path under the project if any part of it that exists, from the project down, is a
@@ -198,13 +266,9 @@ func noSymlinks(project, path string) error {
 	return nil
 }
 
-// copyDocument writes src to dst, making dst's folders. Nothing on the way to dst may be a symlink: a
-// document must land where the node says, inside the project.
-func copyDocument(project, src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
+// copyDocument writes data, a document as readDocuments read it, to dst, making dst's folders. Nothing on
+// the way to dst may be a symlink: a document must land where the node says, inside the project.
+func copyDocument(project string, data []byte, dst string) error {
 	if err := noSymlinks(project, dst); err != nil {
 		return err
 	}

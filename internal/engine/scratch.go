@@ -115,7 +115,7 @@ func seedScratch(r *run.Run, n schema.Node) (present []string, err error) {
 		if _, err := os.Lstat(src); errors.Is(err, fs.ErrNotExist) {
 			continue // not written yet, such as the leaves file before the spec stage
 		}
-		if err := copyTree(src, filepath.Join(dir, filepath.FromSlash(in)), b); err != nil {
+		if err := copyTree(r.Project, src, filepath.Join(dir, filepath.FromSlash(in)), b); err != nil {
 			return nil, fmt.Errorf("input %s of %s: %w", in, n.ID, err)
 		}
 		present = append(present, in)
@@ -152,9 +152,10 @@ func emptyDir(dir string) error {
 
 type copyBudget struct{ files, bytes int64 }
 
-// copyTree copies the regular files under src to dst, leaving out .git. It stops at a symlink or any
-// other kind of file, and at more files or bytes than the budget holds.
-func copyTree(src, dst string, b *copyBudget) error {
+// copyTree copies the regular files under src, a path in project, to dst, leaving out .git. It stops at a
+// symlink or any other kind of file, and at more files or bytes than the budget holds. Each file is read
+// as the regular file of the project the walk found, through what is left of the budget (readRegular).
+func copyTree(project, src, dst string, b *copyBudget) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -179,13 +180,19 @@ func copyTree(src, dst string, b *copyBudget) error {
 		if b.files--; b.files < 0 {
 			return fmt.Errorf("more than %d files", maxScratchFiles)
 		}
-		data, err := os.ReadFile(p)
+		name, err := filepath.Rel(project, p)
 		if err != nil {
 			return err
 		}
-		if b.bytes -= int64(len(data)); b.bytes < 0 {
+		data, err := readRegular(project, name, b.bytes)
+		var big *tooBigError
+		switch {
+		case errors.As(err, &big):
 			return fmt.Errorf("more than %d bytes", maxScratchBytes)
+		case err != nil:
+			return fmt.Errorf("%w; the workspace holds copies of files and nothing that could lead out of the project", err)
 		}
+		b.bytes -= int64(len(data))
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}

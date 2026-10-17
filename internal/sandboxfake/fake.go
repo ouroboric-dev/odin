@@ -36,6 +36,9 @@ type Sandbox struct {
 		Exit   int
 		Report string
 	}
+	// OnScan, if set, sees each secret scan, with the files it was given, before the scan ends: a test
+	// reads what the scan would read, or changes the files after it, as a real scan's timing allows.
+	OnScan func(env gungnir.Env, c gungnir.Cmd, files []string)
 	// Fail, if set, is asked before every command but the secret scan. An error it returns is what Exec
 	// returns, as the real driver does when podman itself fails.
 	Fail func(gungnir.Cmd) error
@@ -61,11 +64,11 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 		return gungnir.ExecResult{}, err
 	}
 	s.mu.Lock()
-	hook, result, fail := s.Intercept, s.Scan, s.Fail
+	hook, result, fail, onScan := s.Intercept, s.Scan, s.Fail, s.OnScan
 	isScan := slices.Equal(c.Argv, scan.Argv()) // the secret scan: gitleaks isn't on the host
+	var files []string
 	if isScan {
 		s.Scans++
-		var files []string
 		if c.Stdin != nil {
 			b, _ := io.ReadAll(c.Stdin)
 			files = strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
@@ -79,6 +82,9 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 	}
 	s.mu.Unlock()
 	if isScan {
+		if onScan != nil {
+			onScan(env, c, files)
+		}
 		c.Stdout.Write([]byte(result.Report))
 		return gungnir.ExecResult{ExitCode: result.Exit}, nil
 	}
