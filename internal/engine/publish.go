@@ -62,7 +62,7 @@ func runPublish(ctx context.Context, r *run.Run, n schema.Node) error {
 	var paths []string
 	for _, rel := range files {
 		dst := path.Join(n.To, rel)
-		if err := copyDocument(filepath.Join(out, filepath.FromSlash(rel)), filepath.Join(project, filepath.FromSlash(dst))); err != nil {
+		if err := copyDocument(project, filepath.Join(out, filepath.FromSlash(rel)), filepath.Join(project, filepath.FromSlash(dst))); err != nil {
 			return &nodeFailure{fmt.Errorf("publishing %s: %w", dst, err)}
 		}
 		paths = append(paths, dst)
@@ -174,23 +174,39 @@ func scanDocuments(ctx context.Context, r *run.Run, n schema.Node, files []strin
 	return &nodeFailure{err}
 }
 
-// copyDocument writes src to dst, making dst's folders, and refuses to write through a symlink the project
-// already has at dst or in its path: a document must land where the node says.
-func copyDocument(src, dst string) error {
+// noSymlinks refuses a path under the project if any part of it that exists, from the project down, is a
+// symlink: a write or a read through one would leave the project. Parts that don't exist yet are fine.
+func noSymlinks(project, path string) error {
+	rel, err := filepath.Rel(project, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return fmt.Errorf("%s is not inside the project", path)
+	}
+	cur := project
+	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+		cur = filepath.Join(cur, seg)
+		st, err := os.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if st.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink", cur)
+		}
+	}
+	return nil
+}
+
+// copyDocument writes src to dst, making dst's folders. Nothing on the way to dst may be a symlink: a
+// document must land where the node says, inside the project.
+func copyDocument(project, src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	for d := filepath.Dir(dst); ; d = filepath.Dir(d) {
-		if st, err := os.Lstat(d); err == nil {
-			if st.Mode()&fs.ModeSymlink != 0 {
-				return fmt.Errorf("%s is a symlink", d)
-			}
-			break
-		}
-		if d == filepath.Dir(d) {
-			break
-		}
+	if err := noSymlinks(project, dst); err != nil {
+		return err
 	}
 	if st, err := os.Lstat(dst); err == nil && !st.Mode().IsRegular() {
 		return fmt.Errorf("%s exists and is not a regular file", dst)

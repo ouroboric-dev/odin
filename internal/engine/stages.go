@@ -67,7 +67,8 @@ func readPlan(r *run.Run, n schema.Node) (fs []schema.Feature, source, sum, refu
 	}
 	var files []string
 	for _, m := range matches {
-		if st, err := os.Lstat(m); err == nil && st.Mode().IsRegular() {
+		// A plan is a regular file reached without a symlink, so it is a file of the project.
+		if st, err := os.Lstat(m); err == nil && st.Mode().IsRegular() && noSymlinks(r.Project, m) == nil {
 			files = append(files, m)
 		}
 	}
@@ -120,7 +121,11 @@ func planLeaves(r *run.Run, n schema.Node) (leaves []string, refusal string, err
 	}
 	if n.Leaves != "" {
 		file := filepath.Join(r.Project, filepath.FromSlash(n.Leaves))
-		data, rerr := os.ReadFile(file)
+		var data []byte
+		rerr := noSymlinks(r.Project, file)
+		if rerr == nil {
+			data, rerr = os.ReadFile(file)
+		}
 		if rerr != nil {
 			return nil, fmt.Sprintf("the leaves file %s can't be read (%v), so the tasks' leaves can't be checked. The spec stage names the product's leaves there.", n.Leaves, rerr), nil
 		}

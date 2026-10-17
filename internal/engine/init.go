@@ -60,7 +60,7 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 func readLeaves(r *run.Run, n schema.Node) (*schema.Leaves, error) {
 	file := filepath.Join(r.Project, filepath.FromSlash(n.From))
 	st, err := os.Lstat(file)
-	if err != nil || !st.Mode().IsRegular() {
+	if err != nil || !st.Mode().IsRegular() || noSymlinks(r.Project, file) != nil {
 		return nil, fmt.Errorf("the leaves file %s is not there as a regular file; the spec stage names the product's leaves in it", n.From)
 	}
 	f, err := os.Open(file)

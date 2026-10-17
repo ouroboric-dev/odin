@@ -107,6 +107,9 @@ func seedScratch(r *run.Run, n schema.Node) (present []string, err error) {
 	b := &copyBudget{files: maxScratchFiles, bytes: maxScratchBytes}
 	for _, in := range n.Inputs {
 		src := filepath.Join(r.Project, filepath.FromSlash(in))
+		if err := noSymlinks(r.Project, src); err != nil {
+			return nil, fmt.Errorf("input %s of %s: %w; the workspace holds copies of files and nothing that could lead out of the project", in, n.ID, err)
+		}
 		if _, err := os.Lstat(src); errors.Is(err, fs.ErrNotExist) {
 			continue // not written yet, such as the leaves file before the spec stage
 		}
