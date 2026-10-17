@@ -3,9 +3,9 @@ module github.com/ouroboric-dev/odin
 go 1.26
 
 require (
-	github.com/ouroboric-dev/gleipnir v0.0.0-20261017122827-25403fafd088
-	github.com/ouroboric-dev/gungnir v0.0.0-20261017122808-74b5cfcd3d66
-	github.com/ouroboric-dev/havamal v0.0.0-20261016183637-e7b4e47b4785
+	github.com/ouroboric-dev/gleipnir v0.0.0-20261017195920-f003f21e48c7
+	github.com/ouroboric-dev/gungnir v0.0.0-20261017195515-cb1dc0ee9cc6
+	github.com/ouroboric-dev/havamal v0.0.0-20261017195922-be698041a5ae
 	github.com/ouroboric-dev/jormungandr v0.0.0-20261017110129-97ae1fd0ad99
 )
 

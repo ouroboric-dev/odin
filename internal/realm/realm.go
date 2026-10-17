@@ -24,6 +24,10 @@ type Realm struct {
 	Dir     string // absolute
 	Hash    string // of every file a run could read; see Hash
 	Pack    *schema.Pack
+	// Stack is the image the realm's leaves start on: the pinned image its pack names, or the local tag of
+	// the image `ygg sandbox build` builds from the realm's build context. Acceptance is the same for the
+	// stack acceptance checks run on. Both are empty for a realm with no sandbox stack.
+	Stack, Acceptance string
 }
 
 // Load hashes the realm in dir and reads its pack. The hash comes first: it refuses a symlink anywhere in
@@ -41,7 +45,14 @@ func Load(dir string) (*Realm, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Realm{Name: p.Name, Version: p.Version, Dir: abs, Hash: h, Pack: p}, nil
+	r := &Realm{Name: p.Name, Version: p.Version, Dir: abs, Hash: h, Pack: p}
+	if r.Stack, err = p.StackRef(abs); err != nil {
+		return nil, err
+	}
+	if r.Acceptance, err = p.AcceptanceRef(abs); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 type limits struct{ files, bytes int64 }

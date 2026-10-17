@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -92,6 +93,45 @@ func (r Repo) Run(ctx context.Context, args ...string) (string, error) {
 // Output is Run with git's standard output untrimmed.
 func (r Repo) Output(ctx context.Context, args ...string) ([]byte, error) {
 	return Output(ctx, r.WorkTree, append([]string{"--git-dir=" + r.GitDir, "--work-tree=" + r.WorkTree}, args...)...)
+}
+
+// Pipe runs git with args against r and hands its standard output to read as it is produced, for output
+// too big to hold, such as an archive of the repo. read decides how much it takes: if it returns early,
+// git is stopped. An error of git's wins over one of read's only when read saw the end of the output.
+func (r Repo) Pipe(ctx context.Context, read func(io.Reader) error, args ...string) error {
+	return r.PipeIn(ctx, nil, read, args...)
+}
+
+// PipeIn is Pipe with stdin given to git as its standard input, for commands such as cat-file --batch.
+func (r Repo) PipeIn(ctx context.Context, stdin io.Reader, read func(io.Reader) error, args ...string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	full := append(append([]string{}, safe...), "--git-dir="+r.GitDir, "--work-tree="+r.WorkTree)
+	cmd := exec.CommandContext(ctx, "git", append(full, args...)...)
+	cmd.Dir = r.WorkTree
+	cmd.Env = env()
+	cmd.Stdin = stdin
+	var errOut bytes.Buffer
+	cmd.Stderr = &errOut
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	readErr := read(out)
+	if readErr != nil {
+		cancel()
+	}
+	waitErr := cmd.Wait()
+	switch {
+	case readErr != nil:
+		return readErr
+	case waitErr != nil:
+		return fmt.Errorf("git %s (in %s): %w: %s", strings.Join(args, " "), r.WorkTree, waitErr, strings.TrimSpace(errOut.String()))
+	}
+	return nil
 }
 
 // CheckURL refuses a repo URL that host git shouldn't fetch: anything but https, ssh (also in the

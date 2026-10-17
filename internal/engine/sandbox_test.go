@@ -32,13 +32,19 @@ func startSandboxed(t *testing.T, nodes, script string) (*run.Run, *sandboxfake.
 // startSandboxedWith is startSandboxed with other hooks, such as a skill library.
 func startSandboxedWith(t *testing.T, nodes, script string, h run.Hooks) (*run.Run, *sandboxfake.Sandbox) {
 	t.Helper()
+	return startSandboxedPack(t, sandboxPack, nodes, script, h)
+}
+
+// startSandboxedPack is startSandboxedWith with a pack.yaml of its own.
+func startSandboxedPack(t *testing.T, pack, nodes, script string, h run.Hooks) (*run.Run, *sandboxfake.Sandbox) {
+	t.Helper()
 	realm, cfg := t.TempDir(), t.TempDir()
 	project := treetest.Project(t, "repos/app")
 	tmpl := filepath.Join(realm, "t")
 	os.MkdirAll(tmpl, 0o755)
 	files := map[string]string{
 		filepath.Join(tmpl, "LICENSE"):     "MIT\n",
-		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + sandboxPack,
+		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + pack,
 		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nnodes:\n" + nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
 		filepath.Join(cfg, "script.yaml"):  script,

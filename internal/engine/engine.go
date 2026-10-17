@@ -18,6 +18,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/leaf"
+	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -280,6 +281,17 @@ func runExec(ctx context.Context, r *run.Run, n schema.Node) error {
 // failure of the node, never a failed command (spec §12; backlog B-017).
 func command(ctx context.Context, r *run.Run, node, repo, dir string, args []string, timeout time.Duration, logPath string) (cmdErr, err error) {
 	res, err := runCheck(ctx, r, node, repo, dir, checks.Spec{Name: node, Argv: args, Timeout: orDefault(timeout)}, logPath)
+	return commandResult(res, err, timeout)
+}
+
+// commandOn is command in a runner the caller chose, such as the snapshot sandbox of an acceptance check.
+func commandOn(ctx context.Context, runner gungnir.Runner, node string, args []string, timeout time.Duration, logPath string) (cmdErr, err error) {
+	res, err := runOn(ctx, runner, checks.Spec{Name: node, Argv: args, Timeout: orDefault(timeout)}, logPath)
+	return commandResult(res, err, timeout)
+}
+
+// commandResult reads how a command ended: its failure as cmdErr, Odin's own failure as err.
+func commandResult(res checks.Result, err error, timeout time.Duration) (cmdErr, rerr error) {
 	switch {
 	case err != nil:
 		return nil, err
@@ -309,6 +321,11 @@ func runCheck(ctx context.Context, r *run.Run, node, repo, dir string, spec chec
 	if runner == nil {
 		runner = hostRunner{r: r, node: node, dir: dir}
 	}
+	return runOn(ctx, runner, spec, logPath)
+}
+
+// runOn runs one command through the check runner in runner, and reads how it went.
+func runOn(ctx context.Context, runner gungnir.Runner, spec checks.Spec, logPath string) (checks.Result, error) {
 	res, err := checks.Run(ctx, runner, spec, logPath)
 	switch {
 	case err == nil:
@@ -330,13 +347,21 @@ func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, name
 	if repo == "" {
 		rl = r.Setup.Realm("")
 	}
+	return runChecksWith(ctx, r, n, attempt, names, rl, func(argv []string, logPath string) (error, error) {
+		return command(ctx, r, n.ID, repo, dir, argv, time.Duration(n.Timeout), logPath)
+	})
+}
+
+// runChecksWith is runChecks with the checks of realm rl, each run by exec, which returns the command's
+// failure and, apart from it, Odin's own.
+func runChecksWith(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, rl *realm.Realm, exec func(argv []string, logPath string) (cmdErr, err error)) error {
 	for _, c := range names {
 		argv := rl.Pack.Checks[c]
 		if len(argv) == 0 {
 			return &nodeFailure{fmt.Errorf("the realm %s defines no check %s", rl.Name, c)}
 		}
 		logPath := filepath.Join(r.Dir, "logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, c))
-		cmdErr, err := command(ctx, r, n.ID, repo, dir, argv, time.Duration(n.Timeout), logPath)
+		cmdErr, err := exec(argv, logPath)
 		if err != nil {
 			return err
 		}

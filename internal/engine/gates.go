@@ -24,10 +24,26 @@ func reachGate(r *run.Run, n schema.Node) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	// Phase 1 has no conformance review and no contracts, so both facts are false. Block only
-	// arises for pointer-contract, which Phase 2 brings; until then it stops like Stop.
-	action := gate.Decide(s.Mode, n.Gate, r.Setup.Config.Gates, gate.Facts{})
-	file, err := writeGateFile(r, n, attempt, action)
+	// The spec gate reads the verdict of the design-conformance review (spec §7.1); no gate knows a
+	// contract yet, so ContractInSpec is false. Block only arises for pointer-contract.
+	var facts gate.Facts
+	var verdict *gungnir.Conformance
+	if n.DeviationFrom != "" {
+		v, err := readConformance(r, n.DeviationFrom)
+		if err != nil {
+			return false, &nodeFailure{err}
+		}
+		verdict, facts.Deviation = &v, v.Deviation
+		result := "no deviation"
+		if v.Deviation {
+			result = "deviation: " + firstLine(v.Amendment)
+		}
+		if err := r.Log(gungnir.Event{Name: gungnir.EventConformanceChecked, Node: n.DeviationFrom, Attempt: attempt, Result: result}); err != nil {
+			return false, err
+		}
+	}
+	action := gate.Decide(s.Mode, n.Gate, r.Setup.Config.Gates, facts)
+	file, err := writeGateFile(r, n, attempt, action, verdict)
 	if err != nil {
 		return false, err
 	}
@@ -45,7 +61,7 @@ func reachGate(r *run.Run, n schema.Node) (bool, error) {
 }
 
 // writeGateFile writes gates/<node>-<attempt>.md and returns its path relative to the run.
-func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action) (string, error) {
+func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, verdict *gungnir.Conformance) (string, error) {
 	s := r.State
 	rel := filepath.Join("gates", fmt.Sprintf("%s-%d.md", n.ID, attempt))
 	var b strings.Builder
@@ -67,6 +83,9 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action) (
 	}
 	for _, m := range nodes[start:s.Position] {
 		fmt.Fprintf(&b, "- %s (%s, attempt %d): %s\n", m.ID, m.Kind, s.Attempts[m.ID], s.Summaries[m.ID])
+	}
+	if verdict != nil {
+		b.WriteString("\n" + conformanceSection(*verdict))
 	}
 	u := s.Usage
 	fmt.Fprintf(&b, "\n## Cost so far\n\n- Tokens: %d in, %d out, %d from cache\n- Turns: %d\n- Cost: $%.4f",

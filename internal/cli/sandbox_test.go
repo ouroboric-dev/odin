@@ -35,6 +35,13 @@ case "$1" in
       *) echo c1 ;;
     esac ;;
   network) [ "$2" = exists ] && exit 1 ;;
+  image) case "$2 $3" in
+      "exists localhost/ygg-stack-"*) [ -f "$d/built-$(echo "$3" | tr '/:' '__')" ] || exit 1 ;;
+    esac ;;
+  build) prev=; for a in "$@"; do
+      [ "$prev" = -t ] && case "$a" in localhost/ygg-stack-*) touch "$d/built-$(echo "$a" | tr '/:' '__')" ;; esac
+      prev=$a
+    done ;;
 esac
 exit 0
 `)

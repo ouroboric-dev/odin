@@ -10,6 +10,8 @@ import (
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/odin/internal/git"
+	"github.com/ouroboric-dev/odin/internal/snapshot"
 	"github.com/ouroboric-dev/odin/internal/tree"
 )
 
@@ -91,7 +93,7 @@ func (r *Run) ScratchRunner(ctx context.Context, node string) (gungnir.Runner, e
 		return gungnir.Bind(r.Sandbox, env), nil
 	}
 	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: key, Parent: r.Dir, Leaf: r.ScratchDir(node), Scratch: true,
-		Egress: r.Setup.Sandbox.Egress, Stack: r.Setup.Pack.Sandbox.Stack})
+		Egress: r.Setup.Sandbox.Egress, Stack: r.Setup.Lead.Stack})
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +108,76 @@ func (r *Run) ScratchRunner(ctx context.Context, node string) (gungnir.Runner, e
 		return nil, err
 	}
 	return gungnir.Bind(r.Sandbox, env), nil
+}
+
+// SnapshotRunner returns what runs commands in the sandbox that holds a snapshot of the project, for the
+// acceptance checks of node: the committed files of the project umbrella and of each leaf, at the commits
+// they are on, or at the commits revs names for a leaf (by its path), in a plain folder of the run. The
+// snapshot is made again every time, since the work it holds changes between attempts; the sandbox
+// is started the first time, with the services of every leaf's realm, and is recorded under its own name
+// so that Advance, a resume and doctor stop it like a leaf's (change realm-content).
+func (r *Run) SnapshotRunner(ctx context.Context, node string, revs map[string]string) (gungnir.Runner, error) {
+	if r.Sandbox == nil {
+		return nil, nil
+	}
+	key, dir := "snapshot/"+node, filepath.Join(r.Dir, "snapshot", node)
+	sources, err := r.snapshotSources(ctx, revs)
+	if err != nil {
+		return nil, &SnapshotError{err}
+	}
+	if err := snapshot.Export(ctx, dir, sources); err != nil {
+		return nil, &SnapshotError{err}
+	}
+	if env, ok := r.State.Sandboxes[key]; ok {
+		return gungnir.Bind(r.Sandbox, env), nil
+	}
+	stack, egress, services, err := r.Setup.SnapshotSandbox()
+	if err != nil {
+		return nil, err
+	}
+	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: key, Parent: r.Dir, Leaf: dir, Scratch: true,
+		Egress: egress, Stack: stack, Services: services})
+	if err != nil {
+		return nil, err
+	}
+	if r.State.Sandboxes == nil {
+		r.State.Sandboxes = map[string]gungnir.Env{}
+	}
+	r.State.Sandboxes[key] = env
+	if err := r.Log(gungnir.Event{Name: gungnir.EventSandboxUp, Note: fmt.Sprintf("%s: container %.12s", key, env.Container)}); err != nil {
+		return nil, err
+	}
+	if err := r.Save(); err != nil {
+		return nil, err
+	}
+	return gungnir.Bind(r.Sandbox, env), nil
+}
+
+// SnapshotError is a snapshot that could not be made: a failure of the node, not of the sandbox.
+type SnapshotError struct{ Err error }
+
+func (e *SnapshotError) Error() string {
+	return "the snapshot of the project could not be made: " + e.Err.Error()
+}
+func (e *SnapshotError) Unwrap() error { return e.Err }
+
+// snapshotSources are the repos a snapshot is made of: the project umbrella, then each leaf of the project
+// that is checked out.
+func (r *Run) snapshotSources(ctx context.Context, revs map[string]string) ([]snapshot.Source, error) {
+	p := r.Setup.Project
+	sources := []snapshot.Source{{Rel: ".", Repo: git.Repo{GitDir: p.GitDir, WorkTree: p.Dir}}}
+	for _, path := range r.Setup.projectLeaves() {
+		nodes, err := tree.Resolve(ctx, r.Setup.Root, filepath.Join(r.Setup.ProjectPath, path))
+		if err != nil {
+			return nil, err
+		}
+		n := nodes[len(nodes)-1]
+		if !n.Present {
+			continue
+		}
+		sources = append(sources, snapshot.Source{Rel: path, Repo: git.Repo{GitDir: n.GitDir, WorkTree: n.Dir}, Rev: revs[path]})
+	}
+	return sources, nil
 }
 
 // DownSandboxes stops every sandbox this process or an earlier one started for the run, and clears
