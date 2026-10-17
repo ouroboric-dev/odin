@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -144,5 +145,59 @@ func TestAScratchAgentRunsInAScratchSandboxWithNoGitDir(t *testing.T) {
 	}
 	if fake.Scans != 0 {
 		t.Errorf("%d secret scans ran for a node that commits nothing", fake.Scans)
+	}
+}
+
+func TestARetryOfAScratchAgentReseedsTheWorkspaceItsSandboxMounts(t *testing.T) {
+	// The scratch sandbox mounts the workspace folder and stays up across tries: the retry must find its
+	// fresh copy in that same folder, not in a new one the container doesn't see (review I-3).
+	script := "steps:\n  design:\n" +
+		"    - actions:\n        - write: { path: out/first.md, content: \"# First\\n\" }\n        - run: { argv: [sh, -c, \"echo 1 > try.txt\"] }\n      error: the CLI crashed\n      kind: transient\n" +
+		"    - actions:\n        - run: { argv: [sh, -c, \"echo 2 > try.txt\"] }\n        - write: { path: out/design.md, content: \"# Design\\n\" }\n      result: { status: ok, summary: wrote }\n"
+	w := &waits{}
+	h := hooks(w)
+	r, fake := startSandboxedWith(t, strings.Replace(scratchNode, "inputs: [docs/input.md, docs/more, missing.md] ", "", 1), script, h)
+	// The first try holds the folder open, as a container's mount does, so the folder it saw can't go and
+	// come back under the same inode: each later command must run in that same folder.
+	var mounted *os.File
+	var same []bool
+	fake.Intercept = func(c gungnir.Cmd) (gungnir.ExecResult, bool) {
+		now, err := os.Stat(r.ScratchDir("design"))
+		if err != nil {
+			t.Errorf("the workspace is gone while its sandbox runs: %v", err)
+			return gungnir.ExecResult{}, false
+		}
+		if mounted == nil {
+			if mounted, err = os.Open(r.ScratchDir("design")); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { mounted.Close() })
+		}
+		was, err := mounted.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		same = append(same, os.SameFile(was, now))
+		return gungnir.ExecResult{}, false
+	}
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusDone || len(w.got) != 1 {
+		t.Fatalf("Advance() = %+v, %v after %d waits; want done after one retry", out, err, len(w.got))
+	}
+	if len(fake.Ups) != 1 {
+		t.Fatalf("%d sandboxes came up; the retry runs in the one the first try started", len(fake.Ups))
+	}
+	if len(same) != 2 || !same[0] || !same[1] {
+		t.Errorf("the commands ran in the folder the sandbox mounts: %v; a retry must reseed that folder, not make another", same)
+	}
+	ws := r.ScratchDir("design")
+	if _, err := os.Stat(filepath.Join(ws, "out", "first.md")); err == nil {
+		t.Error("the failed try's output was still in the workspace for the retry")
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "out", "design.md")); err != nil || string(b) != "# Design\n" {
+		t.Errorf("out/design.md = %q, %v", b, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(ws, "try.txt")); strings.TrimSpace(string(b)) != "2" {
+		t.Errorf("try.txt = %q", b)
 	}
 }

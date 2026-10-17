@@ -88,12 +88,14 @@ func workspaceNote(r *run.Run, present []string) string {
 }
 
 // seedScratch makes the workspace of node n anew: the brief, a copy of each input that exists in the
-// project, and an empty out/. It returns the inputs it copied. Odin's own folder is replaced as a whole;
-// nothing outside it is touched. An input that is, or holds, a symlink or anything but a regular file is
-// refused, since the workspace is a copy and must not lead out of the project.
+// project, and an empty out/. It returns the inputs it copied. Everything in Odin's own folder is
+// replaced; nothing outside it is touched. The folder itself stays, emptied in place: the scratch sandbox
+// mounts it and stays up across a retry and a refusal sent back, and a folder made again would not be
+// the one its container sees (review I-3). An input that is, or holds, a symlink or anything but a
+// regular file is refused, since the workspace is a copy and must not lead out of the project.
 func seedScratch(r *run.Run, n schema.Node) (present []string, err error) {
 	dir := r.ScratchDir(n.ID)
-	if err := os.RemoveAll(dir); err != nil {
+	if err := emptyDir(dir); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o755); err != nil {
@@ -119,6 +121,33 @@ func seedScratch(r *run.Run, n schema.Node) (present []string, err error) {
 		present = append(present, in)
 	}
 	return present, nil
+}
+
+// emptyDir removes everything in dir and keeps dir, so a mount of it stays valid. A dir that is not
+// there is made; anything at its path that is not a folder, such as a symlink, is removed first.
+func emptyDir(dir string) error {
+	st, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return os.MkdirAll(dir, 0o755)
+	case err != nil:
+		return err
+	case !st.IsDir():
+		if err := os.Remove(dir); err != nil {
+			return err
+		}
+		return os.MkdirAll(dir, 0o755)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type copyBudget struct{ files, bytes int64 }
