@@ -1,0 +1,20 @@
+# An example factory.yaml for the realms smoke run (v0-H13). Copy it, set the engine, the mounts and the
+# realm folder for your machine, and the caps you want; the factory ships no defaults. The credentials
+# come from the environment: CLAUDE_CODE_OAUTH_TOKEN, never from this file. Both roles are Claude Code,
+# so no OpenRouter key is needed.
+mode: unattended
+privacy: strict
+gates:
+  design: auto
+roles:
+  planner: { agent: claude-code, model: sonnet }
+  implementer: { agent: claude-code, model: sonnet }
+budget:
+  per_run: { tokens: 600000, turns: 80 }
+  per_day: { tokens: 1500000, turns: 200 }
+sandbox:
+  engine: unix:///mnt/wsl/podman-sockets/podman-machine-default/podman-user.sock
+  mounts:
+    - { host: /home/OPERATOR/ygg, engine: /mnt/wsl/ygg-bind }
+realms:
+  dir: /home/OPERATOR/yggdrasil/odin/testdata/smoke-realms

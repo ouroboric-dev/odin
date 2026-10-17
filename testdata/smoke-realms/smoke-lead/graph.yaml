@@ -1,0 +1,19 @@
+# The realms smoke graph (spec §4.2 in small): two scratch stages with real agents, Odin publishing their
+# documents, the plan read into tasks, the leaves created from two realms, and then one implementer
+# loop, a merge and a pointer move for each task, in its leaf.
+name: smoke-lead
+version: 0.1.0
+nodes:
+  - { id: spec, kind: agent, role: planner, prompt: prompts/spec.md, scratch: true, max_turns: 8, timeout: 5m }
+  - { id: spec-docs, kind: publish, from: spec, to: docs }
+  - { id: plan, kind: agent, role: planner, prompt: prompts/plan.md, scratch: true, inputs: [docs/leaves.yaml], max_turns: 8, timeout: 5m }
+  - { id: plan-docs, kind: publish, from: plan, to: docs }
+  - { id: ready, kind: tasks, from: docs/plan/tasks.md, leaves: docs/leaves.yaml, back_to: plan, returns: 1 }
+  - { id: leaves, kind: init, from: docs/leaves.yaml }
+  - id: tasks
+    kind: foreach
+    over: tasks
+    nodes:
+      - { id: implement, kind: loop, realm: leaf, role: implementer, attempts: 2, max_turns: 8, timeout: 5m }
+      - { id: land, kind: merge, realm: leaf }
+      - { id: move, kind: pointer, realm: leaf }

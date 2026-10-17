@@ -1,0 +1,18 @@
+# The lead realm of the realms smoke run: real planners write the leaves file and the plan in scratch
+# workspaces, Odin publishes them and creates the leaves, and a real implementer builds one small task in
+# each leaf. It costs a few cents. The prompts ask for exact files: this run tests the machinery, not the
+# planner's judgment.
+name: smoke-lead
+version: 0.1.0
+graph: graph.yaml
+checks:
+  unit: [grep, -q, hello, hello.txt]
+leaf:
+  description: A smoke leaf of the lead realm.
+  template: templates/leaf
+  first_commit: [LICENSE]
+  implementer: prompts/implementer.md
+  checks: [unit]
+sandbox:
+  stack: docker.io/library/golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514
+  egress: []
