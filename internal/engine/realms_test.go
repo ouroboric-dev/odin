@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,18 +93,7 @@ func startRealms(t *testing.T, o realmsSetup) *run.Run {
 }
 
 // transcriptPrompt returns the prompt a scripted session of node got in attempt 1.
-func transcriptPrompt(t *testing.T, r *run.Run, node string) string {
-	t.Helper()
-	b, err := os.ReadFile(filepath.Join(r.Dir, "transcripts", node+"-1.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var tr struct{ Prompt string }
-	if err := json.Unmarshal(b, &tr); err != nil {
-		t.Fatal(err)
-	}
-	return tr.Prompt
-}
+func transcriptPrompt(t *testing.T, r *run.Run, node string) string { return promptOf(t, r, node+"-1") }
 
 const leadAndOther = "checks:\n  unit: [sh, -c, \"echo lead > ran-by.txt\"]\n"
 

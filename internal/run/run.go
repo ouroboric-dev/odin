@@ -221,8 +221,9 @@ func (s *Setup) findProject(ctx context.Context, project string) error {
 
 // checkNode checks that node n can run in this project: its repo, its role and prompt, its checks.
 func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) error {
-	if n.Kind == schema.KindGate {
-		return nil
+	switch {
+	case n.Kind == schema.KindGate, n.Kind == schema.KindPublish, n.Kind == schema.KindTasks, n.Kind == schema.KindInit:
+		return nil // they work in the project, not in a leaf
 	}
 	if n.Repo == "" {
 		return fmt.Errorf("%s: node %s names no repo; every node that does work runs in a repo of the project", graphPath, n.ID)
@@ -409,6 +410,9 @@ type Run struct {
 	SetAside []string        // the notes of Saved from the set-aside of a session whose spend the journal couldn't take, for its gate (review I4)
 	Sandbox  gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
 }
+
+// Nodes returns the nodes the run walks, in order. Position indexes this list.
+func (r *Run) Nodes() []schema.Node { return r.Setup.Graph.Nodes }
 
 // Meter returns the budget of this run: its caps against its own usage and the day's journal.
 func (r *Run) Meter() *budget.Meter {

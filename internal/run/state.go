@@ -20,6 +20,7 @@ import (
 
 	"github.com/ouroboric-dev/gleipnir/skills"
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/ledger"
@@ -87,6 +88,9 @@ type State struct {
 	Paused       *Pause                 `json:"paused,omitempty"`        // why the run is paused
 	Warned       map[string]bool        `json:"warned,omitempty"`        // the budget warnings already given, so each comes once
 	Loops        map[string]*LoopRecord `json:"loops,omitempty"`         // loop node id: where its loop stands
+	Features     []schema.FeatureRecord `json:"features,omitempty"`      // the plan's tasks in the order they are built, once the tasks node has run
+	PlanSource   string                 `json:"plan_source,omitempty"`   // the tasks.md they came from, relative to the project
+	PlanSHA256   string                 `json:"plan_sha256,omitempty"`   // that file as Odin read it
 	Ledger       ledger.Anchor          `json:"ledger"`
 	Error        string                 `json:"error,omitempty"`
 	Exec         *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any

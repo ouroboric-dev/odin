@@ -55,7 +55,7 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 	if err := r.Save(); err != nil {
 		return Outcome{}, err
 	}
-	nodes := r.Setup.Graph.Nodes
+	nodes := r.Nodes()
 	for s.Position < len(nodes) {
 		n := nodes[s.Position]
 		var stop bool
@@ -73,6 +73,8 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			err = runMerge(ctx, r, n)
 		case schema.KindPointer:
 			err = runPointer(ctx, r, n)
+		case schema.KindTasks:
+			err = runTasks(ctx, r, n)
 		}
 		var nf *nodeFailure
 		if errors.As(err, &nf) {
