@@ -58,9 +58,20 @@ func (c *command) sandbox(args []string) int {
 	if err != nil {
 		return c.refuse(err)
 	}
-	for _, stack := range stacks {
-		fmt.Fprintf(c.out, "Pulling and building the images for %s; this takes a few minutes.\n", stack)
-		imgs, err := d.Build(c.ctx, stack)
+	for _, st := range stacks {
+		if st.dir != "" {
+			fmt.Fprintf(c.out, "Building the stack %s from the realm's context.\n", st.ref)
+			built, err := d.BuildStack(c.ctx, st.ref, st.dir, st.target)
+			if err != nil {
+				fmt.Fprintf(c.err, "ygg: building the stack failed: %v\n", err)
+				return ExitFailed
+			}
+			if !built {
+				fmt.Fprintf(c.out, "The stack %s is there already.\n", st.ref)
+			}
+		}
+		fmt.Fprintf(c.out, "Pulling and building the images for %s; this takes a few minutes.\n", st.ref)
+		imgs, err := d.Build(c.ctx, st.ref)
 		if err != nil {
 			fmt.Fprintf(c.err, "ygg: the build failed: %v\n", err)
 			return ExitFailed
@@ -77,11 +88,15 @@ func (c *command) sandbox(args []string) int {
 	return ExitDone
 }
 
+// stackBuild is one stack to build: the image the layers go on (ref) and, for a stack built from a realm's
+// context, the context's folder and the stage to build. dir is empty for an image pinned by digest.
+type stackBuild struct{ ref, dir, target string }
+
 // stacksToBuild returns the distinct sandbox stacks of the realms named, in the order named, or of every
 // realm in the store with --all, and the distinct images of their services, which a sandbox uses without
 // ever pulling them. A realm named on purpose that has no stack is an error; with --all it is skipped,
 // and the skip is returned for the output.
-func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks, services, skipped []string, err error) {
+func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks []stackBuild, services, skipped []string, err error) {
 	var store *realm.Store
 	if cfg.Realms != nil {
 		store = &realm.Store{Dir: cfg.Realms.Dir}
@@ -118,8 +133,32 @@ func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks, servic
 			skipped = append(skipped, fmt.Sprintf("The realm %s names no sandbox stack; skipped.", pack.Name))
 		case pack.Sandbox == nil:
 			return nil, nil, nil, fmt.Errorf("the realm %s names no sandbox stack in its pack.yaml", pack.Name)
-		case !slices.Contains(stacks, pack.Sandbox.Stack):
-			stacks = append(stacks, pack.Sandbox.Stack)
+		default:
+			sb := pack.Sandbox
+			ref, err := pack.StackRef(dir)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			want := []stackBuild{{ref: ref, target: sb.Target}}
+			if sb.Build != "" {
+				want[0].dir = filepath.Join(dir, sb.Build)
+			}
+			if sb.Acceptance != nil {
+				acc, err := pack.AcceptanceRef(dir)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				a := stackBuild{ref: acc, target: sb.Acceptance.Target}
+				if sb.Acceptance.Build != "" {
+					a.dir = filepath.Join(dir, sb.Acceptance.Build)
+				}
+				want = append(want, a)
+			}
+			for _, w := range want {
+				if !slices.ContainsFunc(stacks, func(x stackBuild) bool { return x.ref == w.ref }) {
+					stacks = append(stacks, w)
+				}
+			}
 		}
 		if pack.Sandbox != nil {
 			for _, v := range pack.ServiceList() {
