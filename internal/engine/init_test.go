@@ -65,8 +65,17 @@ func TestInitCreatesEachLeafFromTheTemplateOfItsRealmAndRecordsThePin(t *testing
 		if err != nil {
 			t.Fatalf("%s: %v", leaf, err)
 		}
-		if first, _ := l.Git(ctx, "ls-tree", "-r", "--name-only", "main"); first != "LICENSE" {
-			t.Errorf("%s: main holds %q; the first commit is the recipe's first_commit files", leaf, first)
+		// The template is part of main, so a first task starts from it (final review I-2): the checks'
+		// "commit the task started from" is the template, and a blocked task's reset keeps it.
+		rec := r.State.Leaves[leaf]
+		if main, _ := l.Rev(ctx, "main"); main != rec.Checkpoint {
+			t.Errorf("%s: main is at %s, want the template checkpoint %s", leaf, main, rec.Checkpoint)
+		}
+		if mb, _ := l.Git(ctx, "merge-base", "HEAD", "main"); mb != rec.Checkpoint {
+			t.Errorf("%s: merge-base HEAD main = %s, want the template checkpoint %s", leaf, mb, rec.Checkpoint)
+		}
+		if tree, _ := l.Git(ctx, "ls-tree", "-r", "--name-only", "main"); !strings.Contains(tree, "LICENSE") || !strings.Contains(tree, "AGENTS.md") {
+			t.Errorf("%s: main holds %q; the first commit's files and the template", leaf, tree)
 		}
 		if b, _ := os.ReadFile(filepath.Join(l.Dir(), "AGENTS.md")); string(b) != "rules of "+realmName+"\n" {
 			t.Errorf("%s: AGENTS.md = %q; the template of its own realm", leaf, b)
@@ -363,6 +372,9 @@ func halfInit(t *testing.T) *run.Run {
 	if _, err := api.Git(ctx, "reset", "-q", "--hard", rec.Base); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := api.Git(ctx, "update-ref", "refs/heads/main", rec.Base); err != nil { // init had not moved main yet
+		t.Fatal(err)
+	}
 	rec.Checkpoint = rec.Base
 	r.State.Leaves["repos/api"] = rec
 	r.State.Position, r.State.Status = 0, run.StatusRunning
@@ -397,6 +409,9 @@ func TestAResumedInitStillAddsTheTemplateToALeafItCreated(t *testing.T) {
 	if count, _ := api.Git(ctx, "rev-list", "--count", "HEAD"); count != "2" {
 		t.Errorf("the leaf has %s commits; want its first and the template's", count)
 	}
+	if main, _ := api.Rev(ctx, "main"); main != r.State.Leaves["repos/api"].Checkpoint {
+		t.Errorf("main is at %s after the resume, want the template checkpoint", main)
+	}
 }
 
 // The template is never written through a symlink in the leaf: the write would land outside it.
@@ -414,5 +429,29 @@ func TestInitWritesNoTemplateThroughASymlinkInTheLeaf(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 1 {
 		t.Errorf("the folder outside the leaf holds %d entries; the template was written through the link", len(entries))
+	}
+}
+
+// A first task that is blocked puts the leaf back to the template, not to a main that holds only the
+// first commit (final review I-2): the next task in the leaf still has its go.mod or package.json.
+func TestABlockedFirstTaskKeepsTheTemplateOfANewLeaf(t *testing.T) {
+	r := initRun(t, galleryLeaves)
+	ctx := context.Background()
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	api, _ := r.Leaf("repos/api")
+	main, _ := api.Rev(ctx, "main")
+	rec := r.State.Leaves["repos/api"]
+	rec.TaskBase = main // what a task records when it starts
+	r.State.Leaves["repos/api"] = rec
+	if err := blockTask(ctx, r, nil, schema.Node{Repo: "repos/api", Task: "gallery-T1"}, "gave up."); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(api.Dir(), "AGENTS.md")); err != nil || string(b) != "rules of helheim-go\n" {
+		t.Errorf("AGENTS.md = %q, %v; the blocked task's reset deleted the template", b, err)
+	}
+	if now, _ := api.Rev(ctx, "main"); now != main {
+		t.Errorf("main moved to %s from %s", now, main)
 	}
 }

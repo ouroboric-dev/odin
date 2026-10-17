@@ -12,6 +12,8 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/leaf"
+	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/run"
@@ -210,19 +212,55 @@ func initLeaf(ctx context.Context, r *run.Run, n schema.Node, p string, l schema
 		return created, nil // a leaf of the project's, not of this run's: its files are its own
 	}
 	if count, err := lf.Git(ctx, "rev-list", "--count", "HEAD"); err != nil || count != "1" {
-		return created, err // the leaf has history beyond its first commit: its template was applied
+		if err == nil {
+			// Its template was applied. A stop between the checkpoint and the move of main is finished here.
+			if rec := r.State.Leaves[p]; rec.Checkpoint != "" {
+				if subj, _ := lf.Git(ctx, "log", "-1", "--format=%s", rec.Checkpoint); subj == templateMessage(r, n, l) {
+					err = mainToTemplate(ctx, r, lf, p, rec.Checkpoint)
+				}
+			}
+		}
+		return created, err
 	}
 	if err := copyTemplate(filepath.Join(rl.Dir, recipe.Template), lf.Dir(), recipe.FirstCommit); err != nil {
 		return created, &nodeFailure{fmt.Errorf("copying the template of %s into %s: %w", l.Realm, p, err)}
 	}
-	head, _, err := lf.Checkpoint(ctx, fmt.Sprintf("ygg: run %s, node %s: the %s template", r.State.ID, n.ID, l.Realm))
+	head, _, err := lf.Checkpoint(ctx, templateMessage(r, n, l))
 	if err != nil {
+		return created, err
+	}
+	if err := mainToTemplate(ctx, r, lf, p, head); err != nil {
 		return created, err
 	}
 	rec := r.State.Leaves[p]
 	rec.Checkpoint = head
 	r.State.Leaves[p] = rec
 	return created, r.Save()
+}
+
+func templateMessage(r *run.Run, n schema.Node, l schema.LeafSpec) string {
+	return fmt.Sprintf("ygg: run %s, node %s: the %s template", r.State.ID, n.ID, l.Realm)
+}
+
+// mainToTemplate moves the leaf's main to the template's checkpoint, under the leaf's lock and with
+// update-ref as a merge does, so that main holds the template before any task starts: the checks and the
+// reviewers take "the commit the task started from" to be main, and a blocked task resets to it (final
+// review I-2). main moves only forward, from where it is to a commit that holds it.
+func mainToTemplate(ctx context.Context, r *run.Run, lf *leaf.Leaf, repo, head string) error {
+	release, err := lock.Take(r.LockFile(repo))
+	if err != nil {
+		return err
+	}
+	defer release()
+	main, err := lf.Rev(ctx, "main")
+	if err != nil || main == head {
+		return err
+	}
+	if _, err := lf.Git(ctx, "merge-base", "--is-ancestor", main, head); err != nil {
+		return nil // main has moved on its own: the template is not put over it
+	}
+	_, err = lf.Git(ctx, "update-ref", "refs/heads/main", head, main)
+	return err
 }
 
 // copyTemplate copies the template's files into the leaf, except the first commit's, which the leaf has.
