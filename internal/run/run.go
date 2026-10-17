@@ -35,6 +35,7 @@ type Options struct {
 	Config  string            // factory.yaml
 	Realm   string            // the lead realm: a realm leaf's name, found in factory.yaml's realms.dir, or a path to the folder that holds pack.yaml
 	Realms  map[string]string // a resume: the folder of each realm the run recorded, by name; they are loaded from there
+	Leaves  []string          // a resume: the leaves the run added beyond the ones its graph names (AddLeaf)
 	Brief   string            // optional
 	Mode    gungnir.Mode      // "" means the config's mode
 	Hooks   Hooks             // tests only
@@ -135,6 +136,11 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	}
 	if s.Realms, err = s.collectRealms(store, o.Realms); err != nil {
 		return nil, err
+	}
+	for _, p := range o.Leaves {
+		if err := s.addLeaf(ctx, p); err != nil {
+			return nil, err
+		}
 	}
 	// A realm named in the store is pinned by the project's first run; one given as a path is a checkout
 	// being worked on, and pins nothing.
@@ -329,6 +335,53 @@ func (s *Setup) isLeaf(repo string) bool {
 		return n.Kind == schema.ChildLeaf
 	}
 	return slices.Contains(s.Create, repo)
+}
+
+// addLeaf resolves the leaf at repo, a path from the project, and makes it one of the run's repos.
+func (s *Setup) addLeaf(ctx context.Context, repo string) error {
+	if !filepath.IsLocal(repo) || repo == "." {
+		return fmt.Errorf("%q is not a path inside the project", repo)
+	}
+	if _, ok := s.Repos[repo]; ok {
+		return nil
+	}
+	if u := s.Project.Umbrella; u == nil || u.Children[repo].Kind != schema.ChildLeaf {
+		return fmt.Errorf("%s is not a leaf of the project", repo)
+	}
+	nodes, err := tree.Resolve(ctx, s.Root, filepath.Join(s.ProjectPath, repo))
+	if err != nil {
+		return err
+	}
+	s.Repos[repo] = nodes[len(nodes)-1]
+	if s.Sandbox != nil {
+		if _, _, _, err := s.SandboxFor(repo); err != nil {
+			delete(s.Repos, repo)
+			return err
+		}
+	}
+	return nil
+}
+
+// AddLeaf makes the leaf at repo part of the run once the run knows it needs it: a task works in it,
+// or init made it. The leaf gets the run's branch and a record in run.json, as a leaf its graph names
+// does at the start; a leaf the run already has is left alone.
+func (r *Run) AddLeaf(ctx context.Context, repo string) error {
+	if err := r.Setup.addLeaf(ctx, repo); err != nil {
+		return err
+	}
+	if _, ok := r.State.Leaves[repo]; ok {
+		return nil
+	}
+	l, err := r.Leaf(repo)
+	if err != nil {
+		return err
+	}
+	head, err := l.StartBranch(ctx, Branch(r.State.ID), "main")
+	if err != nil {
+		return err
+	}
+	r.State.Leaves[repo] = LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head}
+	return r.Save()
 }
 
 // Leaves returns the paths of the leaves the graph works in, sorted.
@@ -753,7 +806,8 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	for name, r := range s.Realms {
 		dirs[name] = r.Dir
 	}
-	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Realms: dirs, Brief: s.Brief, Mode: mode, Hooks: h})
+	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Realms: dirs, Leaves: slices.Sorted(maps.Keys(s.Leaves)),
+		Brief: s.Brief, Mode: mode, Hooks: h})
 	if err != nil {
 		return nil, err
 	}
