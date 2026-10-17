@@ -1,0 +1,11 @@
+# A toy backend realm: a leaf recipe and no graph, so it can provide leaves but never lead a run.
+name: helheim-toy
+version: 0.1.0
+checks:
+  unit: [test, -f, api.txt]
+leaf:
+  description: The toy API leaf.
+  template: templates/api
+  first_commit: [LICENSE]
+  implementer: prompts/implementer.md
+  checks: [unit]

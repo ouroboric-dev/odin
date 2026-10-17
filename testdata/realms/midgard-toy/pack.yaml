@@ -1,0 +1,14 @@
+# A toy lead realm for the end-to-end tests of realms (change realm-leaf-naming): the graph of a
+# product whose leaves come from two realms, the web leaf's recipe, and nothing that needs a container.
+name: midgard-toy
+version: 0.1.0
+graph: graph.yaml
+checks:
+  unit: [test, -f, web.txt]
+  accept: [test, -f, docs/leaves.yaml]
+leaf:
+  description: The toy web leaf.
+  template: templates/web
+  first_commit: [LICENSE]
+  implementer: prompts/implementer.md
+  checks: [unit]
