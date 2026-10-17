@@ -10,6 +10,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/leaf"
+	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/merge"
 	"github.com/ouroboric-dev/odin/internal/pointer"
@@ -109,8 +110,16 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	if errors.As(moveErr, &hs) { // the sandbox broke a hardening rule
 		return hs
 	}
+	// A waiver is for the next move only: whatever came of it, a later move is not waived (backlog B-010).
+	delete(s.Waived, n.ID)
 	var se *shrink.Error
 	if errors.As(moveErr, &se) {
+		// The attempt the node_started line opened closes in the ledger (backlog B-010).
+		fail := gungnir.Event{Name: gungnir.EventNodeFailed, Node: n.ID, Attempt: attempt, Result: moveErr.Error(),
+			DurationMS: time.Since(began).Milliseconds()}
+		if err := r.Log(fail); err != nil {
+			return err
+		}
 		return &hardStop{gate: gungnir.GateShrinkGuard, err: moveErr}
 	}
 	if leaf.IsPolicy(moveErr) { // a check rewrote the leaf's .git or planted a repository
@@ -121,12 +130,27 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	if moveErr != nil {
 		return failLanding(r, ev, moveErr)
 	}
-	delete(s.Waived, n.ID)
 	if res.Commit != "" {
 		moved := gungnir.Event{Name: gungnir.EventPointerMoved, Node: n.ID, Attempt: attempt, Commit: res.Commit,
 			Note: fmt.Sprintf("%s: %.12s -> %.12s", filepath.Join(parentRepo, child), res.From, res.To)}
 		if err := r.Log(moved); err != nil {
 			return err
+		}
+	} else if attempt > 1 {
+		// The pointer is already there on a later attempt: an earlier attempt moved it, and the ledger may
+		// not have the line, if the process died between the commit and the line (backlog B-010).
+		logged, err := ledger.Has(filepath.Join(r.Dir, "ledger.jsonl"), func(e gungnir.Event) bool {
+			return e.Name == gungnir.EventPointerMoved && e.Node == n.ID
+		})
+		if err != nil {
+			return err
+		}
+		if !logged {
+			moved := gungnir.Event{Name: gungnir.EventPointerMoved, Node: n.ID, Attempt: attempt,
+				Note: fmt.Sprintf("%s: already at %.12s; an earlier attempt moved it and the run didn't record it", filepath.Join(parentRepo, child), res.To)}
+			if err := r.Log(moved); err != nil {
+				return err
+			}
 		}
 	}
 	ev.Result, ev.Commit = "moved "+child, res.Commit
