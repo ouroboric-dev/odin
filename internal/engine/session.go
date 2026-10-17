@@ -50,17 +50,9 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 	meter := r.Meter()
 	retrier := jormungandr.Retrier{Backoff: r.Setup.Backoff, Meter: meter, Sleep: r.Setup.Sleep,
 		OnRetry: func(try int, wait time.Duration, why string) error {
-			// A read-only session's leaf is compared first: the reset would hide what it changed (review I1).
-			if sp.readOnly {
-				if err := readOnly(context.WithoutCancel(ctx), r, sp.repo, sp.role, sp.before); err != nil {
-					return err
-				}
-			}
 			// The failed try may have left half its work in the leaf: the retry starts from the checkpoint.
-			if _, ok := r.State.Leaves[sp.repo]; ok {
-				if err := r.DiscardWork(ctx, sp.repo); err != nil {
-					return err
-				}
+			if err := setAside(ctx, r, sp); err != nil {
+				return err
 			}
 			return r.Log(gungnir.Event{Name: gungnir.EventRetry, Node: sp.key, Attempt: r.State.Attempts[sp.key],
 				Note: fmt.Sprintf("try %d failed for a reason that is not the agent's; it runs again in %s: %s", try, wait, why)})
@@ -122,6 +114,14 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 			spent = se.Usage
 		}
 		if err := r.Spend(sp.key, spent); err != nil {
+			// The journal can't record the spend, so the run stops at budget-cap (review I4). The leaf goes
+			// back to its checkpoint first, as for a retry, so a resume or an approval doesn't refuse it as
+			// changed while the run waited.
+			if _, ok := jormungandr.IsCap(err); ok {
+				if serr := setAside(ctx, r, sp); serr != nil {
+					return stop(serr)
+				}
+			}
 			return stop(err)
 		}
 		if err := warnBudget(r, sp.key); err != nil {
@@ -150,6 +150,21 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 		return gungnir.Result{}, gungnir.Event{}, fatal
 	}
 	return res, done, err
+}
+
+// setAside puts the session's leaf back to its checkpoint, what the session left saved or discarded
+// as DiscardWork says. A read-only session's leaf is compared first: the reset would hide what it
+// changed (review I1).
+func setAside(ctx context.Context, r *run.Run, sp sessionSpec) error {
+	if sp.readOnly {
+		if err := readOnly(context.WithoutCancel(ctx), r, sp.repo, sp.role, sp.before); err != nil {
+			return err
+		}
+	}
+	if _, ok := r.State.Leaves[sp.repo]; ok {
+		return r.DiscardWork(ctx, sp.repo)
+	}
+	return nil
 }
 
 // turnsFor bounds a session's turns by what the caps still allow, so one session can't run far past

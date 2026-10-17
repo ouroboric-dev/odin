@@ -294,9 +294,10 @@ func (r *Run) Meter() *budget.Meter {
 // Spend counts what a session used, whether or not it succeeded: in the day's journal first, so a
 // crash between the two leaves the spend counted twice at worst, and then in the run's usage. The
 // caller saves run.json. The spends the journal missed before are written first, in order. A journal
-// that can't take the line is an error, and the run's usage counts the spend all the same; the entry
-// is kept in run.json as pending, saved here, since the caller stops on the error, and the next Spend
-// or Open writes it (review I4). A usage of nothing is not recorded.
+// that can't take the line is a per-day cap that is reached (gungnir.CapJournal), joined with a failed
+// save, and the run's usage counts the spend all the same; the entry is kept in run.json as pending,
+// saved here, since the caller stops on the cap, and the next Spend or Open writes it (review I4). A
+// usage of nothing is not recorded.
 func (r *Run) Spend(node string, u gungnir.Usage) error {
 	jerr, serr := r.appendPending(r.Save)
 	if u != (gungnir.Usage{}) {
@@ -330,12 +331,13 @@ func (r *Run) appendPending(save func() error) (jerr, serr error) {
 	return nil, nil
 }
 
-// journalError says that the journal couldn't take a spend; nil stays nil.
+// journalError is a journal that couldn't take a spend: a cap, since the per-day cap can't be kept
+// without the day's spend; nil stays nil.
 func (r *Run) journalError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("recording the spend in %s: %w", r.Setup.Journal.Dir, err)
+	return &gungnir.CapError{Scope: gungnir.CapDay, Dimension: gungnir.CapJournal, Note: err.Error()}
 }
 
 // Branch is the branch a run works on in every leaf.

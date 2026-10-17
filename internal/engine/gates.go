@@ -218,6 +218,13 @@ type hardStop struct {
 
 func (h *hardStop) Error() string { return h.err.Error() }
 
+// journalCap reports whether err is the per-day cap that can't be kept because the day's spend
+// journal can't be read or written: raising a cap or waiting for the next day doesn't lift it.
+func journalCap(err error) bool {
+	c, ok := jormungandr.IsCap(err)
+	return ok && c.Dimension == gungnir.CapJournal
+}
+
 // stopHard stops the run at node n for the hard approval point h, as a gate node stops: a gate file,
 // gate_pending, and the run saved as stopped.
 func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
@@ -232,6 +239,21 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 	switch {
 	case run.Quarantines(h.gate):
 		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again; what the node wrote is not saved.\n", n.Repo, n.ID)
+	case h.gate == gungnir.GateBudgetCap && journalCap(h.err) && len(s.PendingSpend) > 0:
+		// A session's spend the journal couldn't take (review I4): the session ran, and its leaf was put back.
+		c, _ := jormungandr.IsCap(h.err)
+		fmt.Fprintf(&b, "The day's spend journal can't be written (%s), so the per-day cap can't be kept. ygg doctor checks it. "+
+			"The session's usage is kept in run.json, and is written to the journal first when the run goes on. ", c.Note)
+		if len(r.Saved) == 0 {
+			b.WriteString("The session left no uncommitted changes to set aside. ")
+		} else {
+			fmt.Fprintf(&b, "The session's uncommitted changes were set aside:\n\n- %s\n\n", strings.Join(r.Saved, "\n- "))
+		}
+		fmt.Fprintf(&b, "Once the journal can be written, approve: the run runs %s again.\n", n.ID)
+	case h.gate == gungnir.GateBudgetCap && journalCap(h.err):
+		// The day's journal can't be read: no session started.
+		fmt.Fprintf(&b, "Nothing is lost: the work so far is committed and the run can go on. The day's spend journal can't be read, so the per-day cap can't be kept. "+
+			"Fix what the reason above names (ygg doctor checks the journal), and then approve: the run goes on with %s.\n", n.ID)
 	case h.gate == gungnir.GateBudgetCap:
 		fmt.Fprintf(&b, "Nothing is lost: the work so far is committed and the run can go on. Approving does not lift a cap that is still reached. "+
 			"Raise the cap in factory.yaml (budget: per_run or per_day), or wait until the day's spend starts over, and then approve: the run goes on with %s.\n", n.ID)
