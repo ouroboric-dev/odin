@@ -62,6 +62,23 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err != nil {
 		return nodeError(err)
 	}
+	if isVerdictSource(r, n.ID) {
+		// The verdict gates the spec, so it has to be readable. An answer that is not is asked for once
+		// more, from a fresh workspace and with the reason; a second one stops the run (spec §4.6).
+		if _, rerr := readConformance(r, n.ID); rerr != nil {
+			if _, err := seedScratch(r, n); err != nil {
+				return &nodeFailure{err}
+			}
+			sp.text = text + "\n\n## Your answer could not be read\n\n" + rerr.Error() +
+				"\n\nWrite out/conformance.json again, as the instructions above say, and nothing else is read.\n"
+			if res, ev, err = session(ctx, r, sp); err != nil {
+				return nodeError(err)
+			}
+			if _, rerr = readConformance(r, n.ID); rerr != nil {
+				return &nodeFailure{fmt.Errorf("the design-conformance verdict of %s can't be read, after being asked twice: %w", n.ID, rerr)}
+			}
+		}
+	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
 	if err := r.Log(ev); err != nil {
 		return err

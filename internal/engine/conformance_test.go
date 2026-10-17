@@ -1,0 +1,144 @@
+package engine
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ouroboric-dev/odin/internal/run"
+)
+
+// The spec stage of the web realm (spec §4.2): the spec is written in a scratch workspace, a second
+// scratch agent checks it against the design, and the spec gate reads its verdict.
+const conformanceNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true }\n" +
+	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec }\n" +
+	"  - { id: spec-gate, kind: gate, gate: spec, reruns: spec, deviation_from: conformance }\n" +
+	"  - { id: spec-docs, kind: publish, from: spec, to: docs }\n"
+
+// verdictScript is a spec stage whose conformance reviewer answers with each of verdicts in turn (a verdict
+// is the whole text of out/conformance.json, or "" for no file at all).
+func verdictScript(verdicts ...string) string {
+	s := "steps:\n  spec:\n    - actions: [ { write: { path: out/specs/spec.md, content: \"# Spec\\n\" } } ]\n      result: { status: ok, summary: wrote the spec }\n" +
+		"    - actions: [ { write: { path: out/specs/spec.md, content: \"# Spec, revised\\n\" } } ]\n      result: { status: ok, summary: revised the spec }\n  conformance:\n"
+	for _, v := range verdicts {
+		s += "    - "
+		if v != "" {
+			s += "actions: [ { write: { path: out/conformance.json, content: '" + v + "' } } ]\n      "
+		}
+		s += "result: { status: ok, summary: checked the spec }\n"
+	}
+	return s
+}
+
+const (
+	noDeviation = `{"deviation": false}`
+	deviation   = `{"deviation": true, "amendment": "The design says nothing about offline mode; add it or drop it from the spec."}`
+)
+
+func TestTheSpecGateOpensByItselfWhenTheSpecDoesNotDeviateFromTheDesign(t *testing.T) {
+	r := start(t, "key-points", "", conformanceNodes, verdictScript(noDeviation))
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	text := ledgerText(t, r)
+	for _, want := range []string{`"event":"conformance_checked"`, "no deviation", `"event":"gate_auto_passed"`, `"event":"docs_published"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the ledger lacks %s:\n%s", want, text)
+		}
+	}
+	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "spec-gate-1.md"))
+	if !strings.Contains(string(gate), "## Design conformance") || !strings.Contains(string(gate), "The spec does not deviate from the design.") {
+		t.Errorf("the gate file lacks the verdict:\n%s", gate)
+	}
+	if _, err := os.Stat(filepath.Join(r.Project, "docs", "specs", "spec.md")); err != nil {
+		t.Errorf("the spec was not published after the gate: %v", err)
+	}
+}
+
+func TestADeviationStopsTheSpecGateInEveryModeWithTheAmendment(t *testing.T) {
+	for _, mode := range []string{"key-points", "unattended"} {
+		r := start(t, mode, "", conformanceNodes, verdictScript(deviation))
+		out, err := Advance(bg, r)
+		if err != nil || out.Status != run.StatusStopped || out.Gate != "spec-gate" {
+			t.Fatalf("%s: Advance() = %+v, %v; want a stop at the spec gate", mode, out, err)
+		}
+		gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "spec-gate-1.md"))
+		for _, want := range []string{"The spec deviates from the design.", "add it or drop it from the spec.", "stopped for a decision"} {
+			if !strings.Contains(string(gate), want) {
+				t.Errorf("%s: the gate file lacks %q:\n%s", mode, want, gate)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(r.Project, "docs", "specs", "spec.md")); err == nil {
+			t.Errorf("%s: the spec was published before it was approved", mode)
+		}
+		if err := Approve(bg, r, "spec-gate", "offline mode is in"); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+			t.Errorf("%s: after the approval Advance() = %+v, %v", mode, out, err)
+		}
+	}
+}
+
+func TestARejectedSpecRunsTheConformanceReviewAgain(t *testing.T) {
+	r := start(t, "key-points", "", conformanceNodes, verdictScript(deviation, noDeviation))
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusStopped {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if err := Reject(bg, r, "spec-gate", "drop offline mode from the spec"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() after the rejection = %+v, %v; the second verdict says no deviation", out, err)
+	}
+	if !strings.Contains(promptOf(t, r, "spec-2"), "drop offline mode from the spec") {
+		t.Error("the spec writer was not told why the spec was rejected")
+	}
+	if got := r.State.Attempts["conformance"]; got != 2 {
+		t.Errorf("conformance ran %d times, want 2: the revised spec is reviewed again", got)
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.Project, "docs", "specs", "spec.md")); string(b) != "# Spec, revised\n" {
+		t.Errorf("the published spec = %q", b)
+	}
+}
+
+func TestAVerdictNobodyCanReadIsAskedForOnceMoreAndThenStopsTheRun(t *testing.T) {
+	for name, bad := range map[string]string{
+		"prose":                         "It conforms.",
+		"no file":                       "",
+		"a deviation with no amendment": `{"deviation": true}`,
+		"an unknown field":              `{"deviation": false, "ok": true}`,
+	} {
+		r := start(t, "key-points", "", conformanceNodes, verdictScript(bad, noDeviation))
+		out, err := Advance(bg, r)
+		if err != nil || out.Status != run.StatusDone {
+			t.Fatalf("%s then a good verdict: Advance() = %+v, %v", name, out, err)
+		}
+		if !strings.Contains(promptOf(t, r, "conformance-2"), "Your answer could not be read") {
+			t.Errorf("%s: the second try was not told what was wrong", name)
+		}
+		r = start(t, "key-points", "", conformanceNodes, verdictScript(bad, bad))
+		out, err = Advance(bg, r)
+		if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "conformance") {
+			t.Errorf("%s twice: Advance() = %+v, %v; want a failed run, never a pass", name, out, err)
+		}
+		if _, err := os.Stat(filepath.Join(r.Project, "docs", "specs", "spec.md")); err == nil {
+			t.Errorf("%s twice: a spec nobody could check was published", name)
+		}
+	}
+}
+
+func TestStepByStepModeStopsAtTheSpecGateEvenWithoutADeviation(t *testing.T) {
+	r := start(t, "step-by-step", "", conformanceNodes, verdictScript(noDeviation))
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusStopped || out.Gate != "spec-gate" {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "spec-gate-1.md"))
+	if !strings.Contains(string(gate), "The spec does not deviate from the design.") {
+		t.Errorf("the gate file lacks the verdict:\n%s", gate)
+	}
+}
