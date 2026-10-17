@@ -227,6 +227,8 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 		return nil // they work in the project, not in a leaf
 	case n.Kind == schema.KindForeach:
 		return s.checkBody(graphPath, n)
+	case n.Kind == schema.KindAgent && n.Scratch:
+		return s.checkSession(graphPath, n.ID, n.Role, n.Prompt) // it works in a workspace of its own
 	}
 	if n.Repo == "" {
 		return fmt.Errorf("%s: node %s names no repo; every node that does work runs in a repo of the project", graphPath, n.ID)

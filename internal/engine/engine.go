@@ -74,7 +74,11 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		var err error
 		switch n.Kind {
 		case schema.KindAgent:
-			err = runAgent(ctx, r, n)
+			if n.Scratch {
+				err = runScratch(ctx, r, n)
+			} else {
+				err = runAgent(ctx, r, n)
+			}
 		case schema.KindLoop:
 			err = runLoop(ctx, r, n)
 		case schema.KindExec:

@@ -74,6 +74,40 @@ func (r *Run) Runner(ctx context.Context, repo string) (gungnir.Runner, error) {
 	return gungnir.Bind(r.Sandbox, env), nil
 }
 
+// ScratchDir is the workspace of a scratch agent node: a folder of the run, beside the leaves and apart
+// from them (spec §3.3 rule 1).
+func (r *Run) ScratchDir(node string) string { return filepath.Join(r.Dir, "scratch", node) }
+
+// ScratchRunner returns what runs commands in the sandbox of node's scratch workspace, starting it the
+// first time. It returns nil when the run has no sandbox: a scripted-only run works on the host. The
+// sandbox holds the workspace and nothing else, on the lead realm's stack, and is recorded under the
+// node's scratch name so that Advance, a resume and doctor stop it like a leaf's.
+func (r *Run) ScratchRunner(ctx context.Context, node string) (gungnir.Runner, error) {
+	if r.Sandbox == nil {
+		return nil, nil
+	}
+	key := "scratch/" + node
+	if env, ok := r.State.Sandboxes[key]; ok {
+		return gungnir.Bind(r.Sandbox, env), nil
+	}
+	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: key, Parent: r.Dir, Leaf: r.ScratchDir(node), Scratch: true,
+		Egress: r.Setup.Sandbox.Egress, Stack: r.Setup.Pack.Sandbox.Stack})
+	if err != nil {
+		return nil, err
+	}
+	if r.State.Sandboxes == nil {
+		r.State.Sandboxes = map[string]gungnir.Env{}
+	}
+	r.State.Sandboxes[key] = env
+	if err := r.Log(gungnir.Event{Name: gungnir.EventSandboxUp, Note: fmt.Sprintf("%s: container %.12s", key, env.Container)}); err != nil {
+		return nil, err
+	}
+	if err := r.Save(); err != nil {
+		return nil, err
+	}
+	return gungnir.Bind(r.Sandbox, env), nil
+}
+
 // DownSandboxes stops every sandbox this process or an earlier one started for the run, and clears
 // the record of each one it stopped. A sandbox that won't stop stays recorded, for doctor.
 func (r *Run) DownSandboxes(ctx context.Context) error {
