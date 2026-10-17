@@ -76,6 +76,8 @@ type Setup struct {
 	Backoff      jormungandr.Backoff
 	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
 	PinLead      bool                                             // the lead realm was named, and the project doesn't pin one yet: Start pins it
+	store        *realm.Store                                     // where a realm is found by name; nil without factory.yaml's realms section
+	recorded     map[string]string                                // a resume: the folder of each realm the run recorded
 
 	Root        string               // the tree's root: the project, or an umbrella above it
 	ProjectPath string               // the project's path from the root
@@ -135,7 +137,8 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if err := s.findProject(ctx, o.Project); err != nil {
 		return nil, err
 	}
-	if s.Realms, err = s.collectRealms(store, o.Realms); err != nil {
+	s.store, s.recorded = store, o.Realms
+	if s.Realms, err = s.collectRealms(nil); err != nil {
 		return nil, err
 	}
 	for _, p := range o.Leaves {
@@ -322,11 +325,8 @@ func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
 	return nil
 }
 
-// collectRealms loads the realms of the run: the lead's, and one for each realm the project's pins name.
-// The pins must agree with each other and with what the realm store holds (change realm-leaf-naming), so
-// a mismatch stops the run before anything is created or started. recorded holds the folders a resumed
-// run loaded its realms from.
-func (s *Setup) collectRealms(store *realm.Store, recorded map[string]string) (*realm.Set, error) {
+// projectPins returns the realm pins of the project: its lead realm's, and each leaf's.
+func (s *Setup) projectPins() []schema.Pin {
 	var pins []schema.Pin
 	if u := s.Project.Umbrella; u != nil {
 		for _, p := range u.Pins() {
@@ -335,19 +335,61 @@ func (s *Setup) collectRealms(store *realm.Store, recorded map[string]string) (*
 			}
 		}
 	}
-	return realm.Collect(s.Lead, pins, func(name string) (*realm.Realm, error) {
-		if dir, ok := recorded[name]; ok {
-			return realm.Load(dir)
+	return pins
+}
+
+// loadRealm finds a realm by name: one the run has already loaded, the folder a resumed run recorded,
+// or the realm store.
+func (s *Setup) loadRealm(name string) (*realm.Realm, error) {
+	if s.Realms != nil {
+		if r := s.Realms.Realms[name]; r != nil {
+			return r, nil
 		}
-		if store == nil {
-			return nil, errors.New("factory.yaml has no realms section to find it in")
-		}
-		dir, err := store.Find(name)
-		if err != nil {
-			return nil, err
-		}
+	}
+	if dir, ok := s.recorded[name]; ok {
 		return realm.Load(dir)
-	})
+	}
+	if s.store == nil {
+		return nil, errors.New("factory.yaml has no realms section to find it in")
+	}
+	dir, err := s.store.Find(name)
+	if err != nil {
+		return nil, err
+	}
+	return realm.Load(dir)
+}
+
+// collectRealms loads the realms of the run: the lead's, and one for each realm the project's pins and
+// extra name. The pins must agree with each other and with what the realm store holds (change
+// realm-leaf-naming), so a mismatch stops the run before anything is created or started.
+func (s *Setup) collectRealms(extra []schema.Pin) (*realm.Set, error) {
+	return realm.Collect(s.Lead, append(s.projectPins(), extra...), s.loadRealm)
+}
+
+// AddRealms loads the realms that extra pins name and the run doesn't have yet, after checking that
+// every pin of the project, the old and the new, agrees. The spec stage names the product's leaves and
+// their realms, and init is where they join the run. Each new realm is recorded in run.json and the
+// ledger.
+func (r *Run) AddRealms(extra []schema.Pin) error {
+	set, err := r.Setup.collectRealms(extra)
+	if err != nil {
+		return err
+	}
+	for _, name := range set.Names() {
+		if _, had := r.Setup.Realms.Realms[name]; had {
+			continue
+		}
+		x := set.Realms[name]
+		if r.State.Realms == nil {
+			r.State.Realms = map[string]RealmRecord{}
+		}
+		r.State.Realms[name] = RealmRecord{Version: x.Version, Dir: x.Dir, SHA256: x.Hash}
+		if err := r.Log(gungnir.Event{Name: gungnir.EventRealmLoaded, Realm: x.Name, RealmVersion: x.Version, Note: "sha256:" + x.Hash}); err != nil {
+			return err
+		}
+	}
+	r.Setup.Realms = set
+	return r.Save()
 }
 
 // Realm returns the realm called name, or the lead realm for "".

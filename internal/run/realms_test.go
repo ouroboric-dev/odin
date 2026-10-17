@@ -213,3 +213,37 @@ func TestARunWontPinOverUncommittedWork(t *testing.T) {
 		}
 	}
 }
+
+func TestARunTakesTheRealmsNewPinsNameAfterItStarted(t *testing.T) {
+	store, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0", "helheim-go": "0.2.0"})
+	project := treetest.Build(t, pinned("midgard-react", "0.1.0", nil))
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if err := r.AddRealms([]schema.Pin{{Realm: "helheim-go", Version: "0.2.0", Where: "repos/api"}, {Realm: "midgard-react", Version: "0.1.0", Where: "repos/web"}}); err != nil {
+		t.Fatalf("AddRealms() = %v", err)
+	}
+	if got := strings.Join(r.Setup.Realms.Names(), ","); got != "helheim-go,midgard-react" {
+		t.Errorf("realms = %s", got)
+	}
+	if rec := r.State.Realms["helheim-go"]; rec.Version != "0.2.0" || rec.Dir != filepath.Join(store, "helheim-go") || len(rec.SHA256) != 64 {
+		t.Errorf("run.json records %+v", r.State.Realms)
+	}
+	if s, _ := LoadState(r.Dir); len(s.Realms) != 2 {
+		t.Errorf("run.json on disk holds %d realms", len(s.Realms))
+	}
+	ledger, _ := os.ReadFile(filepath.Join(r.Dir, "ledger.jsonl"))
+	if strings.Count(string(ledger), `"event":"realm_loaded"`) != 1 || !strings.Contains(string(ledger), `"ygg.realm.name":"helheim-go"`) {
+		t.Errorf("the ledger should hold one realm_loaded, for the realm that was new:\n%s", ledger)
+	}
+	// A pin that disagrees with one the run has changes nothing.
+	err = r.AddRealms([]schema.Pin{{Realm: "helheim-go", Version: "0.9.0", Where: "repos/db"}})
+	if err == nil || !strings.Contains(err.Error(), "helheim-go is pinned at 0.2.0 by repos/api") && !strings.Contains(err.Error(), "the realm store holds helheim-go 0.2.0, but repos/db pins 0.9.0") {
+		t.Errorf("AddRealms() = %v", err)
+	}
+	if len(r.Setup.Realms.Realms) != 2 || len(r.State.Realms) != 2 {
+		t.Error("a refused AddRealms changed the run")
+	}
+}
