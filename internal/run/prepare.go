@@ -35,7 +35,7 @@ func (s *Setup) prepareSandbox() error {
 	if s.Pack.Sandbox == nil {
 		return fmt.Errorf("%s has a sandbox section, but the realm %s names no sandbox stack in its pack.yaml", s.ConfigPath, s.Pack.Name)
 	}
-	for _, n := range s.Graph.Nodes {
+	for _, n := range s.Graph.All() {
 		// Acceptance checks run in the project umbrella, over several leaves, so there is no one leaf
 		// to mount. Until a snapshot sandbox exists (Phase 5), they can't run with a sandbox on.
 		if len(n.Acceptance) > 0 {
