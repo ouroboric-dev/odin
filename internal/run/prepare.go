@@ -36,10 +36,10 @@ func (s *Setup) prepareSandbox() error {
 		return fmt.Errorf("%s has a sandbox section, but the realm %s names no sandbox stack in its pack.yaml", s.ConfigPath, s.Pack.Name)
 	}
 	for _, n := range s.Graph.All() {
-		// Acceptance checks run in the project umbrella, over several leaves, so there is no one leaf
-		// to mount. Until a snapshot sandbox exists (Phase 5), they can't run with a sandbox on.
-		if len(n.Acceptance) > 0 {
-			return fmt.Errorf("node %s runs acceptance checks, which run in the project umbrella and so outside any sandbox; a realm can use them once a sandbox for them exists (Phase 3, decision 11)", n.ID)
+		// Acceptance checks run over several leaves, so no leaf's sandbox holds them. With a sandbox on,
+		// they run in one that holds a snapshot of the project, on the stack the lead realm names for it.
+		if len(n.Acceptance) > 0 && s.Lead.Acceptance == "" {
+			return fmt.Errorf("node %s runs acceptance checks, which need a sandbox that holds a snapshot of the project; the realm %s names none (sandbox.acceptance in its pack.yaml)", n.ID, s.Lead.Name)
 		}
 	}
 	uid, gid := os.Getuid(), os.Getgid()
@@ -82,36 +82,89 @@ func (s *Setup) SandboxFor(repo string) (stack string, egress []string, services
 	if r.Pack.Sandbox == nil {
 		return "", nil, nil, fmt.Errorf("the leaf %s is provided by the realm %s, which names no sandbox stack in its pack.yaml, and %s has a sandbox section", repo, r.Name, s.ConfigPath)
 	}
-	owners := map[string]string{} // service name: the realm that offers it
-	add := func(from *realm.Realm) error {
-		for _, v := range from.Pack.ServiceList() {
-			i := slices.IndexFunc(services, func(x gungnir.Service) bool { return x.Name == v.Name })
-			switch {
-			case i < 0:
-				services = append(services, v)
-				owners[v.Name] = from.Name
-			case !sameService(services[i], v):
-				return fmt.Errorf("the sandbox of %s would start two different services named %s: the realm %s offers one and the realm %s another", repo, v.Name, owners[v.Name], from.Name)
-			}
-		}
-		return nil
-	}
-	if err := add(r); err != nil {
+	var set serviceSet
+	if err := set.add(repo, r); err != nil {
 		return "", nil, nil, err
 	}
 	if u := s.Project.Umbrella; u != nil {
 		for _, c := range u.Children[repo].Consumes {
-			if err := add(s.RealmOf(c)); err != nil {
+			if err := set.add(repo, s.RealmOf(c)); err != nil {
 				return "", nil, nil, err
 			}
 		}
 	}
+	services = set.list
 	slices.SortFunc(services, func(a, b gungnir.Service) int { return strings.Compare(a.Name, b.Name) })
 	return r.Stack, sortedUnique(slices.Concat(r.Pack.Sandbox.Egress, s.Sandbox.Hosts)), services, nil
 }
 
+// serviceSet collects the services of several realms for one sandbox. Two realms may offer the same service
+// only if they offer it exactly alike.
+type serviceSet struct {
+	list   []gungnir.Service
+	owners map[string]string // service name: the realm that offers it
+}
+
+// add adds the services of realm from to the sandbox of where (a leaf, or the snapshot).
+func (ss *serviceSet) add(where string, from *realm.Realm) error {
+	if ss.owners == nil {
+		ss.owners = map[string]string{}
+	}
+	for _, v := range from.Pack.ServiceList() {
+		i := slices.IndexFunc(ss.list, func(x gungnir.Service) bool { return x.Name == v.Name })
+		switch {
+		case i < 0:
+			ss.list = append(ss.list, v)
+			ss.owners[v.Name] = from.Name
+		case !sameService(ss.list[i], v):
+			return fmt.Errorf("the sandbox of %s would start two different services named %s: the realm %s offers one and the realm %s another", where, v.Name, ss.owners[v.Name], from.Name)
+		}
+	}
+	return nil
+}
+
+// projectLeaves are the leaves the sandbox of a snapshot holds: those the run works in and those the
+// project's umbrella records, sorted.
+func (s *Setup) projectLeaves() []string {
+	paths := s.Leaves()
+	if u := s.Project.Umbrella; u != nil {
+		for p, c := range u.Children {
+			if c.Kind == schema.ChildLeaf {
+				paths = append(paths, p)
+			}
+		}
+	}
+	return sortedUnique(paths)
+}
+
+// SnapshotSandbox says what the sandbox that holds a snapshot of the project starts, for acceptance checks
+// (change realm-content): the lead realm's acceptance stack, the services of the realm of every leaf of
+// the project, since the checks run the whole product, and the registries of those realms.
+func (s *Setup) SnapshotSandbox() (stack string, egress []string, services []gungnir.Service, err error) {
+	if s.Lead.Acceptance == "" {
+		return "", nil, nil, fmt.Errorf("the realm %s names no acceptance stack, so there is no sandbox for a snapshot of the project (sandbox.acceptance in its pack.yaml)", s.Lead.Name)
+	}
+	var set serviceSet
+	realms := []*realm.Realm{s.Lead}
+	for _, p := range s.projectLeaves() {
+		if r := s.RealmOf(p); !slices.Contains(realms, r) {
+			realms = append(realms, r)
+		}
+	}
+	for _, r := range realms {
+		if err := set.add("the snapshot", r); err != nil {
+			return "", nil, nil, err
+		}
+		if r.Pack.Sandbox != nil {
+			egress = append(egress, r.Pack.Sandbox.Egress...)
+		}
+	}
+	slices.SortFunc(set.list, func(a, b gungnir.Service) int { return strings.Compare(a.Name, b.Name) })
+	return s.Lead.Acceptance, sortedUnique(egress), set.list, nil
+}
+
 func sameService(a, b gungnir.Service) bool {
-	return a.Image == b.Image && maps.Equal(a.Env, b.Env) && slices.Equal(a.Ports, b.Ports)
+	return a.Image == b.Image && maps.Equal(a.Env, b.Env) && slices.Equal(a.Ports, b.Ports) && slices.Equal(a.Command, b.Command)
 }
 
 // prepareSkills opens the libraries and records the skills the graph names (spec §5.1). A node that
