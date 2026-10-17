@@ -176,3 +176,24 @@ func promptOf(t *testing.T, r *run.Run, stem string) string {
 	}
 	return tr.Prompt
 }
+
+func TestARejectionGivesARefusalItsReturnsAgain(t *testing.T) {
+	bad := readyPlan + taskMD("p-T1", "repos/app", "L", "nothing")
+	good := readyPlan + taskMD("p-T1", "repos/app", "S", "nothing")
+	nodes := planNodes + "  - { id: ready, kind: tasks, from: repos/app/tasks.md, back_to: plan, returns: 1 }\n  - { id: plan-gate, kind: gate, gate: plan }\n"
+	r := start(t, "key-points", "gates:\n  plan: stop\n", nodes, planScript(bad, good, bad, good))
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusStopped || out.Gate != "plan-gate" || r.State.Returns["ready"] != 1 {
+		t.Fatalf("Advance() = %+v, %v (returns %v)", out, err, r.State.Returns)
+	}
+	if err := Reject(context.Background(), r, "plan-gate", "the plan is thin"); err != nil {
+		t.Fatal(err)
+	}
+	if r.State.Returns["ready"] != 0 {
+		t.Errorf("returns = %v after a rejection; a refusal may go back again", r.State.Returns)
+	}
+	out, err = Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusStopped || out.Gate != "plan-gate" || r.State.Attempts["plan"] != 4 {
+		t.Errorf("Advance() = %+v, %v (planner ran %d times); want the plan back at the gate after one more return", out, err, r.State.Attempts["plan"])
+	}
+}

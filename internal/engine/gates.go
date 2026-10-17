@@ -205,6 +205,7 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 			if m.Kind == schema.KindLoop {
 				delete(s.Loops, m.ID)
 			}
+			delete(s.Returns, m.ID) // a rejection is a fresh start: a refusal may go back again
 		}
 	}
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
