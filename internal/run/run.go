@@ -47,6 +47,7 @@ type Options struct {
 type Hooks struct {
 	Libs       *skills.Libraries
 	NewSandbox NewSandbox
+	NewGrader  NewGrader
 	Now        func() time.Time
 	Backoff    *jormungandr.Backoff
 	Sleep      func(ctx context.Context, d time.Duration) error
@@ -72,6 +73,7 @@ type Setup struct {
 	Skills       skills.Record            // every skill the graph names, with the set's hash
 	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
 	newSandbox   NewSandbox
+	newGrader    NewGrader
 	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
 	Backoff      jormungandr.Backoff
 	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
@@ -157,7 +159,7 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if err := s.prepareBudget(o.Hooks); err != nil {
 		return nil, err
 	}
-	s.newSandbox = o.Hooks.NewSandbox
+	s.newSandbox, s.newGrader = o.Hooks.NewSandbox, o.Hooks.NewGrader
 	if err := s.prepareSandbox(); err != nil {
 		return nil, err
 	}
@@ -226,6 +228,13 @@ func (s *Setup) findProject(ctx context.Context, project string) error {
 // checkNode checks that node n can run in this project: its repo, its role and prompt, its checks.
 func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) error {
 	switch {
+	case n.Kind == schema.KindGrade:
+		// Grading runs the hidden suite in a container of the engine the sandbox section names, so a graph
+		// with a grade node needs both sections, before anything runs.
+		if s.Config.Grader == nil || s.Config.Sandbox == nil {
+			return fmt.Errorf("%s: node %s grades the run, which needs the grader and the sandbox sections in %s", graphPath, n.ID, s.ConfigPath)
+		}
+		return nil
 	case n.Kind == schema.KindGate, n.Kind == schema.KindPublish, n.Kind == schema.KindTasks, n.Kind == schema.KindInit:
 		return nil // they work in the project, not in a leaf
 	case n.Kind == schema.KindForeach:
@@ -517,6 +526,7 @@ type Run struct {
 	Saved    []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
 	SetAside []string        // the notes of Saved from the set-aside of a session whose spend the journal couldn't take, for its gate (review I4)
 	Sandbox  gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
+	Grader   Grader          // runs the hidden suite; nil unless the config has a grader and a sandbox section
 	nodes    []schema.Node   // the nodes of the run, with foreach nodes expanded; see Nodes
 }
 
@@ -806,6 +816,11 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
+	if err := r.openGrader(setup.newGrader); err != nil {
+		r.Close()
+		os.RemoveAll(dir)
+		return nil, err
+	}
 	if err := r.begin(ctx); err != nil {
 		r.State.Status, r.State.Error = StatusFailed, err.Error()
 		r.Log(gungnir.Event{Name: gungnir.EventRunFailed, Result: r.State.Error})
@@ -1055,6 +1070,10 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 		return nil, errors.Join(r.journalError(jerr), serr)
 	}
 	if err := r.openSandbox(setup.newSandbox); err != nil {
+		l.Close()
+		return nil, err
+	}
+	if err := r.openGrader(setup.newGrader); err != nil {
 		l.Close()
 		return nil, err
 	}
