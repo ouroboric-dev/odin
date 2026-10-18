@@ -1,22 +1,34 @@
 package routing
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/ouroboric-dev/gungnir/schema"
+	"go.yaml.in/yaml/v3"
 )
 
 // Limits on what the generator reads. A leaf is written by an agent, so the generator never follows a
 // link out of it and never reads without a bound.
-const maxFile = 1 << 20 // bytes of one file
+const (
+	maxFile    = 1 << 20 // bytes of one file
+	maxEntries = 20000   // files and folders walked in one leaf
+)
+
+var skipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, "testdata": true, "dist": true, ".factory": true}
 
 // Result is a generated wiring: its edges, and what the generator left out and why.
 type Result struct {
@@ -29,6 +41,11 @@ type wiring struct {
 	edges   []Edge
 	skipped []string
 	modules map[string]string // a leaf's Go module path: the leaf
+}
+
+type contractFile struct {
+	leaf, rel, title string
+	sum              string
 }
 
 // Wiring reads the project umbrella at dir: umbrella.yaml, the packs of the realms it names, and in each
@@ -65,10 +82,15 @@ func Wiring(dir string, packs map[string]*schema.Pack) (*Result, error) {
 			w.modules[m] = l
 		}
 	}
+	var contracts []contractFile
 	for _, l := range leaves {
 		w.goDeps(l)
 		w.npmDeps(l)
+		w.goImports(l)
+		contracts = append(contracts, w.contracts(l)...)
 	}
+	w.copies(contracts)
+	w.mentions(leaves)
 	return &Result{Edges: Sorted(w.edges), Skipped: slices.Sorted(slices.Values(w.skipped))}, nil
 }
 
@@ -231,6 +253,144 @@ func (w *wiring) npmDeps(leaf string) {
 		w.add(leaf, "requires", "npm:"+n, Extracted, leaf+"/package.json")
 		if v := lock.Packages["node_modules/"+n].Version; v != "" {
 			w.add(leaf, "pins", "npm:"+n+"@"+v, Extracted, leaf+"/package-lock.json")
+		}
+	}
+}
+
+// walk lists the regular files of a leaf, by path relative to the root, never through a link.
+func (w *wiring) walk(leaf string, keep func(rel string) bool) []string {
+	var out []string
+	n := 0
+	base := filepath.Join(w.root, leaf)
+	if fi, err := os.Lstat(base); err != nil || !fi.IsDir() {
+		return nil
+	}
+	_ = filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if n++; n > maxEntries {
+			w.skip("%s: more than %d entries; the rest is not read", leaf, maxEntries)
+			return filepath.SkipAll
+		}
+		rel, _ := filepath.Rel(w.root, p)
+		rel = filepath.ToSlash(rel)
+		switch {
+		case d.IsDir() && skipDirs[d.Name()]:
+			return filepath.SkipDir
+		case d.Type()&fs.ModeSymlink != 0:
+			if keep(rel) {
+				w.skip("%s: a link, not followed", rel)
+			}
+		case d.Type().IsRegular() && keep(rel):
+			out = append(out, rel)
+		}
+		return nil
+	})
+	return out
+}
+
+func (w *wiring) goImports(leaf string) {
+	if len(w.modules) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	for _, rel := range w.walk(leaf, func(r string) bool { return strings.HasSuffix(r, ".go") && !strings.HasSuffix(r, "_test.go") }) {
+		b := w.read(rel)
+		if b == nil {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), rel, b, parser.ImportsOnly)
+		if err != nil {
+			continue
+		}
+		for _, imp := range f.Imports {
+			p, _ := strconv.Unquote(imp.Path.Value)
+			for m, other := range w.modules {
+				if other != leaf && !seen[other] && (p == m || strings.HasPrefix(p, m+"/")) {
+					seen[other] = true
+					w.add(leaf, "imports", other, Extracted, rel)
+				}
+			}
+		}
+	}
+}
+
+func isContractName(rel string) bool {
+	b := path.Base(rel)
+	return strings.HasSuffix(b, "openapi.yaml") || strings.HasSuffix(b, "openapi.yml")
+}
+
+func (w *wiring) contracts(leaf string) []contractFile {
+	var out []contractFile
+	for _, rel := range w.walk(leaf, isContractName) {
+		b := w.read(rel)
+		var doc struct {
+			OpenAPI string `yaml:"openapi"`
+			Info    struct {
+				Title string `yaml:"title"`
+			} `yaml:"info"`
+		}
+		if b == nil || yaml.Unmarshal(b, &doc) != nil || doc.OpenAPI == "" {
+			if b != nil {
+				w.skip("%s: not an OpenAPI document", rel)
+			}
+			continue
+		}
+		w.add(leaf, "holds", "contract:"+rel, Extracted, rel)
+		out = append(out, contractFile{leaf: leaf, rel: rel, title: doc.Info.Title, sum: fmt.Sprintf("%x", sha256.Sum256(b))})
+	}
+	return out
+}
+
+// copies links a leaf's contract to the contract of a leaf it depends on, when both name the same API.
+// Identical bytes are a fact (extracted). The same title with other bytes is a guess that it is the
+// same contract gone out of date (inferred).
+func (w *wiring) copies(cs []contractFile) {
+	linked := map[[2]string]bool{}
+	for _, e := range w.edges {
+		if e.Tag == Extracted && (e.Kind == "consumes" || e.Kind == "requires" || e.Kind == "imports") {
+			linked[[2]string{e.From, e.To}] = true
+		}
+	}
+	for _, c := range cs {
+		for _, o := range cs {
+			if c.leaf == o.leaf || c.title == "" || c.title != o.title || !linked[[2]string{c.leaf, o.leaf}] {
+				continue
+			}
+			tag := Inferred
+			if c.sum == o.sum {
+				tag = Extracted
+			}
+			w.add("contract:"+c.rel, "copies", "contract:"+o.rel, tag, c.rel)
+		}
+	}
+}
+
+// mentions is a guess: a leaf's README or AGENTS.md names another leaf. It is added only where no
+// extracted edge already joins the two.
+func (w *wiring) mentions(leaves []string) {
+	joined := map[[2]string]bool{}
+	for _, e := range w.edges {
+		if e.Tag == Extracted {
+			joined[[2]string{e.From, e.To}] = true
+		}
+	}
+	for _, l := range leaves {
+		for _, doc := range []string{"README.md", "AGENTS.md"} {
+			b := w.read(l + "/" + doc)
+			if b == nil {
+				continue
+			}
+			for _, o := range leaves {
+				if o == l || joined[[2]string{l, o}] {
+					continue
+				}
+				if regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(o) + `\b`).Match(b) {
+					w.add(l, "mentions", o, Inferred, l+"/"+doc)
+					joined[[2]string{l, o}] = true
+				}
+			}
 		}
 	}
 }

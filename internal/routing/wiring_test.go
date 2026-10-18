@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +28,7 @@ func find(es []Edge, from, kind, to string) *Edge {
 	return nil
 }
 
-func TestWiringReadsTheUmbrellaThePacksManifestsAndLockfiles(t *testing.T) {
+func TestWiringReadsManifestsLockfilesContractsAndImports(t *testing.T) {
 	res, err := Wiring(fixture, packs())
 	if err != nil {
 		t.Fatal(err)
@@ -40,8 +41,13 @@ func TestWiringReadsTheUmbrellaThePacksManifestsAndLockfiles(t *testing.T) {
 		{"api", "requires", "go:github.com/go-chi/chi/v5", Extracted, "api/go.mod"},
 		{"api", "pins", "go:github.com/go-chi/chi/v5@v5.2.3", Extracted, "api/go.sum"},
 		{"worker", "requires", "api", Extracted, "worker/go.mod"},
+		{"worker", "imports", "api", Extracted, "worker/cmd/worker/main.go"},
 		{"web", "requires", "npm:react", Extracted, "web/package.json"},
 		{"web", "pins", "npm:react@19.3.0", Extracted, "web/package-lock.json"},
+		{"api", "holds", "contract:api/internal/api.openapi.yaml", Extracted, "api/internal/api.openapi.yaml"},
+		{"contract:web/contracts/api.openapi.yaml", "copies", "contract:api/internal/api.openapi.yaml", Extracted, "web/contracts/api.openapi.yaml"},
+		{"contract:worker/internal/api.openapi.yaml", "copies", "contract:api/internal/api.openapi.yaml", Inferred, "worker/internal/api.openapi.yaml"},
+		{"worker", "mentions", "web", Inferred, "worker/README.md"},
 	} {
 		e := find(res.Edges, w.from, w.kind, w.to)
 		if e == nil {
@@ -68,7 +74,7 @@ func TestEveryEdgeIsTaggedExtractedOrInferred(t *testing.T) {
 		}
 	}
 	x, i := Counts(res.Edges)
-	if x == 0 || x+i != len(res.Edges) {
+	if x == 0 || i == 0 || x+i != len(res.Edges) {
 		t.Errorf("counts %d extracted, %d inferred of %d", x, i, len(res.Edges))
 	}
 }
@@ -92,26 +98,32 @@ func TestWiringIsTheSameBytesEveryTime(t *testing.T) {
 	}
 }
 
-// Review focus: package names come from files an agent wrote. A name must not break the table or the
-// markers, and must not hide the good names beside it.
-func TestWiringDropsNamesThatBreakTheTable(t *testing.T) {
+// Review focus: leaf files are written by an agent. A link must not lead the generator out of the leaf,
+// and a name must not be able to break the table or the markers.
+func TestWiringIgnoresSymlinksHugeFilesAndNamesThatBreakTheTable(t *testing.T) {
 	dir := t.TempDir()
 	copyTree(t, fixture, dir)
+	outside := filepath.Join(t.TempDir(), "secret.openapi.yaml")
+	os.WriteFile(outside, []byte("openapi: 3.0.3\ninfo: {title: secret}\n"), 0o644)
+	if err := os.Symlink(outside, filepath.Join(dir, "api/internal/leak.openapi.yaml")); err != nil {
+		t.Fatal(err)
+	}
 	os.WriteFile(filepath.Join(dir, "web/package.json"), []byte(`{"dependencies":{"a|b":"1.0.0","x\n`+EndMarker+`":"1.0.0","ok":"1.0.0"}}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "worker/big.go"), []byte("package big\n"+strings.Repeat("// pad\n", 200000)), 0o644)
 	res, err := Wiring(dir, packs())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range res.Edges {
-		if strings.ContainsAny(e.To, "|\n<") {
-			t.Errorf("edge %+v can break the table", e)
+		if strings.Contains(e.To+e.From+e.Source, "leak") || strings.ContainsAny(e.To, "|\n") {
+			t.Errorf("edge %+v came from a link or a bad name", e)
 		}
 	}
 	if find(res.Edges, "web", "requires", "npm:ok") == nil {
 		t.Error("a good dependency was dropped with the bad ones")
 	}
-	if len(res.Skipped) != 2 {
-		t.Errorf("skipped = %v; want the two bad names reported", res.Skipped)
+	if len(res.Skipped) < 3 {
+		t.Errorf("skipped = %v; want the link, the two names and the big file reported", res.Skipped)
 	}
 }
 
@@ -135,3 +147,25 @@ func copyTree(t *testing.T, from, to string) {
 		t.Fatal(err)
 	}
 }
+
+// The block of the fixture is pinned byte by byte. A change of the generator that moves a row shows here.
+// Run `go test ./internal/routing -run Golden -update` to write it again, and read the diff.
+func TestTheFixtureBlockMatchesItsGoldenFile(t *testing.T) {
+	res, err := Wiring(fixture, packs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := "../../testdata/routing/wiring.golden.md"
+	got := Block(res.Edges)
+	if *update {
+		if err := os.WriteFile(golden, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil || string(want) != string(got) {
+		t.Errorf("the block differs from %s (%v):\n%s", golden, err, got)
+	}
+}
+
+var update = flag.Bool("update", false, "write the golden files again")
