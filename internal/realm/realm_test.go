@@ -1,10 +1,13 @@
 package realm
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ouroboric-dev/odin/internal/git"
 )
 
 func write(t *testing.T, root, rel, body string, mode os.FileMode) {
@@ -160,5 +163,104 @@ func TestResolveTakesAPathOrAName(t *testing.T) {
 	}
 	if dir, byName, err := Resolve("./testdata/x", nil); err != nil || byName || dir != "./testdata/x" {
 		t.Errorf("a relative path with no store: %q, %v, %v", dir, byName, err)
+	}
+}
+
+// gitRealm makes dir a git repository holding the fixture realm, with build output ignored, and commits it.
+func gitRealm(t *testing.T, dir string) {
+	t.Helper()
+	fixture(t, dir, "midgard-react", "0.1.0")
+	write(t, dir, ".gitignore", "node_modules/\ndist/\n", 0o644)
+	for _, args := range [][]string{{"init", "-q"}, {"add", "--", "pack.yaml", "graph.yaml", "prompts/implementer.md", ".gitignore"}, {"commit", "-q", "-m", "realm"}} {
+		if _, err := git.Run(context.Background(), dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// B-050: a realm built in place has git-ignored output (node_modules/.bin links, dist). A realm that is a git
+// repository is its committed files, so that output, and anything untracked, is not part of it.
+func TestAGitRealmIsItsCommittedFilesAndIgnoredOutputIsNotPartOfIt(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "midgard-react")
+	gitRealm(t, dir)
+	clean, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load(clean) = %v", err)
+	}
+	write(t, dir, "node_modules/pkg/index.js", "x", 0o644)
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules/.bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../pkg/index.js", filepath.Join(dir, "node_modules/.bin/x")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "dist/app.js", "built", 0o644)
+	write(t, dir, "untracked.md", "not committed", 0o644)
+	built, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load(with ignored symlink) = %v; ignored build output must not break loading", err)
+	}
+	if built.Hash != clean.Hash {
+		t.Error("the hash follows ignored or untracked files; it is of the committed files")
+	}
+}
+
+// The hash of a clean git realm is the hash the same files had as a plain folder, so a resume of a run
+// recorded before this change still accepts the realm.
+func TestTheHashOfACleanGitRealmIsThatOfItsFilesAsAFolder(t *testing.T) {
+	base := t.TempDir()
+	plain := filepath.Join(base, "plain")
+	fixture(t, plain, "midgard-react", "0.1.0")
+	write(t, plain, ".gitignore", "node_modules/\ndist/\n", 0o644)
+	want, err := Hash(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := filepath.Join(base, "git")
+	gitRealm(t, g)
+	if got, err := Hash(g); err != nil || got != want {
+		t.Errorf("Hash(git realm) = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestACommittedSymlinkInAGitRealmIsStillRefused(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "midgard-react")
+	gitRealm(t, dir)
+	if err := os.Symlink("implementer.md", filepath.Join(dir, "prompts/link.md")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "--", "prompts/link.md"}, {"commit", "-q", "-m", "a link"}} {
+		if _, err := git.Run(context.Background(), dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r, err := Load(dir); err == nil || !strings.Contains(err.Error(), "prompts/link.md") || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("Load() = %+v, %v; want a refusal naming prompts/link.md as a symlink", r, err)
+	}
+}
+
+// What a run reads is the working folder, so a tracked file that differs from its commit would be read but
+// not hashed: the realm is refused until the change is committed or undone.
+func TestAGitRealmWithAChangedTrackedFileIsRefused(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "midgard-react")
+	gitRealm(t, dir)
+	write(t, dir, "prompts/implementer.md", "Changed, not committed.\n", 0o644)
+	if r, err := Load(dir); err == nil || !strings.Contains(err.Error(), "prompts/implementer.md") || !strings.Contains(err.Error(), "commit") {
+		t.Errorf("Load() = %+v, %v; want a refusal naming the changed file and saying to commit it", r, err)
+	}
+}
+
+func TestACommittedChangeChangesTheHashOfAGitRealm(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "midgard-react")
+	gitRealm(t, dir)
+	before, _ := Hash(dir)
+	write(t, dir, "prompts/implementer.md", "Changed.\n", 0o644)
+	for _, args := range [][]string{{"add", "--", "prompts/implementer.md"}, {"commit", "-q", "-m", "change"}} {
+		if _, err := git.Run(context.Background(), dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if after, err := Hash(dir); err != nil || after == before {
+		t.Errorf("Hash() = %q, %v; want a hash other than %q", after, err, before)
 	}
 }
