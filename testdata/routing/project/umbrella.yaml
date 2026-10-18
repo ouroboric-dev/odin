@@ -1,0 +1,23 @@
+root: true
+owner: fixture
+visibility: private
+realm: midgard-react
+realm_version: 0.1.0
+children:
+  api:
+    kind: leaf
+    owner: fixture
+    visibility: private
+    realm: helheim-go
+    realm_version: 0.1.0
+  web:
+    kind: leaf
+    owner: fixture
+    visibility: private
+    consumes: [api]
+  worker:
+    kind: leaf
+    owner: fixture
+    visibility: private
+    realm: helheim-go
+    realm_version: 0.1.0
