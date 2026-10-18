@@ -32,8 +32,17 @@ var skipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": tru
 
 // Result is a generated wiring: its edges, and what the generator left out and why.
 type Result struct {
-	Edges   []Edge
-	Skipped []string
+	Edges     []Edge
+	Leaves    []string   // the leaves of the umbrella, sorted
+	Contracts []Contract // the OpenAPI files found, sorted by path
+	Skipped   []string
+}
+
+// Contract is an OpenAPI file that a leaf holds.
+type Contract struct {
+	Path   string `json:"path"` // from the project root
+	Owner  string `json:"owner"`
+	SHA256 string `json:"sha256"`
 }
 
 type wiring struct {
@@ -91,7 +100,12 @@ func Wiring(dir string, packs map[string]*schema.Pack) (*Result, error) {
 	}
 	w.copies(contracts)
 	w.mentions(leaves)
-	return &Result{Edges: Sorted(w.edges), Skipped: slices.Sorted(slices.Values(w.skipped))}, nil
+	res := &Result{Edges: Sorted(w.edges), Leaves: leaves, Skipped: slices.Sorted(slices.Values(w.skipped))}
+	for _, c := range contracts {
+		res.Contracts = append(res.Contracts, Contract{Path: c.rel, Owner: c.leaf, SHA256: c.sum})
+	}
+	slices.SortFunc(res.Contracts, func(a, b Contract) int { return strings.Compare(a.Path, b.Path) })
+	return res, nil
 }
 
 func cmpOr(a, b string) string {
