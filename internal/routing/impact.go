@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -152,30 +153,117 @@ func (i *Impact) JSON() ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
-// WriteImpact writes the index to dir/.ygg/impact.json.
+// maxImpactBytes caps the index file. The file is data from the project folder, and the pointer-contract
+// gate trusts it: a read must not grow without a bound. 8 MiB is far above the index of any real umbrella
+// (the fixture's is 5 KiB).
+const maxImpactBytes = 8 << 20
+
+// renameFile is the last step of a write. A test replaces it to prove that a failed write leaves the old
+// index whole.
+var renameFile = os.Rename
+
+// plainDir refuses a path that is a link or is not a folder.
+func plainDir(p string) error {
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("impact index: %s is a link or not a folder", p)
+	}
+	return nil
+}
+
+// WriteImpact writes the index to dir/.ygg/impact.json. It writes a temp file in the same folder, syncs it
+// and renames it over the index, so a failure leaves the old index whole. It refuses a link at .ygg or at
+// the index.
 func WriteImpact(dir string, i *Impact) error {
 	b, err := i.JSON()
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(dir, filepath.FromSlash(ImpactFile))
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	if len(b) > maxImpactBytes {
+		return fmt.Errorf("impact index: %d bytes, over the %d cap", len(b), maxImpactBytes)
+	}
+	d := filepath.Join(dir, filepath.Dir(filepath.FromSlash(ImpactFile)))
+	if err := os.MkdirAll(d, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(p, b, 0o644)
+	if err := plainDir(d); err != nil {
+		return err
+	}
+	p := filepath.Join(dir, filepath.FromSlash(ImpactFile))
+	if fi, err := os.Lstat(p); err == nil {
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("impact index: %s is a link or not a file", p)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	f, err := os.CreateTemp(d, ".impact-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	fail := func(err error) error {
+		f.Close()
+		os.Remove(tmp) // our own temp file
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		return fail(err)
+	}
+	if err := f.Chmod(0o644); err != nil {
+		return fail(err)
+	}
+	if err := f.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := renameFile(tmp, p); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
-// ReadImpact reads dir/.ygg/impact.json.
+// ReadImpact reads dir/.ygg/impact.json. It refuses a link at .ygg or at the index, and a file over the cap.
 func ReadImpact(dir string) (*Impact, error) {
-	b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(ImpactFile)))
+	if err := plainDir(filepath.Join(dir, filepath.Dir(filepath.FromSlash(ImpactFile)))); err != nil {
+		return nil, err
+	}
+	p := filepath.Join(dir, filepath.FromSlash(ImpactFile))
+	li, err := os.Lstat(p)
 	if err != nil {
 		return nil, err
+	}
+	if !li.Mode().IsRegular() {
+		return nil, fmt.Errorf("impact index: %s is a link or not a file", p)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !os.SameFile(li, fi) {
+		return nil, fmt.Errorf("impact index: %s changed while it was opened (%v)", p, err)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxImpactBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxImpactBytes {
+		return nil, fmt.Errorf("impact index: over %d bytes", maxImpactBytes)
 	}
 	return ParseImpact(b)
 }
 
-// ParseImpact parses an index. It refuses an unknown field, another schema, and an index that is not
-// labelled a lower bound.
+// ParseImpact parses an index. It is an exact schema: it refuses an unknown field, trailing data, another
+// schema, an index not labelled a lower bound, counts that do not add up, a listed guess that is not
+// tagged inferred, a node in both lists of one entry, and a missing or null list.
 func ParseImpact(b []byte) (*Impact, error) {
 	var i Impact
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -183,8 +271,43 @@ func ParseImpact(b []byte) (*Impact, error) {
 	if err := dec.Decode(&i); err != nil {
 		return nil, err
 	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("impact index: data after the first JSON value")
+	}
 	if i.Schema != ImpactSchema || i.Bound != "lower" {
 		return nil, fmt.Errorf("impact index: schema %q and bound %q; want %q and \"lower\"", i.Schema, i.Bound, ImpactSchema)
+	}
+	if i.Contracts == nil || i.Reach == nil || i.InferredEdges == nil {
+		return nil, fmt.Errorf("impact index: contracts, reach and inferred_edges must be present and not null")
+	}
+	if i.Edges != i.Extracted+i.Inferred || i.Inferred != len(i.InferredEdges) {
+		return nil, fmt.Errorf("impact index: edges %d, extracted %d, inferred %d, listed guesses %d do not add up", i.Edges, i.Extracted, i.Inferred, len(i.InferredEdges))
+	}
+	for _, e := range i.InferredEdges {
+		if e.Tag != Inferred {
+			return nil, fmt.Errorf("impact index: inferred_edges holds an edge tagged %q", e.Tag)
+		}
+	}
+	check := func(what string, r Reached) error {
+		if r.Extracted == nil || r.Inferred == nil {
+			return fmt.Errorf("impact index: %s has a missing or null list", what)
+		}
+		for _, n := range r.Extracted {
+			if slices.Contains(r.Inferred, n) {
+				return fmt.Errorf("impact index: %s lists %q as extracted and as inferred", what, n)
+			}
+		}
+		return nil
+	}
+	for n, r := range i.Reach {
+		if err := check("reach "+n, r); err != nil {
+			return nil, err
+		}
+	}
+	for _, c := range i.Contracts {
+		if err := check("contract "+c.Path, c.Readers); err != nil {
+			return nil, err
+		}
 	}
 	return &i, nil
 }

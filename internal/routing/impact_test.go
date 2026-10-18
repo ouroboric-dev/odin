@@ -44,7 +44,7 @@ func TestAChangeToALeafReachesWhatDependsOnIt(t *testing.T) {
 	if !slices.Equal(r.Extracted, []string{"web", "worker"}) {
 		t.Errorf("api reaches %+v", r)
 	}
-	// worker is only guessed to be read by nobody; a change to web reaches worker only by the README guess.
+	// a change to web reaches worker only by the README guess: a guess is never counted as a fact.
 	r = imp.Reaches("web")
 	if len(r.Extracted) != 0 || !slices.Equal(r.Inferred, []string{"worker"}) {
 		t.Errorf("web reaches %+v, want worker as a guess only", r)
@@ -80,20 +80,31 @@ func TestTheImpactIndexIsALabelledLowerBoundAndReportsGuessesApart(t *testing.T)
 }
 
 func TestTheImpactIndexIsTheSameBytesEveryTimeAndRoundTrips(t *testing.T) {
-	a, _ := fixtureImpact(t).JSON()
-	b, _ := fixtureImpact(t).JSON()
+	a, err := fixtureImpact(t).JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := fixtureImpact(t).JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(a, b) {
 		t.Fatal("two runs gave two indexes")
 	}
 	golden := "../../testdata/routing/impact.golden.json"
 	if *update {
-		os.WriteFile(golden, a, 0o644)
+		if err := os.WriteFile(golden, a, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if want, err := os.ReadFile(golden); err != nil || !bytes.Equal(want, a) {
 		t.Errorf("the index differs from %s (%v):\n%s", golden, err, a)
 	}
 	dir := t.TempDir()
-	res, _ := Wiring(fixture, packs())
+	res, err := Wiring(fixture, packs())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := WriteImpact(dir, ImpactOf(res)); err != nil {
 		t.Fatal(err)
 	}
