@@ -14,9 +14,11 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/lock"
+	"github.com/ouroboric-dev/odin/internal/pointer"
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/run"
+	"github.com/ouroboric-dev/odin/internal/tree"
 )
 
 // runInit creates the leaves the spec stage named, each from the template of the realm that provides it,
@@ -216,7 +218,7 @@ func initLeaf(ctx context.Context, r *run.Run, n schema.Node, p string, l schema
 			// Its template was applied. A stop between the checkpoint and the move of main is finished here.
 			if rec := r.State.Leaves[p]; rec.Checkpoint != "" {
 				if subj, _ := lf.Git(ctx, "log", "-1", "--format=%s", rec.Checkpoint); subj == templateMessage(r, n, l) {
-					err = mainToTemplate(ctx, r, lf, p, rec.Checkpoint)
+					err = templateToMain(ctx, r, lf, p, rec.Checkpoint)
 				}
 			}
 		}
@@ -229,17 +231,53 @@ func initLeaf(ctx context.Context, r *run.Run, n schema.Node, p string, l schema
 	if err != nil {
 		return created, err
 	}
-	if err := mainToTemplate(ctx, r, lf, p, head); err != nil {
-		return created, err
-	}
+	// The checkpoint is saved before main moves and the umbrella records it, so a stop or a refusal in
+	// either step is finished by the resume above, which finds the template by the checkpoint.
 	rec := r.State.Leaves[p]
 	rec.Checkpoint = head
 	r.State.Leaves[p] = rec
-	return created, r.Save()
+	if err := r.Save(); err != nil {
+		return created, err
+	}
+	return created, templateToMain(ctx, r, lf, p, head)
 }
 
 func templateMessage(r *run.Run, n schema.Node, l schema.LeafSpec) string {
 	return fmt.Sprintf("ygg: run %s, node %s: the %s template", r.State.ID, n.ID, l.Realm)
+}
+
+// templateToMain moves the leaf's main to the template's commit, then records that commit in the leaf's
+// parent umbrella. The acceptance snapshot takes every leaf at the commit its umbrella records, so a new
+// leaf recorded at its first commit would be seen without its template by the first pointer move of the
+// run (B-061). The record is the one commit of the host that a pointer move makes, with nothing to check
+// (the move to the leaf's template is the realm's own text), and a leaf already recorded there makes none,
+// so a resume that stopped between the two steps finishes it (the caller saved the checkpoint first). The
+// record does not mean "passed acceptance": it only makes the snapshot hold the template. It is refused,
+// as a pointer move is, when the umbrella has staged changes Odin didn't make.
+func templateToMain(ctx context.Context, r *run.Run, lf *leaf.Leaf, repo, head string) error {
+	if err := mainToTemplate(ctx, r, lf, repo, head); err != nil {
+		return err
+	}
+	if main, err := lf.Rev(ctx, "main"); err != nil || main != head {
+		return err // main moved on its own: the template is not recorded over it
+	}
+	nodes, err := tree.Resolve(ctx, r.Setup.Root, filepath.Join(r.Setup.ProjectPath, repo))
+	if err != nil {
+		return err
+	}
+	parent, leafNode := nodes[len(nodes)-2], nodes[len(nodes)-1]
+	child, err := filepath.Rel(parent.Dir, leafNode.Dir)
+	if err != nil {
+		return err
+	}
+	parentRepo, err := filepath.Rel(r.Project, parent.Dir)
+	if err != nil {
+		return err
+	}
+	ok := func(context.Context) error { return nil }
+	_, err = pointer.Move(ctx, pointer.Spec{Parent: parent, Child: child, Leaf: lf, To: head, Lock: r.LockFile(parentRepo),
+		Check: ok, Acceptance: ok, Message: fmt.Sprintf("Record the template of %s at %.12s (run %s)", child, head, r.State.ID)})
+	return err
 }
 
 // mainToTemplate moves the leaf's main to the template's checkpoint, under the leaf's lock and with

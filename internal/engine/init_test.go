@@ -455,3 +455,73 @@ func TestABlockedFirstTaskKeepsTheTemplateOfANewLeaf(t *testing.T) {
 		t.Errorf("main moved to %s from %s", now, main)
 	}
 }
+
+// recordedAt is the commit the project's umbrella records for the leaf at rel in its HEAD: the commit the
+// acceptance snapshot takes the leaf at (B-048 M-1).
+func recordedAt(t *testing.T, r *run.Run, rel string) string {
+	t.Helper()
+	got, err := git.Run(context.Background(), r.Project, "rev-parse", "HEAD:"+rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// A leaf init creates is recorded in the umbrella at its template, not at its first commit: the first
+// pointer move's acceptance snapshot reads every other leaf at the recorded commit, so a new leaf recorded
+// at its first commit would be seen without its template (B-061).
+func TestInitRecordsEachNewLeafInTheUmbrellaAtItsTemplate(t *testing.T) {
+	for name, leaves := range map[string]string{
+		"paths sort in the order the leaves are made": galleryLeaves,
+		"the consumer's path sorts first":             strings.NewReplacer("repos/api", "repos/z-api", "repos/web", "repos/a-web").Replace(galleryLeaves),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := initRun(t, leaves)
+			ctx := context.Background()
+			if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+				t.Fatalf("Advance() = %+v, %v", out, err)
+			}
+			u, _ := schema.LoadUmbrella(r.Project)
+			for _, p := range u.Paths() {
+				l, _ := r.Leaf(p)
+				main, _ := l.Rev(ctx, "main")
+				if got := recordedAt(t, r, p); got != main || got != r.State.Leaves[p].Checkpoint {
+					t.Errorf("%s: the umbrella records %s, want the template at %s", p, got, main)
+				}
+			}
+			if st, _ := git.Run(ctx, r.Project, "status", "--porcelain", "--untracked-files=no"); st != "" {
+				t.Errorf("init leaves the umbrella dirty: %q", st)
+			}
+		})
+	}
+}
+
+// An init whose record of a template fails, here on staged changes Odin didn't make in the umbrella, after
+// main moved to the template, finishes the record when run again: the umbrella ends at the template of every
+// leaf, not at its first commit (B-061).
+func TestAnInitWhoseRecordFailedRecordsTheTemplateWhenRunAgain(t *testing.T) {
+	r := initRun(t, galleryLeaves)
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(r.Project, "notes.txt"), []byte("n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git.Run(ctx, r.Project, "add", "--", "notes.txt"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(ctx, r)
+	if err == nil && (out.Status == run.StatusDone || out.Err == nil || !strings.Contains(out.Err.Error(), "staged changes")) {
+		t.Fatalf("Advance() = %+v, %v; want the record refused on the staged file", out, err)
+	}
+	if _, err := git.Run(ctx, r.Project, "reset", "-q", "--", "notes.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() the second time = %+v, %v", out, err)
+	}
+	for _, p := range []string{"repos/api", "repos/web"} {
+		l, _ := r.Leaf(p)
+		if main, _ := l.Rev(ctx, "main"); recordedAt(t, r, p) != main || main != r.State.Leaves[p].Checkpoint {
+			t.Errorf("%s: the umbrella records %s, want the template at %s", p, recordedAt(t, r, p), main)
+		}
+	}
+}
