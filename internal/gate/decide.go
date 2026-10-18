@@ -16,6 +16,12 @@ const (
 type Facts struct {
 	Deviation      bool // spec: the design-conformance review found a deviation
 	ContractInSpec bool // pointer-contract: the approved spec contains the contract change
+
+	// NoContractChange: pointer-contract found no contract change by an extracted edge or oasdiff
+	// (routing.Judge said pass), so the gate opens by itself. Escalate: only a guess found one
+	// (routing.Judge said escalate), so a person decides in every mode. Neither: a contract changed.
+	NoContractChange bool
+	Escalate         bool
 }
 
 // Decide applies the mode × approval-point table of spec §7.1, then the config's overrides.
@@ -43,7 +49,10 @@ func Decide(mode gungnir.Mode, g gungnir.Gate, overrides map[gungnir.Gate]string
 		}
 		return Auto
 	case gungnir.GatePointerContract:
-		if f.ContractInSpec {
+		if f.Escalate {
+			return Stop
+		}
+		if f.NoContractChange || f.ContractInSpec {
 			return Auto
 		}
 		if mode == gungnir.ModeUnattended {

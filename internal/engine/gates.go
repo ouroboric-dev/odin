@@ -18,7 +18,7 @@ import (
 
 // reachGate decides gate node n (spec §7.2). Both a stop and an auto-pass write a gate file, so
 // unattended decisions can be audited. A stop saves the run as stopped and reports true.
-func reachGate(r *run.Run, n schema.Node) (bool, error) {
+func reachGate(ctx context.Context, r *run.Run, n schema.Node) (bool, error) {
 	s := r.State
 	attempt, err := startAttempt(r, n)
 	if err != nil {
@@ -42,8 +42,17 @@ func reachGate(r *run.Run, n schema.Node) (bool, error) {
 			return false, err
 		}
 	}
+	var evidence string
+	if n.Gate == gungnir.GatePointerContract {
+		// The gate judges the move that the next pointer node makes (spec §3.4): a pass opens it, a fail
+		// is the approval point, and a guess alone is an escalation.
+		var err error
+		if facts, evidence, err = contractFacts(ctx, r, n, attempt); err != nil {
+			return false, err
+		}
+	}
 	action := gate.Decide(s.Mode, n.Gate, r.Setup.Config.Gates, facts)
-	file, err := writeGateFile(r, n, attempt, action, verdict)
+	file, err := writeGateFile(r, n, attempt, action, verdict, evidence)
 	if err != nil {
 		return false, err
 	}
@@ -61,7 +70,7 @@ func reachGate(r *run.Run, n schema.Node) (bool, error) {
 }
 
 // writeGateFile writes gates/<node>-<attempt>.md and returns its path relative to the run.
-func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, verdict *gungnir.Conformance) (string, error) {
+func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, verdict *gungnir.Conformance, evidence string) (string, error) {
 	s := r.State
 	rel := filepath.Join("gates", fmt.Sprintf("%s-%d.md", n.ID, attempt))
 	var b strings.Builder
@@ -86,6 +95,9 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, v
 	}
 	if verdict != nil {
 		b.WriteString("\n" + conformanceSection(*verdict))
+	}
+	if evidence != "" {
+		b.WriteString("\n" + evidence)
 	}
 	u := s.Usage
 	fmt.Fprintf(&b, "\n## Cost so far\n\n- Tokens: %d in, %d out, %d from cache\n- Turns: %d\n- Cost: $%.4f",
