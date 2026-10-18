@@ -1,5 +1,5 @@
 Build the product of the brief below in this repository. The brief says `/app`: the root of this repository
-plays that part. The grader starts the product with the `start.sh` of this repository, so this repository must
+plays that part. The product is started with the `start.sh` of this repository, so this repository must
 hold an executable `start.sh` that starts the whole product on port 3000.
 
 The machine has Node 24 and Python 3.12 and has no network. Use only their standard libraries. Do not install

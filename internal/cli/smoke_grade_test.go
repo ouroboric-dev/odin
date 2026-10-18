@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/ouroboric-dev/gungnir/schema"
@@ -31,6 +32,24 @@ func TestTheGradeSmokeRealmLoads(t *testing.T) {
 	for _, f := range []string{first.Prompt, first.Reviewers[0].Prompt, "templates/notes/LICENSE"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("the realm names %s: %v", f, err)
+		}
+	}
+}
+
+// An agent that is told it is graded can work for the grade. The prompts of the realm never say so.
+func TestTheGradeSmokePromptsNeverMentionTheGrading(t *testing.T) {
+	words := regexp.MustCompile(`(?i)grader|grade|grading|benchmark|hidden|score`)
+	prompts, err := filepath.Glob(filepath.Join("..", "..", "testdata", "smoke-grade", "prompts", "*.md"))
+	if err != nil || len(prompts) != 2 {
+		t.Fatalf("prompts = %v, %v", prompts, err)
+	}
+	for _, p := range prompts {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := words.Find(b); w != nil {
+			t.Errorf("%s mentions %q", p, w)
 		}
 	}
 }

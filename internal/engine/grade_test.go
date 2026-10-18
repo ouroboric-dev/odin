@@ -246,3 +246,28 @@ func TestNoLimitGoesToTheDriverAsNoLimit(t *testing.T) {
 		t.Errorf("limits = %q, %d; want none", spec.Memory, spec.CPUs)
 	}
 }
+
+// A limit written on one side only is passed as written: 4g with no CPU limit, and no memory limit with 4 CPUs.
+func TestMixedLimitsReachTheDriverAsWritten(t *testing.T) {
+	for name, c := range map[string]struct {
+		limits string
+		memory string
+		cpus   int
+	}{
+		"memory only": {"  memory: 4g\n  cpus: 0\n", "4g", 0},
+		"cpus only":   {"  memory: none\n  cpus: 4\n", "", 4},
+	} {
+		t.Run(name, func(t *testing.T) {
+			old := gradedLimits
+			gradedLimits = c.limits
+			defer func() { gradedLimits = old }()
+			g := startGraded(t, gradedNodes, tasktest.Results(map[string]string{}), nil)
+			if out := g.advance(t); out.Status != run.StatusDone {
+				t.Fatalf("Advance() = %+v", out)
+			}
+			if spec := g.grader.Specs[0]; spec.Memory != c.memory || spec.CPUs != c.cpus {
+				t.Errorf("limits = %q, %d; want %q, %d", spec.Memory, spec.CPUs, c.memory, c.cpus)
+			}
+		})
+	}
+}
