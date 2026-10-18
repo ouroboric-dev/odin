@@ -1,5 +1,5 @@
 // Package task reads a benchmark task for grading (spec §11, change benchmark-split): the public half
-// from a checkout of mimir. It checks everything that can be
+// from a checkout of mimir, the hidden half from the suite store. It checks everything that can be
 // checked before a container is built, and refuses with one of five reasons when a check fails. It
 // reads files and starts nothing.
 package task
@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -24,7 +25,8 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 )
 
-// Task is a task of mimir. Every path is absolute when the folder given to Load is.
+// Task is a task of mimir joined with its hidden suite. Every path is absolute when the folders given
+// to Load are.
 type Task struct {
 	ID          string
 	Version     string // task.version: the version of the brief, such as 4.0.0
@@ -32,9 +34,11 @@ type Task struct {
 	BriefSHA256 string // metadata.brief_sha256, which Load has checked against instruction.md
 	Dir         string // <tasks_dir>/<id>
 	Environment string // <tasks_dir>/<id>/environment: the grader's image is built from it
+	Tests       string // <suite_dir>/<id>/<suite>/tests: mounted read only into the grader and nowhere else
 	Timeout     time.Duration
 	Env         map[string]string  // verifier.env, passed to the grader's container
 	Weights     map[string]float64 // the categories of the reward, from SCORE_WEIGHTS; they sum to 1
+	Manifest    gungnir.Suite      // tests/manifest.json
 }
 
 // Refusal is why grading was refused before anything was built. Reason is the word the ledger records.
@@ -51,8 +55,9 @@ func refuse(reason gungnir.GradeReason, format string, a ...any) error {
 
 // File size limits: a task's files are small text, and a larger one is not a task.
 const (
-	maxToml  = 64 << 10
-	maxBrief = 1 << 20
+	maxToml     = 64 << 10
+	maxBrief    = 1 << 20
+	maxManifest = 1 << 20
 )
 
 // weightEpsilon is how far the weights may be from a sum of 1.
@@ -85,9 +90,10 @@ type taskFile struct {
 	} `toml:"verifier"`
 }
 
-// Load reads task id from tasksDir, and checks it in this order: the task file (bad_task), the retired
-// mark (retired) and the brief's hash (brief_changed). Any failure is a *Refusal.
-func Load(tasksDir, id string) (*Task, error) {
+// Load reads task id from tasksDir and its hidden suite from suiteDir, and checks them in this order:
+// the task file (bad_task), the retired mark (retired), the brief's hash (brief_changed), the suite's
+// folders (missing_suite) and the suite's manifest (bad_manifest). Any failure is a *Refusal.
+func Load(tasksDir, suiteDir, id string) (*Task, error) {
 	if !taskID.MatchString(id) {
 		return nil, refuse(gungnir.GradeBadTask, "%q is not a task id (lower case words joined by dashes)", id)
 	}
@@ -114,7 +120,17 @@ func Load(tasksDir, id string) (*Task, error) {
 	if sum := sha256.Sum256(brief); hex.EncodeToString(sum[:]) != t.BriefSHA256 {
 		return nil, refuse(gungnir.GradeBriefChanged, "instruction.md hashes to %s, task.toml says %s; any change to a brief is a new task version", hex.EncodeToString(sum[:]), t.BriefSHA256)
 	}
-	return t, nil
+	t.Tests = filepath.Join(suiteDir, id, t.Suite, "tests")
+	if st, err := os.Stat(t.Tests); err != nil || !st.IsDir() {
+		return nil, refuse(gungnir.GradeMissingSuite, "the store holds no tests folder for suite %s of task %s", t.Suite, id)
+	}
+	if st, err := os.Stat(filepath.Join(t.Tests, "test.sh")); err != nil || !st.Mode().IsRegular() {
+		return nil, refuse(gungnir.GradeMissingSuite, "suite %s of task %s has no test.sh", t.Suite, id)
+	}
+	if _, err := os.Lstat(filepath.Join(t.Tests, "manifest.json")); err != nil {
+		return nil, refuse(gungnir.GradeMissingSuite, "suite %s of task %s has no manifest.json", t.Suite, id)
+	}
+	return t, t.readManifest()
 }
 
 // fromFile checks the fields grading uses, and sets them.
@@ -181,6 +197,36 @@ func parseWeights(s string) (map[string]float64, error) {
 		return nil, fmt.Errorf("the weights sum to %v, not 1", sum)
 	}
 	return w, nil
+}
+
+// readManifest reads tests/manifest.json exactly: no unknown field, the schema, the suite the task names,
+// and a weight for every category that has a fail-to-pass scenario.
+func (t *Task) readManifest() error {
+	bad := func(format string, a ...any) error { return refuse(gungnir.GradeBadManifest, format, a...) }
+	raw, err := readRegular(filepath.Join(t.Tests, "manifest.json"), maxManifest)
+	if err != nil {
+		return bad("manifest.json: %v", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&t.Manifest); err != nil {
+		return bad("manifest.json does not parse: %v", err)
+	}
+	if dec.More() {
+		return bad("manifest.json holds more than one document")
+	}
+	if err := t.Manifest.Validate(); err != nil {
+		return bad("manifest.json: %v", err)
+	}
+	if t.Manifest.Suite != t.Suite {
+		return bad("manifest.json is of suite %s, task.toml names %s", t.Manifest.Suite, t.Suite)
+	}
+	for _, sc := range t.Manifest.Scenarios {
+		if _, ok := t.Weights[sc.Category]; !ok && sc.Kind == gungnir.FailToPass {
+			return bad("scenario %q is in category %s, which SCORE_WEIGHTS gives no weight", sc.ID, sc.Category)
+		}
+	}
+	return nil
 }
 
 // readRegular reads a regular file of at most max bytes, and nothing that is a link: a task's files are

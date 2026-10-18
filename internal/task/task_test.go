@@ -15,6 +15,11 @@ import (
 
 const brief = "# Tiny\n\nBuild a tiny product.\n"
 
+const manifest = `{"schema":"ygg.suite/v1","suite":"v1","scenarios":[
+ {"id":"a thing works","category":"core","kind":"fail-to-pass"},
+ {"id":"a thing stays","category":"core","kind":"pass-to-pass"},
+ {"id":"a thing is private","category":"security","kind":"fail-to-pass"}]}`
+
 func taskToml(sha string) string {
 	return `schema_version = "1.4"
 artifacts = ["/app"]
@@ -39,17 +44,21 @@ SCORE_WEIGHTS = "core=0.6,security=0.4"
 
 func sha(s string) string { b := sha256.Sum256([]byte(s)); return hex.EncodeToString(b[:]) }
 
-// fake is a tiny task, written by the test. Nothing here is a real task.
-type fake struct{ tasks, dir string }
+// fake is a tiny task and a tiny suite, written by the test: tasks/<id> is the public half, suites/<id>/v1
+// the hidden half. Nothing here is a real suite.
+type fake struct{ tasks, suites, dir, tests string }
 
 func newFake(t *testing.T) *fake {
 	t.Helper()
 	root := t.TempDir()
-	f := &fake{tasks: filepath.Join(root, "tasks")}
+	f := &fake{tasks: filepath.Join(root, "tasks"), suites: filepath.Join(root, "suites")}
 	f.dir = filepath.Join(f.tasks, "tiny-task")
+	f.tests = filepath.Join(f.suites, "tiny-task", "v1", "tests")
 	f.write(t, "task.toml", taskToml(sha(brief)))
 	f.write(t, "instruction.md", brief)
 	f.write(t, "environment/Dockerfile", "FROM scratch\n")
+	f.writeAt(t, filepath.Join(f.tests, "test.sh"), "#!/bin/bash\nexit 0\n")
+	f.writeAt(t, filepath.Join(f.tests, "manifest.json"), manifest)
 	return f
 }
 
@@ -68,7 +77,7 @@ func (f *fake) writeAt(t *testing.T, path, body string) {
 	}
 }
 
-func (f *fake) load() (*Task, error) { return Load(f.tasks, "tiny-task") }
+func (f *fake) load() (*Task, error) { return Load(f.tasks, f.suites, "tiny-task") }
 
 func wantRefusal(t *testing.T, err error, reason gungnir.GradeReason, detail string) {
 	t.Helper()
@@ -81,7 +90,7 @@ func wantRefusal(t *testing.T, err error, reason gungnir.GradeReason, detail str
 	}
 }
 
-func TestLoadReadsTheTask(t *testing.T) {
+func TestLoadReadsTheTaskAndFindsItsSuite(t *testing.T) {
 	f := newFake(t)
 	tk, err := f.load()
 	if err != nil {
@@ -90,11 +99,14 @@ func TestLoadReadsTheTask(t *testing.T) {
 	if tk.ID != "tiny-task" || tk.Version != "2.1.0" || tk.Suite != "v1" || tk.BriefSHA256 != sha(brief) {
 		t.Errorf("task = %+v", tk)
 	}
-	if tk.Environment != filepath.Join(f.dir, "environment") {
-		t.Errorf("environment = %s", tk.Environment)
+	if tk.Environment != filepath.Join(f.dir, "environment") || tk.Tests != f.tests {
+		t.Errorf("folders = %s, %s", tk.Environment, tk.Tests)
 	}
 	if tk.Timeout != 300*time.Second || tk.Env["WORKERS"] != "2" || tk.Weights["core"] != 0.6 || tk.Weights["security"] != 0.4 {
 		t.Errorf("limits = %v, env %v, weights %v", tk.Timeout, tk.Env, tk.Weights)
+	}
+	if len(tk.Manifest.Scenarios) != 3 || tk.Manifest.Suite != "v1" {
+		t.Errorf("manifest = %+v", tk.Manifest)
 	}
 }
 
@@ -121,6 +133,21 @@ func TestAChangedBriefIsRefused(t *testing.T) {
 	f.write(t, "instruction.md", brief+"One more line.\n")
 	_, err := f.load()
 	wantRefusal(t, err, gungnir.GradeBriefChanged, sha(brief)[:12])
+}
+
+func TestAMissingSuiteIsRefused(t *testing.T) {
+	cases := map[string]func(f *fake){
+		"no store entry for the task": func(f *fake) { os.RemoveAll(filepath.Join(f.suites, "tiny-task")) },
+		"no tests folder":             func(f *fake) { os.RemoveAll(f.tests) },
+		"no test.sh":                  func(f *fake) { os.Remove(filepath.Join(f.tests, "test.sh")) },
+		"no manifest":                 func(f *fake) { os.Remove(filepath.Join(f.tests, "manifest.json")) },
+	}
+	for name, mutate := range cases {
+		f := newFake(t)
+		mutate(f)
+		_, err := f.load()
+		t.Run(name, func(t *testing.T) { wantRefusal(t, err, gungnir.GradeMissingSuite, "v1") })
+	}
 }
 
 func TestATaskFileThatIsNotExactIsRefused(t *testing.T) {
@@ -156,7 +183,7 @@ func TestATaskFileThatIsNotExactIsRefused(t *testing.T) {
 	_, err := f.load()
 	wantRefusal(t, err, gungnir.GradeBadTask, "task.toml")
 	for _, id := range []string{"", "../tiny-task", "Tiny", "tiny/task", "-tiny"} {
-		_, err := Load(f.tasks, id)
+		_, err := Load(f.tasks, f.suites, id)
 		wantRefusal(t, err, gungnir.GradeBadTask, "task id")
 	}
 }
@@ -171,4 +198,50 @@ func TestATaskFolderMayNotLeadOutsideItself(t *testing.T) {
 	}
 	_, err := f.load()
 	wantRefusal(t, err, gungnir.GradeBadTask, "instruction.md")
+}
+
+func TestAManifestThatCannotBeReadExactlyIsRefused(t *testing.T) {
+	cases := map[string]string{
+		"not json":                  `{"schema":`,
+		"an unknown field":          strings.Replace(manifest, `"kind":"fail-to-pass"}]`, `"kind":"fail-to-pass","skip":true}]`, 1),
+		"another schema":            strings.Replace(manifest, "ygg.suite/v1", "ygg.suite/v9", 1),
+		"another suite":             strings.Replace(manifest, `"suite":"v1"`, `"suite":"v2"`, 1),
+		"an id twice":               strings.Replace(manifest, "a thing stays", "a thing works", 1),
+		"no scenarios":              `{"schema":"ygg.suite/v1","suite":"v1","scenarios":[]}`,
+		"a category with no weight": strings.Replace(manifest, `"security"`, `"billing"`, 1),
+		"a second document":         manifest + manifest,
+	}
+	for name, body := range cases {
+		f := newFake(t)
+		f.writeAt(t, filepath.Join(f.tests, "manifest.json"), body)
+		_, err := f.load()
+		t.Run(name, func(t *testing.T) { wantRefusal(t, err, gungnir.GradeBadManifest, "") })
+	}
+}
+
+// The smoke task of mimir is the real shape. Its sample suite is PUBLIC, so it may stand in for a hidden
+// suite here. The test needs a checkout of mimir: YGG_MIMIR names it, else it is looked for beside odin.
+func TestTheSmokeTaskOfMimirLoadsWithItsSampleSuite(t *testing.T) {
+	mimir := os.Getenv("YGG_MIMIR")
+	if mimir == "" {
+		mimir = filepath.Join("..", "..", "..", "mimir")
+	}
+	tests := filepath.Join(mimir, "smoke-notes", "sample-suite", "tests")
+	if _, err := os.Stat(tests); err != nil {
+		if os.Getenv("YGG_REQUIRE_MIMIR") != "" {
+			t.Fatal(err)
+		}
+		t.Skip("no checkout of mimir: set YGG_MIMIR")
+	}
+	suites := t.TempDir()
+	if err := os.CopyFS(filepath.Join(suites, "smoke-notes", "v1", "tests"), os.DirFS(tests)); err != nil {
+		t.Fatal(err)
+	}
+	tk, err := Load(mimir, suites, "smoke-notes")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if tk.Version != "1.0.0" || tk.Suite != "v1" || len(tk.Manifest.Scenarios) != 7 || tk.Weights["security"] != 0.4 {
+		t.Errorf("task = %+v", tk)
+	}
 }
