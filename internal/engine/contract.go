@@ -65,6 +65,8 @@ func contractJudgement(ctx context.Context, r *run.Run, gateNode schema.Node) (r
 	if err != nil {
 		return routing.Judgement{}, "", err
 	}
+	// The move is judged to this commit; runPointer refuses any other (main may move after the gate).
+	r.State.Judged[p.ID] = to
 	move := fmt.Sprintf("%s: %.12s -> %.12s", child, from, to)
 	if from == to {
 		return routing.Judgement{Verdict: routing.Pass, Evidence: routing.Extracted, Reason: "the pointer is already there"}, move, nil

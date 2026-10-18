@@ -169,3 +169,40 @@ func TestAContractWithALeadingSpaceIsNotTheListedContract(t *testing.T) {
 		t.Errorf("the ledger lacks the escalation:\n%s", text)
 	}
 }
+
+// The gate judges one commit. If main moves on before the pointer does (another run, a later merge), the
+// pointer must not carry the unjudged change along.
+func TestThePointerDoesNotMoveToACommitTheGateDidNotJudge(t *testing.T) {
+	noOasdiff(t)
+	r := startPack(t, "unattended", "", packChecks, contractNodes, scriptWriting("api.openapi.yaml"))
+	shipIndex(t, r, routing.Reached{Extracted: []string{"web"}})
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusStopped || out.Gate != "contract-gate" {
+		t.Fatalf("Advance() = %+v, %v; want a stop at the gate", out, err)
+	}
+	judged := mainOf(t, r)
+	l, err := r.Leaf("repos/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	later, err := l.Git(bg, "commit-tree", "main^{tree}", "-p", "main", "-m", "a later change")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Git(bg, "update-ref", "refs/heads/main", later); err != nil {
+		t.Fatal(err)
+	}
+	// The leaf's checkout follows main, as it does when another run merged into the same leaf.
+	if _, err := l.Git(bg, "checkout", "-q", "--detach", later); err != nil {
+		t.Fatal(err)
+	}
+	if err := Approve(bg, r, "contract-gate", "the contract change is in the spec"); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := Advance(bg, r)
+	if out.Status != run.StatusFailed {
+		t.Fatalf("the run is %s, want failed: the pointer may have moved to a commit the gate did not judge", out.Status)
+	}
+	if got, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app"); got == later || got == judged {
+		t.Errorf("the pointer is at %s; it must not have moved", got)
+	}
+}
