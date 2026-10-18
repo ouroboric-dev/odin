@@ -3,6 +3,7 @@ module github.com/ouroboric-dev/odin
 go 1.26
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/ouroboric-dev/gleipnir v0.0.0-20261018220403-74b54ec83a64
 	github.com/ouroboric-dev/gungnir v0.0.0-20261018212656-f58d3b7bac28
 	github.com/ouroboric-dev/havamal v0.0.0-20261017195922-be698041a5ae
