@@ -82,3 +82,84 @@ func TestAnIndexThatLostEdgesStopsAtTheShrinkGuard(t *testing.T) {
 		t.Errorf("the committed REPOS.md has %d wiring rows (block found %v), want the old 6", rows, found)
 	}
 }
+
+const benchPack = packChecks + "routing:\n  threshold: 0.8\n"
+
+func writeBench(t *testing.T, r *run.Run, body string) {
+	t.Helper()
+	p := filepath.Join(r.Project, ".ygg", "routing-bench.yaml")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("schema: ygg.routing-bench/v1\nquestions:\n"+body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const rightBench = "  - { id: who-requires-chi, kind: pin, about: repos/app, arg: \"go:github.com/go-chi/chi/v5\", answer: []}\n" +
+	"  - { id: who-consumes-app, kind: consumers, about: repos/app, answer: [] }\n"
+
+func TestAnIndexAtTheThresholdShipsAndTheLedgerKeepsTheScore(t *testing.T) {
+	r := startPack(t, "key-points", "", benchPack, shipNodes, goModScript)
+	writeBench(t, r, rightBench)
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if text := ledgerText(t, r); !strings.Contains(text, "bench 2/2 right first at threshold 0.80") {
+		t.Errorf("the ledger lacks the bench score:\n%s", text)
+	}
+}
+
+// Review focus: an index under the pack's threshold does not ship. Nothing is written and the pointer stays.
+func TestAnIndexUnderTheThresholdDoesNotShip(t *testing.T) {
+	cases := map[string]string{
+		"a wrong answer":  rightBench + "  - { id: who-consumes-nothing, kind: consumers, about: repos/app, answer: [ghost] }\n",
+		"no bench at all": "",
+	}
+	for name, body := range cases {
+		r := startPack(t, "key-points", "", benchPack, shipNodes, goModScript)
+		if body != "" {
+			writeBench(t, r, body)
+		}
+		before, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app")
+		out, err := Advance(bg, r)
+		if err != nil || out.Status != run.StatusFailed || out.Err == nil || !strings.Contains(out.Err.Error(), "does not ship") {
+			t.Fatalf("%s: Advance() = %+v, %v; want a failed node that says the index does not ship", name, out, err)
+		}
+		if _, err := os.Stat(filepath.Join(r.Project, "REPOS.md")); err == nil {
+			t.Errorf("%s: REPOS.md was written", name)
+		}
+		if after, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app"); after != before {
+			t.Errorf("%s: the pointer moved", name)
+		}
+	}
+}
+
+func TestAPackWithoutARoutingBlockShipsUnmeasured(t *testing.T) {
+	r := startPack(t, "key-points", "", packChecks, shipNodes, goModScript)
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+}
+
+// The bench is data in the project: a link where it should be is not followed, and the index does not ship.
+func TestAnIndexDoesNotShipOnABenchThatIsALink(t *testing.T) {
+	r := startPack(t, "key-points", "", benchPack, shipNodes, goModScript)
+	elsewhere := filepath.Join(t.TempDir(), "bench.yaml")
+	if err := os.WriteFile(elsewhere, []byte("schema: ygg.routing-bench/v1\nquestions:\n"+rightBench), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(r.Project, ".ygg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(r.Project, ".ygg", "routing-bench.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusFailed || out.Err == nil || !strings.Contains(out.Err.Error(), "does not ship") {
+		t.Fatalf("Advance() = %+v, %v; want a failed node", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(r.Project, "REPOS.md")); err == nil {
+		t.Error("REPOS.md was written")
+	}
+}

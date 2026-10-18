@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
@@ -33,6 +34,22 @@ func shipRouting(r *run.Run, n schema.Node, attempt int, parent tree.Node) error
 	note := ""
 	if len(res.Skipped) > 0 {
 		note = fmt.Sprintf("left out: %d (first: %s)", len(res.Skipped), res.Skipped[0])
+	}
+	// The pack of the lead realm sets the bar (spec §8.3). The bench is in the project umbrella, where
+	// no agent mounts. Under the bar, or with no bench to measure by, nothing is written. A pack without
+	// the block ships unmeasured.
+	if rp := r.Setup.Lead.Pack.Routing; rp != nil {
+		bench, err := routing.LoadBenchIn(parent.Dir, rp.BenchPath())
+		if err != nil {
+			return &nodeFailure{fmt.Errorf("the routing index does not ship, because its bench can't be read: %w", err)}
+		}
+		rep := bench.Score(routing.IndexAnswerer(res, routing.ImpactOf(res)))
+		base := bench.Score(routing.GrepBaseline(parent.Dir, res.Leaves))
+		score := fmt.Sprintf("bench %v at threshold %.2f (grep baseline %v)", rep, rp.Threshold, base)
+		if !rep.Ships(rp.Threshold) {
+			return &nodeFailure{fmt.Errorf("the routing index does not ship: %s; wrong or unanswered: %v", score, rep.Misses)}
+		}
+		note = strings.TrimSpace(note + " " + score)
 	}
 	x, i := routing.Counts(res.Edges)
 	built := func(kind string) error {
