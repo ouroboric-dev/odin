@@ -15,6 +15,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/deps"
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/realm"
@@ -101,8 +102,9 @@ func (c *command) deps(args []string) int {
 		for _, m := range cfg.Sandbox.Mounts {
 			sc.Mounts = append(sc.Mounts, sandbox.PathMap{Host: m.Host, Engine: m.Engine})
 		}
-		if opener.sb, err = newDepsSandbox(cfg.Sandbox.Engine, sc, filepath.Join(work, "sandbox")); err != nil {
-			return c.refuse(err)
+		// The driver starts with the first product, after every refusal of the bump: a refusal leaves no folder.
+		opener.start = func() (gungnir.Sandbox, error) {
+			return newDepsSandbox(cfg.Sandbox.Engine, sc, filepath.Join(work, "sandbox"))
 		}
 	}
 	// The bump's folder, and its ledger, appear when the first line is written: a refusal leaves nothing.
@@ -190,6 +192,16 @@ func (c *command) depsProduct(cfg *schema.Factory, root, projectPath string, pro
 	if err != nil {
 		return deps.Product{}, depsPlace{}, err
 	}
+	// git is the way back from a bump that dies half way, so the manifest and the lock file start committed.
+	leaf := ns[len(ns)-1]
+	repo := git.Repo{GitDir: leaf.GitDir, WorkTree: leaf.Dir}
+	dirty, err := repo.Run(c.ctx, append([]string{"status", "--porcelain", "--untracked-files=all", "--"}, append(deps.Go.Files(), deps.NPM.Files()...)...)...)
+	if err != nil {
+		return deps.Product{}, depsPlace{}, err
+	}
+	if dirty != "" {
+		return deps.Product{}, depsPlace{}, fmt.Errorf("%s has uncommitted changes in its manifest or lock file; commit or stash them first, so that git is the way back:\n%s", rel, dirty)
+	}
 	p := deps.Product{Name: rel, Dir: ns[len(ns)-1].Dir, Realm: r.Name, Checks: r.Pack.Checks}
 	return p, depsPlace{parent: ns[len(ns)-2], leaf: ns[len(ns)-1], realm: r}, nil
 }
@@ -197,6 +209,7 @@ func (c *command) depsProduct(cfg *schema.Factory, root, projectPath string, pro
 // depsOpener runs a product's commands in its sandbox, or on the host when factory.yaml has no sandbox.
 type depsOpener struct {
 	sb     gungnir.Sandbox
+	start  func() (gungnir.Sandbox, error) // starts the driver of the sandbox; nil when factory.yaml has no sandbox
 	id     string
 	home   string
 	places map[string]depsPlace // by the product's folder
@@ -204,6 +217,13 @@ type depsOpener struct {
 
 func (o *depsOpener) Open(ctx context.Context, p deps.Product) (gungnir.Runner, func(context.Context) error, error) {
 	pl := o.places[p.Dir]
+	if o.sb == nil && o.start != nil {
+		sb, err := o.start()
+		if err != nil {
+			return nil, nil, err
+		}
+		o.sb = sb
+	}
 	if o.sb == nil {
 		return hostExec{dir: p.Dir, home: o.home}, func(context.Context) error { return nil }, nil
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 	"github.com/ouroboric-dev/odin/internal/tree"
@@ -60,6 +61,7 @@ func depsProject(t *testing.T, stack string) (dir, config string) {
 			}
 		}
 	}
+	commitFixtures(t, dir)
 	_, base := project(t, "script.yaml", "")
 	b, _ := os.ReadFile(base)
 	extra := "realms:\n  dir: " + store + "\n"
@@ -188,7 +190,79 @@ func TestDepsBumpRunsToolAndChecksInTheSandboxOfEachLeafAndStopsIt(t *testing.T)
 	for _, c := range fake.Execs {
 		tools = append(tools, strings.Join(c.Argv, " "))
 	}
-	if got := strings.Join(tools, "|"); got != "go get golang.org/x/text@v0.42.0|test -f go.mod|test -f ok.txt|go get golang.org/x/text@v0.42.0|test -f go.mod|test -f ok.txt" {
+	if got := strings.Join(tools, "|"); got != "env GOWORK=off go get golang.org/x/text@v0.42.0|test -f go.mod|test -f ok.txt|env GOWORK=off go get golang.org/x/text@v0.42.0|test -f go.mod|test -f ok.txt" {
 		t.Errorf("commands in the sandboxes: %s", got)
+	}
+}
+
+// commitFixtures commits the manifest of each leaf, so that the bump finds the leaves clean.
+func commitFixtures(t *testing.T, dir string) {
+	t.Helper()
+	for _, name := range []string{"api", "web", "old"} {
+		ns, err := tree.Resolve(ctx, dir, "repos/"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		repo := git.Repo{GitDir: ns[len(ns)-1].GitDir, WorkTree: ns[len(ns)-1].Dir}
+		if _, err := repo.Run(ctx, "add", "go.mod", "ok.txt"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.Run(ctx, "commit", "-q", "-m", "fixture"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestDepsBumpRefusesALeafWhoseManifestHasUncommittedChanges(t *testing.T) {
+	for _, file := range []string{"go.mod", "go.sum"} {
+		dir, config := depsProject(t, "")
+		p := filepath.Join(dir, "repos/web", file)
+		if err := os.WriteFile(p, []byte(goMod("0.41.0")+"// dirty\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api", "--rollout", "repos/web")
+		if code != ExitRefused || !strings.Contains(errOut, "uncommitted") || !strings.Contains(errOut, "commit or stash") {
+			t.Errorf("%s: exit %d:\n%s%s", file, code, out, errOut)
+		}
+		if mod(t, dir, "api") != goMod("0.41.0") {
+			t.Errorf("%s: the canary was touched", file)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".factory", "deps")); !os.IsNotExist(err) {
+			t.Errorf("%s: a refusal left the folder of a bump: %v", file, err)
+		}
+	}
+}
+
+func TestDepsBumpWritesAStartedLineBeforeTheToolRuns(t *testing.T) {
+	dir, config := depsProject(t, "")
+	if code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api"); code != ExitDone {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	first, _, _ := strings.Cut(bumpLedger(t, dir), "\n")
+	if !strings.Contains(first, `"event":"deps_bump"`) || !strings.Contains(first, "started") || strings.Contains(first, `"ygg.verdict"`) {
+		t.Errorf("first line of the ledger: %s", first)
+	}
+}
+
+func TestDepsBumpRefusalsWithASandboxStartNoSandboxAndLeaveNoTrace(t *testing.T) {
+	dir, config := depsProject(t, goStack)
+	started := 0
+	old := newDepsSandbox
+	newDepsSandbox = func(engine string, cfg sandbox.Config, work string) (gungnir.Sandbox, error) {
+		started++
+		return &sandboxfake.Sandbox{}, os.MkdirAll(filepath.Join(work, "registry-auth"), 0o755)
+	}
+	t.Cleanup(func() { newDepsSandbox = old })
+	for name, args := range map[string][]string{
+		"a bump down":    {"deps", "bump", "golang.org/x/text", "0.40.0", "--canary", "repos/api"},
+		"a package none": {"deps", "bump", "golang.org/x/other", "1.0.0", "--canary", "repos/api"},
+		"a rollout down": {"deps", "bump", "golang.org/x/text", "0.42.0", "--canary", "repos/api", "--rollout", "repos/old"},
+	} {
+		if code, out, errOut := ygg(t, append(args, "--project", dir, "--config", config)...); code != ExitRefused {
+			t.Errorf("%s: exit %d:\n%s%s", name, code, out, errOut)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".factory", "deps")); !os.IsNotExist(err) || started != 0 {
+		t.Errorf("a refusal started %d sandbox driver(s) or left the folder of a bump: %v", started, err)
 	}
 }
