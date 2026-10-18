@@ -455,3 +455,57 @@ func TestABlockedFirstTaskKeepsTheTemplateOfANewLeaf(t *testing.T) {
 		t.Errorf("main moved to %s from %s", now, main)
 	}
 }
+
+// recordedAt is the commit the project's umbrella records for the leaf at rel in its HEAD: the commit the
+// acceptance snapshot takes the leaf at (B-048 M-1).
+func recordedAt(t *testing.T, r *run.Run, rel string) string {
+	t.Helper()
+	got, err := git.Run(context.Background(), r.Project, "rev-parse", "HEAD:"+rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// A leaf init creates is recorded in the umbrella at its template, not at its first commit: the first
+// pointer move's acceptance snapshot reads every other leaf at the recorded commit, so a new leaf recorded
+// at its first commit would be seen without its template (B-061).
+func TestInitRecordsEachNewLeafInTheUmbrellaAtItsTemplate(t *testing.T) {
+	for name, leaves := range map[string]string{
+		"consumed first": galleryLeaves,
+		"consumed last":  strings.NewReplacer("repos/api", "repos/z-api", "repos/web", "repos/a-web").Replace(galleryLeaves),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := initRun(t, leaves)
+			ctx := context.Background()
+			if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+				t.Fatalf("Advance() = %+v, %v", out, err)
+			}
+			u, _ := schema.LoadUmbrella(r.Project)
+			for _, p := range u.Paths() {
+				l, _ := r.Leaf(p)
+				main, _ := l.Rev(ctx, "main")
+				if got := recordedAt(t, r, p); got != main || got != r.State.Leaves[p].Checkpoint {
+					t.Errorf("%s: the umbrella records %s, want the template at %s", p, got, main)
+				}
+			}
+			if st, _ := git.Run(ctx, r.Project, "status", "--porcelain", "--untracked-files=no"); st != "" {
+				t.Errorf("init leaves the umbrella dirty: %q", st)
+			}
+		})
+	}
+}
+
+// A resume of an init that stopped before the template was committed records the template too.
+func TestAResumedInitRecordsTheTemplateInTheUmbrella(t *testing.T) {
+	r := halfInit(t)
+	ctx := context.Background()
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() after the resume = %+v, %v", out, err)
+	}
+	for _, p := range []string{"repos/api", "repos/web"} {
+		if got, want := recordedAt(t, r, p), r.State.Leaves[p].Checkpoint; got != want {
+			t.Errorf("%s: the umbrella records %s, want the template at %s", p, got, want)
+		}
+	}
+}
