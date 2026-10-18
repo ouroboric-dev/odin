@@ -472,8 +472,8 @@ func recordedAt(t *testing.T, r *run.Run, rel string) string {
 // at its first commit would be seen without its template (B-061).
 func TestInitRecordsEachNewLeafInTheUmbrellaAtItsTemplate(t *testing.T) {
 	for name, leaves := range map[string]string{
-		"consumed first": galleryLeaves,
-		"consumed last":  strings.NewReplacer("repos/api", "repos/z-api", "repos/web", "repos/a-web").Replace(galleryLeaves),
+		"paths sort in the order the leaves are made": galleryLeaves,
+		"the consumer's path sorts first":             strings.NewReplacer("repos/api", "repos/z-api", "repos/web", "repos/a-web").Replace(galleryLeaves),
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := initRun(t, leaves)
@@ -496,16 +496,32 @@ func TestInitRecordsEachNewLeafInTheUmbrellaAtItsTemplate(t *testing.T) {
 	}
 }
 
-// A resume of an init that stopped before the template was committed records the template too.
-func TestAResumedInitRecordsTheTemplateInTheUmbrella(t *testing.T) {
-	r := halfInit(t)
+// An init whose record of a template fails, here on staged changes Odin didn't make in the umbrella, after
+// main moved to the template, finishes the record when run again: the umbrella ends at the template of every
+// leaf, not at its first commit (B-061).
+func TestAnInitWhoseRecordFailedRecordsTheTemplateWhenRunAgain(t *testing.T) {
+	r := initRun(t, galleryLeaves)
 	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(r.Project, "notes.txt"), []byte("n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git.Run(ctx, r.Project, "add", "--", "notes.txt"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(ctx, r)
+	if err == nil && (out.Status == run.StatusDone || out.Err == nil || !strings.Contains(out.Err.Error(), "staged changes")) {
+		t.Fatalf("Advance() = %+v, %v; want the record refused on the staged file", out, err)
+	}
+	if _, err := git.Run(ctx, r.Project, "reset", "-q", "--", "notes.txt"); err != nil {
+		t.Fatal(err)
+	}
 	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
-		t.Fatalf("Advance() after the resume = %+v, %v", out, err)
+		t.Fatalf("Advance() the second time = %+v, %v", out, err)
 	}
 	for _, p := range []string{"repos/api", "repos/web"} {
-		if got, want := recordedAt(t, r, p), r.State.Leaves[p].Checkpoint; got != want {
-			t.Errorf("%s: the umbrella records %s, want the template at %s", p, got, want)
+		l, _ := r.Leaf(p)
+		if main, _ := l.Rev(ctx, "main"); recordedAt(t, r, p) != main || main != r.State.Leaves[p].Checkpoint {
+			t.Errorf("%s: the umbrella records %s, want the template at %s", p, recordedAt(t, r, p), main)
 		}
 	}
 }

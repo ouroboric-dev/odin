@@ -231,13 +231,15 @@ func initLeaf(ctx context.Context, r *run.Run, n schema.Node, p string, l schema
 	if err != nil {
 		return created, err
 	}
-	if err := templateToMain(ctx, r, lf, p, head); err != nil {
-		return created, err
-	}
+	// The checkpoint is saved before main moves and the umbrella records it, so a stop or a refusal in
+	// either step is finished by the resume above, which finds the template by the checkpoint.
 	rec := r.State.Leaves[p]
 	rec.Checkpoint = head
 	r.State.Leaves[p] = rec
-	return created, r.Save()
+	if err := r.Save(); err != nil {
+		return created, err
+	}
+	return created, templateToMain(ctx, r, lf, p, head)
 }
 
 func templateMessage(r *run.Run, n schema.Node, l schema.LeafSpec) string {
@@ -249,7 +251,9 @@ func templateMessage(r *run.Run, n schema.Node, l schema.LeafSpec) string {
 // leaf recorded at its first commit would be seen without its template by the first pointer move of the
 // run (B-061). The record is the one commit of the host that a pointer move makes, with nothing to check
 // (the move to the leaf's template is the realm's own text), and a leaf already recorded there makes none,
-// so a resume that stopped between the two steps finishes it.
+// so a resume that stopped between the two steps finishes it (the caller saved the checkpoint first). The
+// record does not mean "passed acceptance": it only makes the snapshot hold the template. It is refused,
+// as a pointer move is, when the umbrella has staged changes Odin didn't make.
 func templateToMain(ctx context.Context, r *run.Run, lf *leaf.Leaf, repo, head string) error {
 	if err := mainToTemplate(ctx, r, lf, repo, head); err != nil {
 		return err
