@@ -61,6 +61,8 @@ func TestAnIndexThatLostEdgesStopsAtTheShrinkGuard(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	headBefore, _ := git.Run(bg, r.Project, "rev-parse", "HEAD")
+	linkBefore, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app")
 	out, err := Advance(bg, r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateShrinkGuard {
 		t.Fatalf("Advance() = %+v, %v (pending %s); want a stop at shrink-guard", out, err, r.State.PendingGate)
@@ -68,7 +70,15 @@ func TestAnIndexThatLostEdgesStopsAtTheShrinkGuard(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "move-1.md")); !strings.Contains(string(b), "REPOS.md keeps 1 of its 6 rows") {
 		t.Errorf("gate file = %q", b)
 	}
-	if got, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app"); got == "" {
-		t.Error("no pointer")
+	// The refusal means the move did not complete: no commit, the pointer where it was, the old index kept.
+	if got, _ := git.Run(bg, r.Project, "rev-parse", "HEAD"); got != headBefore {
+		t.Errorf("HEAD moved from %s to %s", headBefore, got)
+	}
+	if got, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app"); got != linkBefore {
+		t.Errorf("the pointer moved from %q to %q", linkBefore, got)
+	}
+	committed, _ := git.Run(bg, r.Project, "show", "HEAD:REPOS.md")
+	if rows, found := routing.WiringRows([]byte(committed)); !found || rows != 6 {
+		t.Errorf("the committed REPOS.md has %d wiring rows (block found %v), want the old 6", rows, found)
 	}
 }

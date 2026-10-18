@@ -12,7 +12,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-// shrunkRun starts a run whose pointer move meets a INDEX.md that kept 1 of its 10 rows; the move's
+// shrunkRun starts a run whose pointer move meets an INDEX.md that kept 1 of its 10 rows; the move's
 // acceptance check passes while ok.flag is in the project.
 func shrunkRun(t *testing.T) *run.Run {
 	t.Helper()
