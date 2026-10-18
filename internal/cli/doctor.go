@@ -56,6 +56,7 @@ func (c *command) doctor(args []string) int {
 	if factory != nil {
 		checkRealms(factory, report)
 		checkBudget(factory, report)
+		checkGrader(factory, report)
 		c.checkSandbox(f.project, factory, report)
 	}
 	runs := filepath.Join(f.project, ".factory", "runs")
@@ -251,6 +252,61 @@ func (c *command) checkSandbox(project string, f *schema.Factory, report func(le
 		}
 	}
 	report("OK", "sandboxes", fmt.Sprintf("%d container(s) of ygg runs", len(left)))
+	if f.Grader != nil {
+		c.checkGraders(d, project, report)
+	}
+}
+
+// checkGrader says how many tasks the grader's folder holds, and that its two folders are there.
+func checkGrader(f *schema.Factory, report func(level, what, msg string)) {
+	g := f.Grader
+	if g == nil {
+		return
+	}
+	tasks, err := os.ReadDir(g.TasksDir)
+	if err != nil {
+		report("ERROR", "grader", "tasks_dir: "+err.Error())
+		return
+	}
+	n := 0
+	for _, e := range tasks {
+		if _, err := os.Stat(filepath.Join(g.TasksDir, e.Name(), "task.toml")); err == nil {
+			n++
+		}
+	}
+	if st, err := os.Stat(g.SuiteDir); err != nil || !st.IsDir() {
+		report("ERROR", "grader", "suite_dir "+g.SuiteDir+" is not a folder")
+		return
+	}
+	report("OK", "grader", fmt.Sprintf("%d task(s) in %s, suites in %s", n, g.TasksDir, g.SuiteDir))
+}
+
+// checkGraders finds the grader containers a killed ygg left, by their label, and removes the ones no
+// live run holds: a container of the grader is removed by Grade itself, so one that is left means ygg
+// died while it ran.
+func (c *command) checkGraders(d *sandbox.Driver, project string, report func(level, what, msg string)) {
+	left, err := d.GraderLeftovers(c.ctx)
+	if err != nil {
+		report("ERROR", "graders", err.Error())
+		return
+	}
+	for _, l := range left {
+		short := l.Container[:min(12, len(l.Container))]
+		dir := run.Dir(project, l.Run)
+		switch _, err := os.Stat(dir); {
+		case !run.ValidID(l.Run) || err != nil:
+			report("WARN", "graders", fmt.Sprintf("container %s of run %s belongs to another project; doctor in that project removes it", short, l.Run))
+		case run.Locked(dir):
+			// A live ygg is grading.
+		default:
+			if err := d.RemoveGrader(c.ctx, l.Container); err != nil {
+				report("ERROR", "graders", fmt.Sprintf("couldn't remove %s of run %s: %v", short, l.Run, err))
+			} else {
+				report("WARN", "graders", fmt.Sprintf("run %s left the grader container %s (%s); removed it", l.Run, short, l.State))
+			}
+		}
+	}
+	report("OK", "graders", fmt.Sprintf("%d grader container(s) of ygg runs", len(left)))
 }
 
 // checkTree walks the instance tree from root, checking out nothing, and warns when a public
