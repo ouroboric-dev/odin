@@ -116,8 +116,12 @@ func judgeOne(ctx context.Context, imp *Impact, c Change, d Differ) Judgement {
 	return Judgement{Pass, ev, c.Path + ": no leaf reads this contract (a lower bound)", nil}
 }
 
-// OasdiffCLI runs the oasdiff program: `oasdiff changelog old new` says whether anything changed, and
-// `oasdiff breaking --fail-on ERR old new` exits 1 when a change breaks a client. The contracts are
+// noExternalRefs stops oasdiff from following $ref to other files or URLs: a contract an agent wrote must
+// not read the sibling file (both sit in one folder) or make the host fetch an address.
+const noExternalRefs = "--allow-external-refs=false"
+
+// OasdiffCLI runs the oasdiff program (v1.x): `oasdiff diff --fail-on-diff old new` exits 1 when the specs
+// differ, and `oasdiff breaking --fail-on ERR old new` exits 1 when a change breaks a client. The contracts are
 // written to a new folder only Odin can read, and the program gets no environment but PATH.
 type OasdiffCLI struct{ Bin string }
 
@@ -155,15 +159,19 @@ func (o OasdiffCLI) Diff(ctx context.Context, old, new []byte) (Delta, error) {
 		}
 		return stdout.Bytes(), 0, err
 	}
-	out, code, err := run("changelog", "old.yaml", "new.yaml")
-	if err != nil || code != 0 {
-		return Delta{}, fmt.Errorf("oasdiff changelog: exit %d, %v", code, err)
+	// `diff --fail-on-diff` exits 0 when the specs do not differ and 1 when they do; its report is never
+	// empty, so the exit code is the answer. Any other exit is an error, never "no change".
+	_, code, err := run("diff", "--fail-on-diff", noExternalRefs, "old.yaml", "new.yaml")
+	switch {
+	case err != nil:
+		return Delta{}, fmt.Errorf("oasdiff diff: %w", err)
+	case code == 0:
+		return Delta{}, nil
+	case code != 1:
+		return Delta{}, fmt.Errorf("oasdiff diff: exit %d", code)
 	}
-	d := Delta{Changed: len(bytes.TrimSpace(out)) > 0}
-	if !d.Changed {
-		return d, nil
-	}
-	_, code, err = run("breaking", "--fail-on", "ERR", "old.yaml", "new.yaml")
+	d := Delta{Changed: true}
+	_, code, err = run("breaking", "--fail-on", "ERR", noExternalRefs, "old.yaml", "new.yaml")
 	switch {
 	case err != nil:
 		return Delta{}, fmt.Errorf("oasdiff breaking: %w", err)

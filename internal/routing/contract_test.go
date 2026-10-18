@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -72,29 +73,41 @@ func TestAnInferredOnlyEdgeNeverGivesPass(t *testing.T) {
 	}
 }
 
-func TestOasdiffCLIAsksChangelogAndBreaking(t *testing.T) {
+// oasdiffStandIn models the real oasdiff (v1.x): `diff` always prints a report, and with --fail-on-diff exits 0
+// when the specs do not differ and 1 when they do; `breaking --fail-on ERR` exits 1 on a breaking change; any
+// other exit is an error (here: a new file that says BROKEN). It logs its arguments next to itself.
+func oasdiffStandIn(t *testing.T) string {
+	t.Helper()
 	bin := filepath.Join(t.TempDir(), "oasdiff")
 	// oasdiff reads two files an agent's leaf wrote; it gets PATH and nothing else of Odin's environment.
 	t.Setenv("YGG_TEST_SECRET", "must not reach oasdiff")
 	script := `#!/bin/sh
 [ -z "${YGG_TEST_SECRET:-}" ] || { echo "the environment leaked" >&2; exit 9; }
-# a stand-in: "changelog" prints a line when the files differ; "breaking" exits 1 when the new file says BREAKING
+echo "$@" >> "$(dirname "$0")/args.log"
 cmd=$1; shift
-for last; do :; done
+for a; do old=$new; new=$a; done
+grep -q BROKEN "$new" && { echo "load failed" >&2; exit 102; }
 case $cmd in
-changelog) cmp -s "$1" "$2" || echo "changed";;
-breaking) grep -q BREAKING "$last" && exit 1; exit 0;;
+diff) echo "info: {}"; cmp -s "$old" "$new" || exit 1;;
+breaking) grep -q BREAKING "$new" && exit 1;;
+*) exit 3;;
 esac
+exit 0
 `
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return bin
+}
+
+func TestOasdiffCLIAsksDiffAndBreaking(t *testing.T) {
+	bin := oasdiffStandIn(t)
 	d := OasdiffCLI{Bin: bin}
 	for _, c := range []struct {
 		old, new string
 		want     Delta
 	}{
-		{"a", "a", Delta{}},
+		{"a", "a", Delta{}}, // the report is never empty, yet no difference is no change
 		{"a", "b", Delta{Changed: true}},
 		{"a", "BREAKING", Delta{Changed: true, Breaking: true}},
 	} {
@@ -103,7 +116,49 @@ esac
 			t.Errorf("Diff(%q, %q) = %+v, %v; want %+v", c.old, c.new, got, err, c.want)
 		}
 	}
+	if _, err := d.Diff(context.Background(), []byte("a"), []byte("BROKEN")); err == nil {
+		t.Error("an error exit of oasdiff is not an error")
+	}
 	if _, err := (OasdiffCLI{Bin: filepath.Join(t.TempDir(), "missing")}).Diff(context.Background(), nil, nil); err == nil {
 		t.Error("a missing binary is not an error")
+	}
+	// The flag set is what the oasdiff v1.33 source accepts: diff --fail-on-diff, no external $refs.
+	log, err := os.ReadFile(filepath.Join(filepath.Dir(bin), "args.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(log)), "\n") {
+		var want string
+		switch {
+		case strings.HasPrefix(line, "diff "):
+			want = "diff --fail-on-diff --allow-external-refs=false old.yaml new.yaml"
+		case strings.HasPrefix(line, "breaking "):
+			want = "breaking --fail-on ERR --allow-external-refs=false old.yaml new.yaml"
+		}
+		if line != want {
+			t.Errorf("oasdiff was run as %q, want %q", line, want)
+		}
+	}
+}
+
+// With the real exit codes the judge can reach every branch: no difference is the layout-only pass, a
+// difference is a fail on oasdiff evidence, and an error leaves the decision to the index (never a pass of a guess).
+func TestJudgeWithTheRealOasdiffExitCodes(t *testing.T) {
+	d := OasdiffCLI{Bin: oasdiffStandIn(t)}
+	imp := contractIndex()
+	for _, c := range []struct {
+		name     string
+		ch       Change
+		verdict  Verdict
+		evidence Evidence
+	}{
+		{"layout only", Change{Path: "api/a.openapi.yaml", Old: []byte("a"), New: []byte("a")}, Pass, Oasdiff},
+		{"a difference", Change{Path: "api/a.openapi.yaml", Old: []byte("a"), New: []byte("b")}, Fail, Oasdiff},
+		{"an error on a listed guess", Change{Path: "api/b.openapi.yaml", Old: []byte("a"), New: []byte("BROKEN")}, Escalate, Inferred},
+		{"an error on an unlisted file", Change{Path: "api/new.openapi.yaml", Old: []byte("a"), New: []byte("BROKEN")}, Escalate, Inferred},
+	} {
+		if j := Judge(context.Background(), imp, []Change{c.ch}, d); j.Verdict != c.verdict || j.Evidence != c.evidence {
+			t.Errorf("%s: %+v; want %s on %s", c.name, j, c.verdict, c.evidence)
+		}
 	}
 }
