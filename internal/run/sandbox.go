@@ -7,6 +7,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
@@ -161,23 +162,62 @@ func (e *SnapshotError) Error() string {
 }
 func (e *SnapshotError) Unwrap() error { return e.Err }
 
-// snapshotSources are the repos a snapshot is made of: the project umbrella, then each leaf of the project
-// that is checked out.
+// snapshotSources are the repos a snapshot is made of: the project umbrella, then each leaf of the project.
+// A leaf is taken at the commit revs names for its path, and otherwise at the commit its parent umbrella
+// records for it (the gitlink at the umbrella's HEAD), never at whatever its working copy is on. A leaf that
+// is not checked out, with no record of it in its umbrella, or without the recorded commit, is an error
+// that names it: a snapshot that lacks a leaf, or holds another commit of it, would pass checks that
+// should fail (B-048 M-1).
 func (r *Run) snapshotSources(ctx context.Context, revs map[string]string) ([]snapshot.Source, error) {
 	p := r.Setup.Project
 	sources := []snapshot.Source{{Rel: ".", Repo: git.Repo{GitDir: p.GitDir, WorkTree: p.Dir}}}
+	byPath := map[string]tree.Node{}
+	if err := tree.Walk(ctx, r.Setup.Root, func(n tree.Node) error { byPath[n.Path] = n; return nil }); err != nil {
+		return nil, err
+	}
 	for _, path := range r.Setup.projectLeaves() {
-		nodes, err := tree.Resolve(ctx, r.Setup.Root, filepath.Join(r.Setup.ProjectPath, path))
-		if err != nil {
-			return nil, err
+		full := filepath.Join(r.Setup.ProjectPath, path)
+		n, ok := byPath[full]
+		if !ok || !n.Present {
+			return nil, fmt.Errorf("the leaf %s is not checked out", path)
 		}
-		n := nodes[len(nodes)-1]
-		if !n.Present {
-			continue
+		parent := byPath[""]
+		for d := filepath.Dir(full); d != "."; d = filepath.Dir(d) {
+			if u, ok := byPath[d]; ok {
+				parent = u
+				break
+			}
 		}
-		sources = append(sources, snapshot.Source{Rel: path, Repo: git.Repo{GitDir: n.GitDir, WorkTree: n.Dir}, Rev: revs[path]})
+		repo := git.Repo{GitDir: n.GitDir, WorkTree: n.Dir}
+		rev := revs[path]
+		if rev == "" {
+			rel, err := filepath.Rel(parent.Path, full)
+			if err != nil {
+				return nil, err
+			}
+			if rev, err = recordedCommit(ctx, git.Repo{GitDir: parent.GitDir, WorkTree: parent.Dir}, filepath.ToSlash(rel)); err != nil {
+				return nil, fmt.Errorf("the leaf %s: %w", path, err)
+			}
+		}
+		if _, err := repo.Run(ctx, "cat-file", "-e", rev+"^{commit}"); err != nil {
+			return nil, fmt.Errorf("the leaf %s does not have the commit %s", path, rev)
+		}
+		sources = append(sources, snapshot.Source{Rel: path, Repo: repo, Rev: rev})
 	}
 	return sources, nil
+}
+
+// recordedCommit is the commit the umbrella repo records for its child at rel: the gitlink in its HEAD.
+func recordedCommit(ctx context.Context, umbrella git.Repo, rel string) (string, error) {
+	out, err := umbrella.Run(ctx, "ls-tree", "HEAD", "--", rel)
+	if err != nil {
+		return "", err
+	}
+	f := strings.Fields(strings.SplitN(out, "\t", 2)[0])
+	if len(f) != 3 || f[0] != "160000" {
+		return "", fmt.Errorf("its umbrella records no commit for %s", rel)
+	}
+	return f[2], nil
 }
 
 // DownSandboxes stops every sandbox this process or an earlier one started for the run, and clears

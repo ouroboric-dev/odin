@@ -1,6 +1,7 @@
 package run
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,8 +79,9 @@ func TestTheSnapshotIsMadeAgainEveryTimeAndTheSandboxStartsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var revs map[string]string
 	for i := 0; i < 2; i++ {
-		if _, err := r.SnapshotRunner(ctx, "move", nil); err != nil {
+		if _, err := r.SnapshotRunner(ctx, "move", revs); err != nil {
 			t.Fatal(err)
 		}
 		if i == 0 {
@@ -90,7 +92,8 @@ func TestTheSnapshotIsMadeAgainEveryTimeAndTheSandboxStartsOnce(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(r.Dir, "snapshot", "move", "repos", "api", "README.md")); err != nil {
 				t.Errorf("the snapshot holds only the leaves the run works in: %v", err)
 			}
-			// A commit made in the leaf between the two snapshots is in the second one.
+			// A commit made in the leaf between the two snapshots is in the second one when the node moves the
+			// leaf to it; a leaf the node does not move stays at the commit the umbrella records.
 			dir := r.RepoDir("repos/app")
 			os.WriteFile(filepath.Join(dir, "later.txt"), []byte("later\n"), 0o644)
 			for _, args := range [][]string{{"add", "later.txt"}, {"commit", "-q", "-m", "later"}} {
@@ -99,6 +102,12 @@ func TestTheSnapshotIsMadeAgainEveryTimeAndTheSandboxStartsOnce(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			l, _ := r.Leaf("repos/app")
+			head, err := l.Git(ctx, "rev-parse", "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			revs = map[string]string{"repos/app": strings.TrimSpace(head)}
 		}
 	}
 	if _, err := os.Stat(filepath.Join(r.Dir, "snapshot", "move", "repos", "app", "later.txt")); err != nil {
@@ -130,5 +139,74 @@ func TestARealmWithNoAcceptanceStackHasNoSnapshotSandbox(t *testing.T) {
 	}
 	if len(fake.Ups) != 0 {
 		t.Error("a sandbox came up without a stack for it")
+	}
+}
+
+// B-048 M-1: the snapshot takes a leaf at the commit the umbrella records (the gitlink), not at the commit
+// the leaf's working copy happens to be on. The leaf the node moves is the exception: revs names its commit.
+func TestTheSnapshotTakesAnotherLeafAtTheCommitTheUmbrellaRecords(t *testing.T) {
+	r, _, err := snapshotRun(t, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := r.Leaf("repos/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.RepoDir("repos/api"), "later.txt"), []byte("past the recorded commit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "later.txt"}, {"commit", "-q", "-m", "later"}} {
+		if _, err := l.Git(ctx, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.SnapshotRunner(ctx, "move", nil); err != nil {
+		t.Fatalf("SnapshotRunner() = %v", err)
+	}
+	snap := filepath.Join(r.Dir, "snapshot", "move", "repos", "api")
+	if _, err := os.Stat(filepath.Join(snap, "README.md")); err != nil {
+		t.Errorf("the snapshot lacks the recorded commit's files: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(snap, "later.txt")); err == nil {
+		t.Error("the snapshot holds a commit the umbrella does not record; it took the leaf's HEAD")
+	}
+}
+
+func TestTheSnapshotRefusesALeafThatIsNotCheckedOut(t *testing.T) {
+	r, fake, err := snapshotRun(t, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(r.Setup.Root, ".git", "modules", "repos", "api")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.SnapshotRunner(ctx, "move", nil)
+	var se *SnapshotError
+	if !errors.As(err, &se) || !strings.Contains(err.Error(), "repos/api") || !strings.Contains(err.Error(), "not checked out") {
+		t.Errorf("SnapshotRunner() = %v; want a *SnapshotError naming repos/api as not checked out", err)
+	}
+	if len(fake.Ups) != 0 {
+		t.Error("a sandbox came up over a snapshot that lacks a leaf")
+	}
+}
+
+func TestTheSnapshotRefusesALeafThatLacksTheRecordedCommit(t *testing.T) {
+	r, _, err := snapshotRun(t, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A leaf whose history was replaced: its objects no longer hold the commit the umbrella records.
+	gitDir := filepath.Join(r.Setup.Root, ".git", "modules", "repos", "api")
+	if err := os.RemoveAll(filepath.Join(gitDir, "objects")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(gitDir, "objects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.SnapshotRunner(ctx, "move", nil)
+	var se *SnapshotError
+	if !errors.As(err, &se) || !strings.Contains(err.Error(), "repos/api") {
+		t.Errorf("SnapshotRunner() = %v; want a *SnapshotError naming repos/api", err)
 	}
 }
