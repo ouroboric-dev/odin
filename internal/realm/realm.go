@@ -4,6 +4,7 @@
 package realm
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/git"
 )
 
 // Realm is a realm leaf as a run loaded it.
@@ -62,7 +64,9 @@ type limits struct{ files, bytes int64 }
 var defaultLimits = limits{files: 5000, bytes: 64 << 20}
 
 // Hash returns a SHA-256 over every file of the realm but the contents of .git: each file's path, its
-// executable bit and its bytes, in path order. A run records it, and a resume refuses a realm whose hash
+// executable bit and its bytes, in path order. A realm folder that is a git repository is its committed
+// files at HEAD (see hashCommitted): git-ignored build output and untracked files are not part of it
+// (B-050). Any other folder is hashed as it is on disk. A run records it, and a resume refuses a realm whose hash
 // changed (spec §4.3: the run's positions mean what they meant). A realm holds regular files and folders
 // only: a symlink anywhere in it is refused, since a run reads prompts, first-commit files and the
 // template by following links, so a link could read outside the realm, and a change at its target would
@@ -75,6 +79,12 @@ func hashLimited(dir string, lim limits) (string, error) {
 		return "", err
 	} else if st.Mode()&fs.ModeSymlink != 0 {
 		return "", fmt.Errorf("%s is a symlink; a realm holds its own files and folders, and a link could lead out of it", dir)
+	}
+	// A .git that git does not accept as a repo (a stray folder, say) leaves the realm a plain folder.
+	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+		if gitDir, err := git.Run(context.Background(), dir, "rev-parse", "--absolute-git-dir"); err == nil {
+			return hashCommitted(gitDir, dir, lim)
+		}
 	}
 	h := sha256.New()
 	var files, size int64
