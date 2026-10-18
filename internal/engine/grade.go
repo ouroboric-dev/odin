@@ -83,6 +83,11 @@ func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 	if err := r.NoSandboxesLeft(); err != nil {
 		return nil, &GradeFailed{err}
 	}
+	// A score.json from an earlier attempt that died before grade_finished must not outlive this one: the
+	// last grade_* event of the ledger is authoritative, and a refused or failed attempt leaves no score.
+	if err := os.Remove(filepath.Join(r.Dir, "score.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	if taskID == "" {
 		var ok bool
 		if taskID, ok = taskOfBrief(cfg.TasksDir, r.State.Brief); !ok {
