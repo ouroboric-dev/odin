@@ -20,7 +20,7 @@ const contractNodes = build + "  - { id: merge, kind: merge, repo: repos/app, ch
 func scriptWriting(files ...string) string {
 	s := "steps:\n  a:\n    - actions:\n        - write: { path: out.txt, content: \"done\\n\" }\n"
 	for _, f := range files {
-		s += "        - write: { path: " + f + ", content: \"openapi: 3.0.3\\ninfo: { title: T, version: 2.0.0 }\\n\" }\n"
+		s += "        - write: { path: \"" + f + "\", content: \"openapi: 3.0.3\\ninfo: { title: T, version: 2.0.0 }\\n\" }\n"
 	}
 	return s + "      result: { status: ok, summary: wrote files, usage: { in: 1, out: 1, cache: 0, turns: 1, cost_usd: 0.01 } }\n"
 }
@@ -152,5 +152,20 @@ func TestACorruptShippedIndexEscalatesTheMove(t *testing.T) {
 	}
 	if text := ledgerText(t, r); !strings.Contains(text, `"ygg.pointer.evidence":"inferred","ygg.verdict":"escalate"`) {
 		t.Error("the ledger lacks the escalation")
+	}
+}
+
+// A name git lists with a leading space is a different file. A trim of the -z list would map it to the
+// listed contract, and a contract the index never heard of would pass as one nobody reads.
+func TestAContractWithALeadingSpaceIsNotTheListedContract(t *testing.T) {
+	noOasdiff(t)
+	r := startPack(t, "unattended", "", packChecks, contractNodes, scriptWriting(" api.openapi.yaml"))
+	shipIndex(t, r, routing.Reached{}) // lists api.openapi.yaml with no readers: a change there would pass
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusStopped || out.Gate != "contract-gate" {
+		t.Fatalf("Advance() = %+v, %v; want a stop", out, err)
+	}
+	if text := ledgerText(t, r); !strings.Contains(text, `"ygg.pointer.evidence":"inferred","ygg.verdict":"escalate"`) {
+		t.Errorf("the ledger lacks the escalation:\n%s", text)
 	}
 }

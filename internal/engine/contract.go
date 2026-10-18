@@ -86,12 +86,12 @@ func contractJudgement(ctx context.Context, r *run.Run, gateNode schema.Node) (r
 				Reason: fmt.Sprintf("the shipped %s can't be read (%v), so the move can't be judged", routing.ImpactFile, err)}, move, nil
 		}
 	}
-	names, err := l.Git(ctx, "diff", "-z", "--name-only", "--no-renames", from, to)
+	names, err := l.Output(ctx, "diff", "-z", "--name-only", "--no-renames", from, to)
 	if err != nil {
 		return routing.Judgement{}, "", err
 	}
 	var changes []routing.Change
-	for _, f := range strings.Split(names, "\x00") {
+	for _, f := range strings.Split(string(names), "\x00") {
 		if f == "" || !routing.IsContractName(f) {
 			continue
 		}
@@ -100,11 +100,11 @@ func contractJudgement(ctx context.Context, r *run.Run, gateNode schema.Node) (r
 				Reason: fmt.Sprintf("the move changes more than %d contract files", maxContractChanges)}, move, nil
 		}
 		c := routing.Change{Path: path.Join(child, f)}
-		if old, err := l.Git(ctx, "show", from+":"+f); err == nil {
-			c.Old = []byte(old)
+		if old, err := l.Output(ctx, "show", from+":"+f); err == nil {
+			c.Old = old
 		}
-		if nw, err := l.Git(ctx, "show", to+":"+f); err == nil {
-			c.New = []byte(nw)
+		if nw, err := l.Output(ctx, "show", to+":"+f); err == nil {
+			c.New = nw
 		}
 		changes = append(changes, c)
 	}
