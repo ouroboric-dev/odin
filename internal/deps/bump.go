@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -224,6 +226,10 @@ func (b *Bumper) apply(ctx context.Context, runner gungnir.Runner, snap *Snapsho
 	if reason := wrongManifest(pkg, to, pl); reason != "" {
 		return "fail", reason, nil
 	}
+	frozen, err := freeze(pl)
+	if err != nil {
+		return "", "", err
+	}
 	for _, name := range Ladder {
 		res, err := run(name, pl.p.Checks[name])
 		if err != nil {
@@ -250,6 +256,16 @@ func (b *Bumper) apply(ctx context.Context, runner gungnir.Runner, snap *Snapsho
 	}
 	if reason := wrongManifest(pkg, to, pl); reason != "" {
 		return "fail", reason, nil
+	}
+	// The deps rung judged the lock before the unit rung ran: after the tool, the lock must not move.
+	now, err := freeze(pl)
+	if err != nil {
+		return "", "", err
+	}
+	for _, f := range pl.m.Kind.Files() {
+		if now[f] != frozen[f] {
+			return "fail", "the checks changed " + f + " after the tool ran; the deps rung judged the old one", nil
+		}
 	}
 	return "pass", "", nil
 }
@@ -287,4 +303,33 @@ func cut(s string, n int) string {
 		return s[:n]
 	}
 	return s
+}
+
+// freeze reads the manifest and lock files the bump may change, as they are after the tool ran. A file that
+// is not there, or that is a symlink, is a value too: its target, or a marker.
+func freeze(pl plan) (map[string]string, error) {
+	out := map[string]string{}
+	for _, f := range pl.m.Kind.Files() {
+		p := filepath.Join(pl.p.Dir, f)
+		info, err := os.Lstat(p)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			out[f] = "\x00absent"
+		case err != nil:
+			return nil, err
+		case info.Mode()&fs.ModeSymlink != 0:
+			l, err := os.Readlink(p)
+			if err != nil {
+				return nil, err
+			}
+			out[f] = "\x00link:" + l
+		default:
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return nil, err
+			}
+			out[f] = "file:" + string(b)
+		}
+	}
+	return out, nil
 }

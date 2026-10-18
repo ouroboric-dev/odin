@@ -145,6 +145,7 @@ func TestNpmBumpKeepsTheTildeAndRunsNoScript(t *testing.T) {
 }
 
 type npmWorld struct {
+	unit  func() // what the unit rung does to the product
 	dir   string
 	got   *[]string
 	exact bool // the tool drops the tilde, as an .npmrc with save-exact=true would
@@ -156,6 +157,9 @@ func (n *npmWorld) Open(context.Context, Product) (gungnir.Runner, func(context.
 
 func (n *npmWorld) Run(_ context.Context, c gungnir.Cmd) (gungnir.ExecResult, error) {
 	*n.got = append(*n.got, strings.Join(c.Argv, " "))
+	if c.Argv[0] == "web-unit.sh" && n.unit != nil {
+		n.unit()
+	}
 	if c.Argv[0] == "npm" {
 		spec := "~19.1.4"
 		if n.exact {
@@ -248,5 +252,36 @@ func TestAnUnscopedNpmNameWithASlashIsRefused(t *testing.T) {
 	var refusal *Refusal
 	if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "GitHub") || len(got) != 0 {
 		t.Errorf("error %v, commands %v", err, got)
+	}
+}
+
+func TestAUnitRungThatRewritesTheLockFailsTheProductAndTheLockIsPutBack(t *testing.T) {
+	w := newWorld(t, map[string]string{"api": "0.41.0"})
+	w.during["api:unit"] = [2]string{"go.sum", "golang.org/x/text v0.42.0 h1:bbb=\r\nevil.invalid/x v1.0.0 h1:ccc=\r\n"}
+	before := w.bytes("api")
+	rep, err := w.bumper().Bump(context.Background(), "golang.org/x/text", "0.42.0", w.product("api"), nil)
+	if err != nil || !rep.Failed() || !strings.Contains(rep.Steps[0].Reason, "go.sum") {
+		t.Fatalf("report %+v, error %v", rep, err)
+	}
+	if !same2(before, w.bytes("api")) {
+		t.Error("go.mod and go.sum are not as they were")
+	}
+}
+
+func TestAUnitRungThatRewritesAnNpmLockFailsTheProductAndTheLockIsPutBack(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "package.json", `{"dependencies":{"react":"~19.1.0"}}`)
+	write(t, dir, "package-lock.json", "{}\n")
+	var got []string
+	w := &npmWorld{dir: dir, got: &got}
+	w.unit = func() { os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte("{\"evil\":1}\n"), 0o644) }
+	b := &Bumper{Open: w, LogDir: filepath.Join(dir, "..", "logs"), Log: func(gungnir.Event) error { return nil }}
+	p := Product{Name: "web", Dir: dir, Realm: "midgard-react", Checks: map[string][]string{"deps": {"web-deps.sh"}, "unit": {"web-unit.sh"}}}
+	rep, err := b.Bump(context.Background(), "react", "19.1.4", p, nil)
+	if err != nil || !rep.Failed() || !strings.Contains(rep.Steps[0].Reason, "package-lock.json") {
+		t.Fatalf("report %+v, error %v", rep, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "package-lock.json")); string(b) != "{}\n" {
+		t.Errorf("package-lock.json = %q", b)
 	}
 }
