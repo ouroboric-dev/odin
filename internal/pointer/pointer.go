@@ -90,7 +90,7 @@ func Move(ctx context.Context, s Spec) (Result, error) {
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return res, err
 			}
-			if err := shrink.Check(f, []byte(prev), next); err != nil {
+			if err := shrink.Guard(f, []byte(prev), next); err != nil {
 				return res, err
 			}
 		}

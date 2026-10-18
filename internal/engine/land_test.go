@@ -71,14 +71,14 @@ func TestAPointerNodeMovesTheProjectsPointer(t *testing.T) {
 }
 
 func TestAShrunkGeneratedFileStopsAtTheShrinkGuard(t *testing.T) {
-	nodes := build + "  - { id: index, kind: exec, run: [sh, -c, \"echo '| one |' > REPOS.md\"], repo: . }\n" +
+	nodes := build + "  - { id: index, kind: exec, run: [sh, -c, \"echo '| one |' > INDEX.md\"], repo: . }\n" +
 		"  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +
-		"  - { id: move, kind: pointer, repo: repos/app, generated: [REPOS.md] }\n"
+		"  - { id: move, kind: pointer, repo: repos/app, generated: [INDEX.md] }\n"
 	r := startPack(t, "unattended", "", packChecks, nodes, okScript)
-	if err := os.WriteFile(filepath.Join(r.Project, "REPOS.md"), []byte(strings.Repeat("| row |\n", 10)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(r.Project, "INDEX.md"), []byte(strings.Repeat("| row |\n", 10)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"add", "REPOS.md"}, {"commit", "-q", "-m", "REPOS.md"}} {
+	for _, args := range [][]string{{"add", "INDEX.md"}, {"commit", "-q", "-m", "INDEX.md"}} {
 		if _, err := git.Run(bg, r.Project, args...); err != nil {
 			t.Fatal(err)
 		}
@@ -99,8 +99,8 @@ func TestAShrunkGeneratedFileStopsAtTheShrinkGuard(t *testing.T) {
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() after approval = %+v, %v", out, err)
 	}
-	if files, _ := git.Run(bg, r.Project, "show", "--name-only", "--format=", "HEAD"); files != "REPOS.md\nrepos/app" {
-		t.Errorf("the approved move commits %q, want the shrunk REPOS.md with the pointer", files)
+	if files, _ := git.Run(bg, r.Project, "show", "--name-only", "--format=", "HEAD"); files != "INDEX.md\nrepos/app" {
+		t.Errorf("the approved move commits %q, want the shrunk INDEX.md with the pointer", files)
 	}
 }
 

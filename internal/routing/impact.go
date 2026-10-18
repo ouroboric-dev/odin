@@ -311,3 +311,13 @@ func ParseImpact(b []byte) (*Impact, error) {
 	}
 	return &i, nil
 }
+
+// ImpactRows counts what an impact index holds: its edges, its contracts and its reach entries. ok is
+// false when b is not an impact index.
+func ImpactRows(b []byte) (rows int, ok bool) {
+	i, err := ParseImpact(b)
+	if err != nil {
+		return 0, false
+	}
+	return i.Edges + len(i.Contracts) + len(i.Reach), true
+}

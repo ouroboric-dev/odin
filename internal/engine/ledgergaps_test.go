@@ -12,25 +12,25 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-// shrunkRun starts a run whose pointer move meets a REPOS.md that kept 1 of its 10 rows; the move's
+// shrunkRun starts a run whose pointer move meets a INDEX.md that kept 1 of its 10 rows; the move's
 // acceptance check passes while ok.flag is in the project.
 func shrunkRun(t *testing.T) *run.Run {
 	t.Helper()
 	nodes := build + "  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +
-		"  - { id: move, kind: pointer, repo: repos/app, acceptance: [flag], generated: [REPOS.md] }\n"
+		"  - { id: move, kind: pointer, repo: repos/app, acceptance: [flag], generated: [INDEX.md] }\n"
 	r := startPack(t, "unattended", "", packChecks+"  flag: [test, -f, ok.flag]\n", nodes, okScript)
 	if err := os.WriteFile(filepath.Join(r.Project, "ok.flag"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(r.Project, "REPOS.md"), []byte(strings.Repeat("| row |\n", 10)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(r.Project, "INDEX.md"), []byte(strings.Repeat("| row |\n", 10)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"add", "REPOS.md"}, {"commit", "-q", "-m", "REPOS.md"}} {
+	for _, args := range [][]string{{"add", "INDEX.md"}, {"commit", "-q", "-m", "INDEX.md"}} {
 		if _, err := git.Run(bg, r.Project, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(r.Project, "REPOS.md"), []byte("| one |\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(r.Project, "INDEX.md"), []byte("| one |\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return r

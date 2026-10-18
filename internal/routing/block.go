@@ -71,3 +71,23 @@ func WriteWiring(dir string, edges []Edge) error {
 	}
 	return os.WriteFile(p, out, 0o644)
 }
+
+// WiringRows counts the edges in the wiring block of doc: the table rows between the markers. found is
+// false when doc has no block.
+func WiringRows(doc []byte) (rows int, found bool) {
+	i := bytes.Index(doc, []byte(BeginMarker))
+	j := bytes.Index(doc, []byte(EndMarker))
+	if i < 0 || j < i {
+		return 0, false
+	}
+	inTable := false
+	for _, line := range strings.Split(string(doc[i:j]), "\n") {
+		switch {
+		case strings.HasPrefix(line, "|---"):
+			inTable = true
+		case inTable && strings.HasPrefix(line, "| "):
+			rows++
+		}
+	}
+	return rows, true
+}

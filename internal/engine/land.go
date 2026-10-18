@@ -101,6 +101,9 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err != nil {
 		return err
 	}
+	if err := shipRouting(r, n, attempt, parent); err != nil {
+		return err
+	}
 	s := r.State
 	began := time.Now()
 	res, moveErr := pointer.Move(ctx, pointer.Spec{Parent: parent, Child: child, Leaf: l, To: to,
