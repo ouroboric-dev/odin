@@ -110,6 +110,8 @@ func TestWiringIgnoresSymlinksHugeFilesAndNamesThatBreakTheTable(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(dir, "web/package.json"), []byte(`{"dependencies":{"a|b":"1.0.0","x\n`+EndMarker+`":"1.0.0","ok":"1.0.0"}}`), 0o644)
 	os.WriteFile(filepath.Join(dir, "worker/big.go"), []byte("package big\n"+strings.Repeat("// pad\n", 200000)), 0o644)
+	// Over 1 MiB, and it would give the edge worker -requires-> api if it were read.
+	os.WriteFile(filepath.Join(dir, "worker/go.mod"), []byte("module example.test/worker\n\nrequire example.test/api v0.0.0\n"+strings.Repeat("// pad\n", 200000)), 0o644)
 	res, err := Wiring(dir, packs())
 	if err != nil {
 		t.Fatal(err)
@@ -121,6 +123,18 @@ func TestWiringIgnoresSymlinksHugeFilesAndNamesThatBreakTheTable(t *testing.T) {
 	}
 	if find(res.Edges, "web", "requires", "npm:ok") == nil {
 		t.Error("a good dependency was dropped with the bad ones")
+	}
+	if find(res.Edges, "worker", "requires", "api") != nil {
+		t.Error("a go.mod over the size limit gave an edge")
+	}
+	over := false
+	for _, k := range res.Skipped {
+		if strings.HasPrefix(k, "worker/go.mod: over ") {
+			over = true
+		}
+	}
+	if !over {
+		t.Errorf("skipped = %v; want worker/go.mod reported as over the limit", res.Skipped)
 	}
 	if len(res.Skipped) < 3 {
 		t.Errorf("skipped = %v; want the link, the two names and the big file reported", res.Skipped)
