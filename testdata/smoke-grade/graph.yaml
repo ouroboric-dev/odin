@@ -1,0 +1,25 @@
+# The smoke graph for the grader (spec §11): one implementer and one read-only reviewer in a bounded loop build
+# the product of a task in one leaf; the leaf is merged and the umbrella pointer moves; then the grade node
+# stops every sandbox, exports the project as /app and grades it against the task's suite. The caps are the
+# graph's: each session has a turn cap and a time cap. With scripted agents it costs nothing; with real agents
+# it costs a few dollars (see ouroboric/scripts/ygg-smoke-real.sh).
+name: smoke-grade
+version: 0.1.0
+nodes:
+  - id: build
+    kind: loop
+    repo: repos/notes
+    role: implementer
+    prompt: prompts/build.md
+    attempts: 2
+    max_turns: 40
+    timeout: 20m
+    checks: [unit]
+    reviewers:
+      - { id: review, role: reviewer, prompt: prompts/review.md, max_turns: 10, timeout: 5m }
+  - { id: feature-gate, kind: gate, gate: feature }
+  - { id: merge-gate, kind: gate, gate: merge }
+  - { id: merge, kind: merge, repo: repos/notes, checks: [unit] }
+  - { id: pointer-gate, kind: gate, gate: pointer }
+  - { id: pointer, kind: pointer, repo: repos/notes, checks: [unit] }
+  - { id: score, kind: grade }

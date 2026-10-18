@@ -76,6 +76,9 @@ const gradedNodes = buildNodes +
 const gradedScript = buildScript +
 	"  design:\n    - actions: [ { write: { path: out/design.md, content: \"# Design\\n\" } } ]\n      result: { status: ok, summary: designed }\n"
 
+// gradedLimits is the limits part of the grader block; a test changes it for one run.
+var gradedLimits = "  memory: 4g\n  cpus: 4\n"
+
 // startGraded starts a run of nodes whose brief is the task's instruction.md, with the fake sandbox and the
 // fake grader. results is what the fake suite writes.
 func startGraded(t *testing.T, nodes, results string, edit func(*tasktest.Task)) *graded {
@@ -97,7 +100,7 @@ func startGraded(t *testing.T, nodes, results string, edit func(*tasktest.Task))
 		filepath.Join(cfg, "factory.yaml"): "mode: unattended\ngates: { design: auto }\nroles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n" +
 			"budget:\n  per_run: { tokens: 100000, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\n" +
 			"sandbox:\n  engine: unix:///run/ygg-test.sock\n" +
-			"grader:\n  tasks_dir: " + tk.TasksDir + "\n  suite_dir: " + tk.SuiteDir + "\n  timeout: 30m\n  memory: 4g\n  cpus: 4\n",
+			"grader:\n  tasks_dir: " + tk.TasksDir + "\n  suite_dir: " + tk.SuiteDir + "\n  timeout: 30m\n" + gradedLimits,
 	}
 	for p, body := range files {
 		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
@@ -226,5 +229,20 @@ func TestEveryRefusalStopsTheRunBeforeAnythingIsBuilt(t *testing.T) {
 				t.Errorf("the ledger:\n%s", text)
 			}
 		})
+	}
+}
+
+// An engine that cannot apply limits gets none: the operator wrote `memory: none` and `cpus: 0`, and the driver
+// receives an empty memory and zero CPUs, not the words (the driver would refuse "none" as a limit).
+func TestNoLimitGoesToTheDriverAsNoLimit(t *testing.T) {
+	old := gradedLimits
+	gradedLimits = "  memory: none\n  cpus: 0\n"
+	defer func() { gradedLimits = old }()
+	g := startGraded(t, gradedNodes, tasktest.Results(map[string]string{}), nil)
+	if out := g.advance(t); out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v", out)
+	}
+	if spec := g.grader.Specs[0]; spec.Memory != "" || spec.CPUs != 0 {
+		t.Errorf("limits = %q, %d; want none", spec.Memory, spec.CPUs)
 	}
 }

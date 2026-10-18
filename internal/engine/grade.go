@@ -121,8 +121,9 @@ func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 	if err := os.MkdirAll(logs, 0o755); err != nil {
 		return nil, err
 	}
+	memory, cpus := cfg.Limits() // "none" and 0 are the operator's choice of no limit, for an engine that cannot apply one
 	res, err := r.Grader.Grade(ctx, sandbox.GradeSpec{Run: r.State.ID, Task: t.ID, Environment: t.Environment, App: app, Tests: t.Tests, Logs: logs,
-		Timeout: min(time.Duration(cfg.Timeout), t.Timeout), Memory: cfg.Memory, CPUs: cfg.CPUs, Env: t.Env})
+		Timeout: min(time.Duration(cfg.Timeout), t.Timeout), Memory: memory, CPUs: cpus, Env: t.Env})
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

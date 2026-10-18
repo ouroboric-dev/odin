@@ -279,6 +279,9 @@ func checkGrader(f *schema.Factory, report func(level, what, msg string)) {
 		return
 	}
 	report("OK", "grader", fmt.Sprintf("%d task(s) in %s, suites in %s", n, g.TasksDir, g.SuiteDir))
+	if m, c := g.Limits(); m == "" || c == 0 {
+		report("WARN", "grader", "the grader's container runs with no memory or CPU limit (grader.memory: none or cpus: 0); a suite that hangs or leaks is held by the timeout only")
+	}
 }
 
 // checkGraders finds the grader containers a killed ygg left, by their label, and removes the ones no

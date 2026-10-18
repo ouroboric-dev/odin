@@ -239,3 +239,17 @@ func TestDoctorChecksTheGraderSectionsFolders(t *testing.T) {
 		t.Errorf("doctor without a grader section: exit %d\n%s", code, out)
 	}
 }
+
+func TestDoctorWarnsWhenTheGraderRunsWithNoLimit(t *testing.T) {
+	dir, config, _, _ := gradedRun(t, true)
+	engineStub(t, tasktest.Results(nil), "[]")
+	if _, out, _ := ygg(t, "doctor", "--project", dir, "--config", config); strings.Contains(out, "no memory or CPU limit") {
+		t.Errorf("doctor warns about limits that are set:\n%s", out)
+	}
+	b, _ := os.ReadFile(config)
+	os.WriteFile(config, []byte(strings.NewReplacer("memory: 4g", "memory: none", "cpus: 4", "cpus: 0").Replace(string(b))), 0o644)
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	if code != ExitDone || !strings.Contains(out, "WARN  grader: the grader's container runs with no memory or CPU limit") {
+		t.Errorf("doctor with no limit: exit %d\n%s", code, out)
+	}
+}
