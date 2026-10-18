@@ -60,6 +60,28 @@ func TestSnapshotRestoresChangedRemovedAndCreatedFilesByteForByte(t *testing.T) 
 	}
 }
 
+func TestSnapshotSkipsOnlyTheTopLevelGitAndRestoresANestedOne(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, ".git/HEAD", "ref")
+	write(t, dir, "sub/a", "a")
+	snap, err := Take(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, ".git/HEAD", "moved") // the leaf's own .git is not the snapshot's
+	write(t, dir, "sub/.git/config", "[core]\nhooksPath = evil")
+	ch, err := snap.Changes()
+	if err != nil || len(ch) != 1 || ch[0] != "sub/.git/config" {
+		t.Fatalf("changes = %v, %v", ch, err)
+	}
+	if err := snap.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sub/.git")); !os.IsNotExist(err) {
+		t.Errorf("the nested .git is still there: %v", err)
+	}
+}
+
 func TestSnapshotRefusesAProductTooBigToUndo(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "f", "x")

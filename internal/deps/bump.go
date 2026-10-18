@@ -89,9 +89,15 @@ func (b *Bumper) Bump(ctx context.Context, pkg, version string, canary Product, 
 			rep.Steps = append(rep.Steps, step)
 			continue
 		}
-		var err error
-		if step.Verdict, step.Reason, err = b.stage(ctx, pkg, to, pl); err != nil {
+		// A line with no verdict says the tool is about to run: if the command dies, the ledger shows where.
+		if err := b.Log(gungnir.Event{Name: gungnir.EventDepsBump, Package: pkg, From: step.From, To: step.To,
+			Stage: pl.stage, Note: cut(pl.p.Name+": started", 400)}); err != nil {
 			return rep, err
+		}
+		var serr error
+		step.Verdict, step.Reason, serr = b.stage(ctx, pkg, to, pl)
+		if serr != nil && step.Verdict == "" {
+			return rep, serr // a cancel or a sandbox error: the product is back, and no verdict is claimed
 		}
 		rep.Steps = append(rep.Steps, step)
 		note := pl.p.Name
@@ -100,7 +106,10 @@ func (b *Bumper) Bump(ctx context.Context, pkg, version string, canary Product, 
 		}
 		if err := b.Log(gungnir.Event{Name: gungnir.EventDepsBump, Package: pkg, From: step.From, To: step.To,
 			Stage: pl.stage, Verdict: step.Verdict, Note: cut(note, 400)}); err != nil {
-			return rep, err
+			return rep, errors.Join(serr, err)
+		}
+		if serr != nil { // a product that could not be put back: the ledger says so, and the bump ends
+			return rep, serr
 		}
 		if step.Verdict == "fail" {
 			break
@@ -144,6 +153,9 @@ func (b *Bumper) plan(pkg, version string, canary Product, rollout []Product) ([
 		if err != nil {
 			return refuse("%s: %v", p.Name, err)
 		}
+		if !ValidFor(m.Kind, pkg) {
+			return refuse("%q is not a package name npm reads as a registry package: an unscoped name with a slash is a GitHub repository", pkg)
+		}
 		switch c := to.Compare(m.Current); {
 		case c < 0:
 			return refuse("%s requires %s %s: %s goes down, and a bump only goes up", p.Name, pkg, m.Current, to)
@@ -171,11 +183,17 @@ func (b *Bumper) stage(ctx context.Context, pkg string, to Version, pl plan) (ve
 	if serr := stop(end); serr != nil && err == nil {
 		err = serr
 	}
+	if err != nil && verdict == "pass" {
+		verdict = "" // the sandbox did not stop cleanly: the bump claims no pass
+	}
 	if err != nil || verdict == "fail" {
 		if rerr := snap.Restore(); rerr != nil {
 			err = errors.Join(err, fmt.Errorf("could not put %s back as it was: %w", pl.p.Name, rerr))
-			if verdict == "fail" { // the ledger must say what is in the product
+			// the ledger must say what is in the product
+			if verdict == "fail" {
 				reason += "; the product could not be put back"
+			} else {
+				verdict, reason = "fail", "the bump stopped ("+cut(err.Error(), 120)+") and the product could not be put back"
 			}
 		}
 	}
@@ -198,15 +216,13 @@ func (b *Bumper) apply(ctx context.Context, runner gungnir.Runner, snap *Snapsho
 	if !res.Passed {
 		return "fail", "the tool failed: " + ended(res), nil
 	}
-	changed, err := snap.Changes()
-	if err != nil {
+	if extra, err := outside(snap, pl); err != nil {
 		return "", "", err
-	}
-	if extra := slices.DeleteFunc(changed, func(f string) bool { return slices.Contains(pl.m.Kind.Files(), f) }); len(extra) > 0 {
+	} else if len(extra) > 0 {
 		return "fail", "the tool changed files that are not the manifest or its lock file: " + strings.Join(extra, ", "), nil
 	}
-	if m, err := Find(pl.p.Dir, pkg); err != nil || m.Current.Compare(to) != 0 {
-		return "fail", fmt.Sprintf("the manifest does not require %s %s after the tool ran", pkg, to), nil
+	if reason := wrongManifest(pkg, to, pl); reason != "" {
+		return "fail", reason, nil
 	}
 	for _, name := range Ladder {
 		res, err := run(name, pl.p.Checks[name])
@@ -226,7 +242,37 @@ func (b *Bumper) apply(ctx context.Context, runner gungnir.Runner, snap *Snapsho
 			return "fail", "the check " + name + " failed: " + ended(res), nil
 		}
 	}
+	// The rungs run the new dependency's code with the product writable: what they changed is judged too.
+	if extra, err := outside(snap, pl); err != nil {
+		return "", "", err
+	} else if len(extra) > 0 {
+		return "fail", "the checks changed files that are not the manifest or its lock file: " + strings.Join(extra, ", "), nil
+	}
+	if reason := wrongManifest(pkg, to, pl); reason != "" {
+		return "fail", reason, nil
+	}
 	return "pass", "", nil
+}
+
+// outside lists the files that differ from the snapshot and are not the manifest's or its lock file.
+func outside(snap *Snapshot, pl plan) ([]string, error) {
+	changed, err := snap.Changes()
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(changed, func(f string) bool { return slices.Contains(pl.m.Kind.Files(), f) }), nil
+}
+
+// wrongManifest says why the manifest is not what the bump planned: the new version, in the style it had.
+func wrongManifest(pkg string, to Version, pl plan) string {
+	m, err := Find(pl.p.Dir, pkg)
+	switch {
+	case err != nil || m.Current.Compare(to) != 0:
+		return fmt.Sprintf("the manifest does not require %s %s after the tool ran", pkg, to)
+	case m.Tilde != pl.m.Tilde:
+		return fmt.Sprintf("the manifest's pin style for %s changed (a tilde was dropped or added); an .npmrc may override it", pkg)
+	}
+	return ""
 }
 
 func ended(r checks.Result) string {

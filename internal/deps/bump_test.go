@@ -30,12 +30,14 @@ type world struct {
 	fail map[string]int
 	// also is an extra change the tool makes in a product, besides the manifest: file, then text.
 	also map[string][2]string
+	// during is a change a check makes when it runs, by "product:check": file, then text.
+	during map[string][2]string
 	// onRun, if set, sees each command before it is answered.
 	onRun func(product, check string) error
 }
 
 func newWorld(t *testing.T, versions map[string]string) *world {
-	w := &world{t: t, root: t.TempDir(), fail: map[string]int{}, also: map[string][2]string{}}
+	w := &world{t: t, root: t.TempDir(), fail: map[string]int{}, also: map[string][2]string{}, during: map[string][2]string{}}
 	for name, v := range versions {
 		write(t, filepath.Join(w.root, name), "go.mod", goModAt(v))
 		write(t, filepath.Join(w.root, name), "go.sum", "golang.org/x/text v"+v+" h1:aaa=\r\n")
@@ -84,6 +86,9 @@ func (f fakeRunner) Run(_ context.Context, c gungnir.Cmd) (gungnir.ExecResult, e
 		if err := w.onRun(p.Name, check); err != nil {
 			return gungnir.ExecResult{}, err
 		}
+	}
+	if x, ok := w.during[p.Name+":"+check]; ok {
+		write(w.t, p.Dir, x[0], x[1])
 	}
 	if code := w.fail[p.Name+":"+check]; code != 0 {
 		c.Stdout.Write([]byte(check + " says no\n"))
@@ -145,9 +150,9 @@ func TestACanaryThatPassesRollsOutOneProductAtATime(t *testing.T) {
 		t.Fatalf("report %+v, error %v", rep, err)
 	}
 	want := []string{
-		"api bump", "api deps", "event deps_checked  pass", "api unit", "event deps_bump canary pass",
-		"api2 bump", "api2 deps", "event deps_checked  pass", "api2 unit", "event deps_bump rollout pass",
-		"api3 bump", "api3 deps", "event deps_checked  pass", "api3 unit", "event deps_bump rollout pass",
+		"event deps_bump canary ", "api bump", "api deps", "event deps_checked  pass", "api unit", "event deps_bump canary pass",
+		"event deps_bump rollout ", "api2 bump", "api2 deps", "event deps_checked  pass", "api2 unit", "event deps_bump rollout pass",
+		"event deps_bump rollout ", "api3 bump", "api3 deps", "event deps_checked  pass", "api3 unit", "event deps_bump rollout pass",
 	}
 	if got := strings.Join(w.timeline, "|"); got != strings.Join(want, "|") {
 		t.Errorf("timeline\n got %s\nwant %s", got, strings.Join(want, "|"))
@@ -157,7 +162,7 @@ func TestACanaryThatPassesRollsOutOneProductAtATime(t *testing.T) {
 			t.Errorf("%s: %q", n, w.has(n))
 		}
 	}
-	if w.events[1].From != "0.41.0" || w.events[1].To != "0.42.0" || w.events[1].Package != "golang.org/x/text" || w.events[len(w.events)-1].From != "0.40.0" {
+	if w.events[2].From != "0.41.0" || w.events[2].To != "0.42.0" || w.events[2].Package != "golang.org/x/text" || w.events[len(w.events)-1].From != "0.40.0" {
 		t.Errorf("events: %v", w.eventLines())
 	}
 	if strings.Join(w.stopped, ",") != "api,api2,api3" {

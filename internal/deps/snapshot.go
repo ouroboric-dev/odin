@@ -23,7 +23,7 @@ type entry struct {
 }
 
 // Snapshot holds the files of a product as they were, so that a failed bump can put them back byte for
-// byte. It skips .git (the leaf's git directory is the leaf's own, and the bump never writes to it) and
+// byte. It skips the top-level .git (the leaf's git directory is the leaf's own, and the bump never writes to it) and
 // node_modules (a cache npm rebuilds from the lock file).
 type Snapshot struct {
 	root  string
@@ -33,7 +33,7 @@ type Snapshot struct {
 
 func skipped(rel string, d fs.DirEntry) bool {
 	n := d.Name()
-	return rel != "." && (n == ".git" || (n == "node_modules" && d.IsDir()))
+	return rel != "." && ((rel == ".git" && n == ".git") || (n == "node_modules" && d.IsDir()))
 }
 
 // skip is what a walk returns for an entry it skips: SkipDir on a file would skip its folder's other files.

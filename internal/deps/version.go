@@ -92,3 +92,9 @@ var packageRE = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._~-]*/)?[A-Za-z0-9][A-Za-
 func ValidPackage(name string) bool {
 	return packageRE.MatchString(name) && !strings.Contains(name, "..") && len(name) <= 214
 }
+
+// ValidFor is ValidPackage for the ecosystem of the manifest: npm reads an unscoped name with a slash
+// (a/b) as a GitHub repository, not as a registry package.
+func ValidFor(k Kind, name string) bool {
+	return ValidPackage(name) && (k != NPM || strings.HasPrefix(name, "@") || !strings.Contains(name, "/"))
+}

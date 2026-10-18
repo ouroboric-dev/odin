@@ -41,7 +41,7 @@ func TestFindReadsGoModInEveryFormOfRequire(t *testing.T) {
 			t.Errorf("Find(%s) = %+v, %v; want go %s", pkg, m, err, want)
 		}
 	}
-	if cmd := mustFind(t, dir, "golang.org/x/text").Command("golang.org/x/text", Version{Major: 0, Minor: 42, Patch: 0}); strings.Join(cmd, " ") != "go get golang.org/x/text@v0.42.0" {
+	if cmd := mustFind(t, dir, "golang.org/x/text").Command("golang.org/x/text", Version{Major: 0, Minor: 42, Patch: 0}); strings.Join(cmd, " ") != "env GOWORK=off go get golang.org/x/text@v0.42.0" {
 		t.Errorf("command %v", cmd)
 	}
 }
@@ -62,7 +62,7 @@ func TestFindReadsPackageJSONAndKeepsTheTilde(t *testing.T) {
 	if m := mustFind(t, dir, "vite"); m.Kind != NPM || m.Tilde || strings.Join(m.Command("vite", to), " ") != "npm install --ignore-scripts --save-exact vite@7.1.9" {
 		t.Errorf("vite: %+v %v", m, m.Command("vite", to))
 	}
-	if m := mustFind(t, dir, "react"); !m.Tilde || m.Current.String() != "19.1.0" || strings.Join(m.Command("react", to), " ") != "npm install --ignore-scripts --save-prefix=~ react@7.1.9" {
+	if m := mustFind(t, dir, "react"); !m.Tilde || m.Current.String() != "19.1.0" || strings.Join(m.Command("react", to), " ") != "npm install --ignore-scripts --save-exact=false --save-prefix=~ react@7.1.9" {
 		t.Errorf("react: %+v %v", m, m.Command("react", to))
 	}
 	if m := mustFind(t, dir, "vitest"); m.Current.String() != "3.2.4" {

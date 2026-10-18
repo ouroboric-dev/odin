@@ -32,6 +32,12 @@ func TestParseVersionReadsGoAndNpmForms(t *testing.T) {
 	}
 }
 
+func TestAnUnscopedNpmNameWithASlashIsGitHubShorthandAndRefused(t *testing.T) {
+	if ValidFor(NPM, "a/b") || !ValidFor(NPM, "@s/b") || !ValidFor(NPM, "vite") || !ValidFor(Go, "github.com/Foo/bar") || ValidFor(Go, "-g") {
+		t.Error("ValidFor")
+	}
+}
+
 func TestValidPackageRefusesAnOptionAndAPathEscape(t *testing.T) {
 	for _, ok := range []string{"golang.org/x/text", "vite", "@tanstack/react-query", "github.com/Foo/bar"} {
 		if !ValidPackage(ok) {

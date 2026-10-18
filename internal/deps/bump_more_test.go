@@ -25,7 +25,7 @@ func TestARolloutStopsAtTheFirstFailureAndPutsBackOnlyThatProduct(t *testing.T) 
 	if !strings.Contains(w.has("api"), "v0.42.0") || !strings.Contains(w.has("r1"), "v0.42.0") {
 		t.Error("the products that passed were put back")
 	}
-	if got := strings.Join(w.eventLines(), "|"); !strings.HasSuffix(got, "deps_bump rollout fail golang.org/x/text 0.41.0>0.42.0") || strings.Count(got, "deps_bump") != 3 {
+	if got := strings.Join(w.eventLines(), "|"); !strings.HasSuffix(got, "deps_bump rollout fail golang.org/x/text 0.41.0>0.42.0") || strings.Count(got, "deps_bump") != 6 {
 		t.Errorf("events: %s", got)
 	}
 }
@@ -97,7 +97,7 @@ func TestARolloutProductThatHasTheVersionIsSkippedWithoutBeingOpened(t *testing.
 	if err != nil || rep.Failed() || rep.Steps[1].Verdict != "skip" || strings.Join(w.opened, ",") != "api" {
 		t.Fatalf("report %+v, error %v, opened %v", rep, err, w.opened)
 	}
-	if len(w.events) != 2 { // deps_checked and the canary's deps_bump; the skipped product logs nothing
+	if len(w.events) != 3 { // the canary's started line, deps_checked and the canary's verdict; the skipped product logs nothing
 		t.Errorf("events %v", w.eventLines())
 	}
 }
@@ -121,7 +121,7 @@ func TestACancelledBumpPutsTheProductBackAndStopsItsSandbox(t *testing.T) {
 		t.Errorf("not put back, or not stopped: %v", w.stopped)
 	}
 	for _, e := range w.events {
-		if e.Name == gungnir.EventDepsBump {
+		if e.Name == gungnir.EventDepsBump && e.Verdict != "" {
 			t.Errorf("a cancelled bump logged a verdict: %+v", e)
 		}
 	}
@@ -139,14 +139,15 @@ func TestNpmBumpKeepsTheTildeAndRunsNoScript(t *testing.T) {
 	if err != nil || rep.Failed() {
 		t.Fatalf("report %+v, error %v", rep, err)
 	}
-	if got[0] != "npm install --ignore-scripts --save-prefix=~ react@19.1.4" {
+	if got[0] != "npm install --ignore-scripts --save-exact=false --save-prefix=~ react@19.1.4" {
 		t.Errorf("tool command %q", got[0])
 	}
 }
 
 type npmWorld struct {
-	dir string
-	got *[]string
+	dir   string
+	got   *[]string
+	exact bool // the tool drops the tilde, as an .npmrc with save-exact=true would
 }
 
 func (n *npmWorld) Open(context.Context, Product) (gungnir.Runner, func(context.Context) error, error) {
@@ -156,8 +157,96 @@ func (n *npmWorld) Open(context.Context, Product) (gungnir.Runner, func(context.
 func (n *npmWorld) Run(_ context.Context, c gungnir.Cmd) (gungnir.ExecResult, error) {
 	*n.got = append(*n.got, strings.Join(c.Argv, " "))
 	if c.Argv[0] == "npm" {
-		os.WriteFile(filepath.Join(n.dir, "package.json"), []byte(`{"dependencies":{"react":"~19.1.4"}}`), 0o644)
+		spec := "~19.1.4"
+		if n.exact {
+			spec = "19.1.4"
+		}
+		os.WriteFile(filepath.Join(n.dir, "package.json"), []byte(`{"dependencies":{"react":"`+spec+`"}}`), 0o644)
 		os.WriteFile(filepath.Join(n.dir, "package-lock.json"), []byte("{\"v\":2}\n"), 0o644)
 	}
 	return gungnir.ExecResult{}, nil
+}
+
+func TestACheckThatChangesAPolicyFileFailsTheProductAndTheFileIsPutBack(t *testing.T) {
+	for _, check := range []string{"deps", "unit"} {
+		w := newWorld(t, map[string]string{"api": "0.41.0"})
+		w.during["api:"+check] = [2]string{"devcontainer/checks/config/deps-policy.json", `{"schema":"ygg.deps/v1","minimum":{}}`}
+		before := w.bytes("api")
+		rep, err := w.bumper().Bump(context.Background(), "golang.org/x/text", "0.42.0", w.product("api"), nil)
+		if err != nil || !rep.Failed() || !strings.Contains(rep.Steps[0].Reason, "deps-policy.json") {
+			t.Fatalf("%s: report %+v, error %v", check, rep, err)
+		}
+		if !same2(before, w.bytes("api")) {
+			t.Errorf("%s: the policy file was not put back", check)
+		}
+		if last := w.events[len(w.events)-1]; last.Name != gungnir.EventDepsBump || last.Verdict != "fail" {
+			t.Errorf("%s: last event %+v", check, last)
+		}
+	}
+}
+
+func TestAProductThatCouldNotBePutBackIsInTheLedger(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can remove a file of a read-only folder")
+	}
+	w := newWorld(t, map[string]string{"api": "0.41.0"})
+	ro := filepath.Join(w.root, "api", "ro")
+	w.onRun = func(_, check string) error {
+		if check == "bump" { // the tool leaves a file in a folder that it makes read-only
+			write(t, ro, "x", "x")
+			return os.Chmod(ro, 0o555)
+		}
+		return nil
+	}
+	t.Cleanup(func() { os.Chmod(ro, 0o755) })
+	rep, err := w.bumper().Bump(context.Background(), "golang.org/x/text", "0.42.0", w.product("api"), nil)
+	if err == nil || !strings.Contains(err.Error(), "could not put api back") {
+		t.Fatalf("error %v", err)
+	}
+	if len(rep.Steps) != 1 || rep.Steps[0].Verdict != "fail" || !strings.Contains(rep.Steps[0].Reason, "could not be put back") {
+		t.Fatalf("report %+v", rep)
+	}
+	last := w.events[len(w.events)-1]
+	if last.Name != gungnir.EventDepsBump || last.Verdict != "fail" || !strings.Contains(last.Note, "could not be put back") {
+		t.Errorf("last event %+v", last)
+	}
+}
+
+func TestAStartedLineIsWrittenBeforeTheToolRuns(t *testing.T) {
+	w := newWorld(t, map[string]string{"api": "0.41.0"})
+	if _, err := w.bumper().Bump(context.Background(), "golang.org/x/text", "0.42.0", w.product("api"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if w.timeline[0] != "event deps_bump canary " || w.timeline[1] != "api bump" || w.events[0].Verdict != "" || !strings.Contains(w.events[0].Note, "started") {
+		t.Errorf("timeline %v, first event %+v", w.timeline, w.events[0])
+	}
+}
+
+func TestAnNpmToolThatDropsTheTildeFailsTheProduct(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "package.json", `{"dependencies":{"react":"~19.1.0"}}`)
+	var got []string
+	w := &npmWorld{dir: dir, got: &got, exact: true} // an .npmrc with save-exact=true
+	b := &Bumper{Open: w, LogDir: filepath.Join(dir, "..", "logs"), Log: func(gungnir.Event) error { return nil }}
+	p := Product{Name: "web", Dir: dir, Realm: "midgard-react", Checks: map[string][]string{"deps": {"web-deps.sh"}, "unit": {"web-unit.sh"}}}
+	rep, err := b.Bump(context.Background(), "react", "19.1.4", p, nil)
+	if err != nil || !rep.Failed() || !strings.Contains(rep.Steps[0].Reason, "pin style") {
+		t.Fatalf("report %+v, error %v", rep, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "package.json")); string(b) != `{"dependencies":{"react":"~19.1.0"}}` {
+		t.Errorf("package.json = %s", b)
+	}
+}
+
+func TestAnUnscopedNpmNameWithASlashIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "package.json", `{"dependencies":{"a/b":"1.0.0"}}`)
+	var got []string
+	b := &Bumper{Open: &npmWorld{dir: dir, got: &got}, LogDir: dir, Log: func(gungnir.Event) error { t.Error("logged"); return nil }}
+	p := Product{Name: "web", Dir: dir, Realm: "r", Checks: map[string][]string{"deps": {"d"}, "unit": {"u"}}}
+	_, err := b.Bump(context.Background(), "a/b", "1.0.1", p, nil)
+	var refusal *Refusal
+	if !errors.As(err, &refusal) || !strings.Contains(err.Error(), "GitHub") || len(got) != 0 {
+		t.Errorf("error %v, commands %v", err, got)
+	}
 }

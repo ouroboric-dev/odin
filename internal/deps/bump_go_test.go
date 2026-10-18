@@ -92,7 +92,7 @@ func goProduct(t *testing.T, env []string, name string) Product {
 		t.Fatalf("go mod tidy: %v\n%s", err, out)
 	}
 	return Product{Name: name, Dir: dir, Realm: "helheim-go", Checks: map[string][]string{
-		"deps": {"go", "mod", "verify"}, "unit": {"go", "build", "./..."}}}
+		"deps": {"go", "mod", "verify"}, "unit": {"go", "build", "-o", os.DevNull, "./..."}}}
 }
 
 func goWorld(t *testing.T) (env []string, b *Bumper, events *[]gungnir.Event) {
@@ -122,7 +122,7 @@ func TestTheRealGoBumpsACanaryAndThenTheRolloutProductOffline(t *testing.T) {
 			t.Errorf("%s requires %s", p.Name, m.Current)
 		}
 	}
-	if len(*events) != 4 || (*events)[1].Verdict != "pass" || (*events)[3].Stage != "rollout" {
+	if len(*events) != 6 || (*events)[2].Verdict != "pass" || (*events)[5].Stage != "rollout" {
 		t.Errorf("events %+v", *events)
 	}
 }
@@ -149,7 +149,7 @@ func TestTheRealGoCanaryThatBreaksTheBuildIsPutBackAndTheRolloutProductIsNotTouc
 	if !same2(before, after) {
 		t.Error("a file of the canary or of the rollout product is not as it was")
 	}
-	if n := len(*events); n != 2 || (*events)[1].Stage != "canary" || (*events)[1].Verdict != "fail" {
+	if n := len(*events); n != 3 || (*events)[2].Stage != "canary" || (*events)[2].Verdict != "fail" {
 		t.Errorf("events %+v", *events)
 	}
 }

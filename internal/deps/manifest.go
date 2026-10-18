@@ -38,13 +38,13 @@ func (k Kind) Files() []string {
 // runs no install script, and keeps the pin style the manifest has: exact, or a tilde.
 func (m Manifest) Command(pkg string, to Version) []string {
 	if m.Kind == Go {
-		return []string{"go", "get", pkg + "@v" + to.String()}
+		return []string{"env", "GOWORK=off", "go", "get", pkg + "@v" + to.String()} // GOWORK=off: no go.work of a parent folder moves the bump
 	}
-	style := "--save-exact"
+	style := []string{"--save-exact"} // an .npmrc with save-exact=true would turn a tilde off, so a tilde says both
 	if m.Tilde {
-		style = "--save-prefix=~"
+		style = []string{"--save-exact=false", "--save-prefix=~"}
 	}
-	return []string{"npm", "install", "--ignore-scripts", style, pkg + "@" + to.String()}
+	return append(append([]string{"npm", "install", "--ignore-scripts"}, style...), pkg+"@"+to.String())
 }
 
 // Find reads the manifest of the product in dir that requires pkg. A package that no manifest requires,
