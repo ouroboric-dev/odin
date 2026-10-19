@@ -236,4 +236,8 @@ func TestAResumeOfARunLedByARealmExitsTwoWithTheWayOn(t *testing.T) {
 	if code != ExitRefused || !strings.Contains(errOut, "can't be resumed") || !strings.Contains(errOut, "start a new run with --graph") {
 		t.Errorf("resume: exit %d, stderr %q", code, errOut)
 	}
+	code, out, errOut := ygg(t, "status", id, "--project", dir)
+	if code != ExitRefused || out != "" || !strings.Contains(errOut, "can't be resumed") || !strings.Contains(errOut, "start a new run with --graph") {
+		t.Errorf("status: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
 }

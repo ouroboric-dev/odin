@@ -56,6 +56,20 @@ func TestAGraphIsNamedAndFoundInTheGraphStore(t *testing.T) {
 	if err != nil || s.GraphPack.Name != "software" {
 		t.Errorf("a path loads without a store: %v", err)
 	}
+	// A realm store alone doesn't hold graphs: a name is looked up in graphs.dir only.
+	realmsOnly := writeConfig(t, t.TempDir(), scriptedRoles+fullCaps+"realms:\n  dir: "+store+"\n")
+	if _, err := Prepare(ctx, Options{Project: project, Config: realmsOnly, Graph: "software"}); err == nil || !strings.Contains(err.Error(), "factory.yaml has no graphs section to find it in") {
+		t.Errorf("a realms section and no graphs section: Prepare() = %v", err)
+	}
+	// A ./ path is resolved against the working directory, as realm.Resolve does.
+	t.Chdir(store)
+	s, err = Prepare(ctx, Options{Project: project, Config: none, Graph: "./software"})
+	if err != nil {
+		t.Fatalf("--graph ./software = %v", err)
+	}
+	if s.GraphPack.Name != "software" || !filepath.IsAbs(s.GraphPack.Dir) || filepath.Base(s.GraphPack.Dir) != "software" {
+		t.Errorf("--graph ./software loaded %q from %q", s.GraphPack.Name, s.GraphPack.Dir)
+	}
 }
 
 func TestAPackWithNoGraphCannotBeTheGraph(t *testing.T) {
@@ -149,12 +163,25 @@ func TestAResumeOfARunLedByARealmIsRefusedAndTouchesNothing(t *testing.T) {
 	if err := os.WriteFile(file, out, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The leaf holds work the run didn't make: a commit past its checkpoint and an untracked file. A resume
+	// that got as far as resetting the leaf would discard both, so HEAD and the status would move.
 	app := filepath.Join(project, "repos/app")
+	if err := os.WriteFile(filepath.Join(app, "scratch.txt"), []byte("not the run's\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app, "later.txt"), []byte("committed past the checkpoint\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, app, "add", "--", "later.txt")
+	gitOut(t, app, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "past the checkpoint")
 	head, status := gitOut(t, app, "rev-parse", "HEAD"), gitOut(t, app, "status", "--porcelain")
 	ups, downs := len(fake.Ups), len(fake.Downs)
 	_, err = OpenWith(ctx, project, id, "", h)
 	if err == nil || !strings.Contains(err.Error(), "can't be resumed") || !strings.Contains(err.Error(), "start a new run with --graph") {
 		t.Fatalf("OpenWith() = %v, want the refusal of a run a realm led", err)
+	}
+	if !strings.Contains(status, "scratch.txt") {
+		t.Fatalf("the leaf's status = %q, want the untracked file in it", status)
 	}
 	if got := gitOut(t, app, "rev-parse", "HEAD"); got != head {
 		t.Errorf("the leaf's HEAD moved: %s -> %s", head, got)
