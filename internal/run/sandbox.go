@@ -94,7 +94,7 @@ func (r *Run) ScratchRunner(ctx context.Context, node string) (gungnir.Runner, e
 		return gungnir.Bind(r.Sandbox, env), nil
 	}
 	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: key, Parent: r.Dir, Leaf: r.ScratchDir(node), Scratch: true,
-		Egress: r.Setup.Sandbox.Egress, Stack: r.Setup.Lead.Stack})
+		Egress: r.Setup.Sandbox.Egress, Stack: r.Setup.GraphPack.Stack})
 	if err != nil {
 		return nil, err
 	}

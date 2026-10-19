@@ -68,7 +68,7 @@ func depsProject(t *testing.T, stack string) (dir, config string) {
 	commitFixtures(t, dir)
 	_, base := project(t, "script.yaml", "")
 	b, _ := os.ReadFile(base)
-	extra := "realms:\n  dir: " + store + "\n"
+	extra := "realms:\n  dir: " + store + "\ngraphs:\n  dir: " + store + "\n"
 	if stack != "" {
 		extra += sandboxExtra
 	}

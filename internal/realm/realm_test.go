@@ -137,7 +137,7 @@ func TestAStoreFindsARealmByName(t *testing.T) {
 	store := t.TempDir()
 	fixture(t, filepath.Join(store, "midgard-react"), "midgard-react", "0.1.0")
 	fixture(t, filepath.Join(store, "helheim-go"), "midgard-react", "0.1.0") // a folder holding another realm than its name says
-	s := &Store{Dir: store}
+	s := &Store{Dir: store, Kind: "realm"}
 	if dir, err := s.Find("midgard-react"); err != nil || dir != filepath.Join(store, "midgard-react") {
 		t.Errorf("Find() = %q, %v", dir, err)
 	}
@@ -151,17 +151,17 @@ func TestAStoreFindsARealmByName(t *testing.T) {
 func TestResolveTakesAPathOrAName(t *testing.T) {
 	store := t.TempDir()
 	fixture(t, filepath.Join(store, "midgard-react"), "midgard-react", "0.1.0")
-	s := &Store{Dir: store}
-	if dir, byName, err := Resolve(filepath.Join(store, "midgard-react"), s); err != nil || byName || dir != filepath.Join(store, "midgard-react") {
+	s := &Store{Dir: store, Kind: "realm"}
+	if dir, byName, err := Resolve(filepath.Join(store, "midgard-react"), s, "realm"); err != nil || byName || dir != filepath.Join(store, "midgard-react") {
 		t.Errorf("a path: %q, %v, %v", dir, byName, err)
 	}
-	if dir, byName, err := Resolve("midgard-react", s); err != nil || !byName || dir != filepath.Join(store, "midgard-react") {
+	if dir, byName, err := Resolve("midgard-react", s, "realm"); err != nil || !byName || dir != filepath.Join(store, "midgard-react") {
 		t.Errorf("a name: %q, %v, %v", dir, byName, err)
 	}
-	if _, _, err := Resolve("midgard-react", nil); err == nil || !strings.Contains(err.Error(), "realms") {
+	if _, _, err := Resolve("midgard-react", nil, "realm"); err == nil || !strings.Contains(err.Error(), "realms") {
 		t.Errorf("a name with no store: %v", err)
 	}
-	if dir, byName, err := Resolve("./testdata/x", nil); err != nil || byName || dir != "./testdata/x" {
+	if dir, byName, err := Resolve("./testdata/x", nil, "realm"); err != nil || byName || dir != "./testdata/x" {
 		t.Errorf("a relative path with no store: %q, %v, %v", dir, byName, err)
 	}
 }
@@ -262,5 +262,23 @@ func TestACommittedChangeChangesTheHashOfAGitRealm(t *testing.T) {
 	}
 	if after, err := Hash(dir); err != nil || after == before {
 		t.Errorf("Hash() = %q, %v; want a hash other than %q", after, err, before)
+	}
+}
+
+func TestAGraphStoreFindsAGraphByNameAndSaysGraph(t *testing.T) {
+	store := t.TempDir()
+	fixture(t, filepath.Join(store, "software"), "software", "0.1.0")
+	fixture(t, filepath.Join(store, "other"), "software", "0.1.0") // a folder holding another graph than its name says
+	s := &Store{Dir: store, Kind: "graph"}
+	if dir, err := s.Find("software"); err != nil || dir != filepath.Join(store, "software") {
+		t.Errorf("Find() = %q, %v", dir, err)
+	}
+	for name, want := range map[string]string{"other": "holds the graph software, not other", "none": "no graph none", "../x": "not a graph name"} {
+		if _, err := s.Find(name); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Find(%q) = %v, want an error containing %q", name, err, want)
+		}
+	}
+	if _, _, err := Resolve("software", nil, "graph"); err == nil || !strings.Contains(err.Error(), "factory.yaml has no graphs section to find it in") {
+		t.Errorf("a graph name with no store: %v", err)
 	}
 }

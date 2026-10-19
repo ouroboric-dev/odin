@@ -142,37 +142,43 @@ func hashLimited(dir string, lim limits) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Store is a folder with one checkout of each realm leaf: <Dir>/<name>/pack.yaml (factory.yaml,
-// realms.dir).
-type Store struct{ Dir string }
+// Store is a folder with one checkout of each leaf of a kind: <Dir>/<name>/pack.yaml. Kind is "realm" (factory.yaml,
+// realms.dir) or "graph" (graphs.dir); it names the store in messages and picks the name rule.
+type Store struct{ Dir, Kind string }
 
-// Find returns the folder of the realm called name. The pack in it must say it is that realm.
+// Find returns the folder of the pack called name. The pack in it must say it is that realm or graph.
 func (s *Store) Find(name string) (string, error) {
-	if !gungnir.ValidRealm(name) {
-		return "", fmt.Errorf("%q is not a realm name (lower case words joined by dashes)", name)
+	valid := gungnir.ValidRealm
+	if s.Kind == "graph" {
+		valid = gungnir.ValidGraph
+	}
+	if !valid(name) {
+		return "", fmt.Errorf("%q is not a %s name (lower case words joined by dashes)", name, s.Kind)
 	}
 	dir := filepath.Join(s.Dir, name)
 	p, err := schema.LoadPack(dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return "", fmt.Errorf("there is no realm %s in %s (factory.yaml, realms.dir)", name, s.Dir)
+		return "", fmt.Errorf("there is no %s %s in %s (factory.yaml, %ss.dir)", s.Kind, name, s.Dir, s.Kind)
 	case err != nil:
 		return "", err
 	case p.Name != name:
-		return "", fmt.Errorf("%s holds the realm %s, not %s", dir, p.Name, name)
+		return "", fmt.Errorf("%s holds the %s %s, not %s", dir, s.Kind, p.Name, name)
 	}
 	return dir, nil
 }
 
-// Resolve turns what --realm says into a folder. A value with a path separator, or one that starts
-// with a dot, is a path: a realm checked out anywhere, used as it is. Anything else is a realm name,
-// found in the store; byName is true for it. A name with no store is an error that says where to set one.
-func Resolve(ref string, store *Store) (dir string, byName bool, err error) {
+// Resolve turns what --realm or --graph says (kind is "realm" or "graph") into a folder. A value with a path
+// separator, or one that starts with a dot, is a path: a pack checked out anywhere, used as it is. Anything
+// else is a name, found in the store; byName is true for it. A name with no store is an error that says
+// where to set one.
+func Resolve(ref string, store *Store, kind string) (dir string, byName bool, err error) {
 	if strings.ContainsRune(ref, filepath.Separator) || strings.HasPrefix(ref, ".") {
 		return ref, false, nil
 	}
 	if store == nil {
-		return "", true, fmt.Errorf("--realm %s names a realm leaf, but factory.yaml has no realms section to find it in: set realms: {dir: <folder with the realm leaves>}, or give --realm a path", ref)
+		return "", true, fmt.Errorf("--%s %s names a %s leaf, but factory.yaml has no %ss section to find it in: set %ss: {dir: <folder with the %s leaves>}, or give --%s a path",
+			kind, ref, kind, kind, kind, kind, kind)
 	}
 	dir, err = store.Find(ref)
 	return dir, true, err

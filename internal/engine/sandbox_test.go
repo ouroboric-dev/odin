@@ -59,7 +59,7 @@ func startSandboxedPack(t *testing.T, pack, nodes, script string, h run.Hooks) (
 	}
 	fake := &sandboxfake.Sandbox{}
 	h.NewSandbox = func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return fake, nil }
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm, Hooks: h})
+	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Hooks: h})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestChecksRunInTheSandboxAndTheLeafIsTidiedAfterThem(t *testing.T) {
 		t.Errorf("the leaf has %q left by the checks", st)
 	}
 	r.Close()
-	again, err := run.Start(context.Background(), run.Options{Project: r.Project, Config: r.Setup.ConfigPath, Realm: r.Setup.RealmDir,
+	again, err := run.Start(context.Background(), run.Options{Project: r.Project, Config: r.Setup.ConfigPath, Graph: r.Setup.GraphPack.Dir,
 		Hooks: run.Hooks{NewSandbox: func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return fake, nil }}})
 	if err != nil {
 		t.Errorf("the next run couldn't start: %v", err)

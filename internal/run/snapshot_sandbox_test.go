@@ -42,7 +42,7 @@ func snapshotRun(t *testing.T, webServices string, acceptance bool) (*Run, *sand
 	fake := &sandboxfake.Sandbox{}
 	h := Hooks{NewSandbox: func(*SandboxSetup, string) (gungnir.Sandbox, error) { return fake, nil }}
 	script := "{ agent: scripted, model: none, script: " + filepath.Join(toySandbox(t), "script.yaml") + " }"
-	r, err := Start(ctx, Options{Project: treetest.Build(t, root), Config: sandboxConfig(t, script, "realms:\n  dir: "+store+"\n"), Realm: "midgard-react", Hooks: h})
+	r, err := Start(ctx, Options{Project: treetest.Build(t, root), Config: sandboxConfig(t, script, "realms:\n  dir: "+store+"\ngraphs:\n  dir: "+store+"\n"), Graph: "midgard-react", Hooks: h})
 	if err == nil {
 		t.Cleanup(func() { r.Close() })
 	}

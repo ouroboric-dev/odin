@@ -82,7 +82,7 @@ func TestDoctorChecksTheEngineAndStopsLeftoverSandboxes(t *testing.T) {
 	dir, plain := project(t, "script.yaml", "")
 	config := withSandbox(t, plain)
 	// A run of this project that no ygg holds: its sandbox is a leftover.
-	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", plain, "--realm", toyRealm(t)); code != ExitStopped {
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", plain, "--graph", toyRealm(t)); code != ExitStopped {
 		t.Fatalf("run: exit %d: %s", code, errOut)
 	}
 	id := runID(t, dir)
@@ -105,7 +105,7 @@ func TestDoctorLeavesWhatALiveRunOrAnotherProjectOwns(t *testing.T) {
 	log := stubEngine(t)
 	dir, plain := project(t, "script.yaml", "")
 	config := withSandbox(t, plain)
-	if code, _, _ := ygg(t, "run", "--project", dir, "--config", plain, "--realm", toyRealm(t)); code != ExitStopped {
+	if code, _, _ := ygg(t, "run", "--project", dir, "--config", plain, "--graph", toyRealm(t)); code != ExitStopped {
 		t.Fatal("run")
 	}
 	id := runID(t, dir)

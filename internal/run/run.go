@@ -34,7 +34,7 @@ import (
 type Options struct {
 	Project string            // the project umbrella (L1), inside an instance tree
 	Config  string            // factory.yaml
-	Realm   string            // the lead realm: a realm leaf's name, found in factory.yaml's realms.dir, or a path to the folder that holds pack.yaml
+	Graph   string            // the graph pack: a graph leaf's name, found in factory.yaml's graphs.dir, or a path to the folder that holds pack.yaml
 	Realms  map[string]string // a resume: the folder of each realm the run recorded, by name; they are loaded from there
 	Leaves  []string          // a resume: the leaves the run added beyond the ones its graph names (AddLeaf)
 	Brief   string            // optional
@@ -58,10 +58,8 @@ type Setup struct {
 	Config       *schema.Factory
 	ConfigPath   string // absolute
 	ConfigSHA256 string
-	Pack         *schema.Pack // the lead realm's
-	RealmDir     string       // the lead realm's folder, absolute
-	Lead         *realm.Realm // the lead realm: --realm, loaded
-	Realms       *realm.Set   // every realm of the run: the lead's and one for each realm a leaf of the project names, each loaded once
+	GraphPack    *realm.Realm // the graph pack: --graph, loaded. Until the leaves' realms come from their pins, it also serves a leaf that pins none
+	Realms       *realm.Set   // every realm of the run: the graph pack's and one for each realm a leaf of the project names, each loaded once
 	Graph        *schema.Graph
 	GraphSHA256  string
 	Brief        string // absolute, or ""
@@ -112,22 +110,24 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if o.Mode != "" {
 		s.Mode = o.Mode
 	}
-	var store *realm.Store
+	var store, graphs *realm.Store
 	if s.Config.Realms != nil {
-		store = &realm.Store{Dir: s.Config.Realms.Dir}
+		store = &realm.Store{Dir: s.Config.Realms.Dir, Kind: "realm"}
 	}
-	realmDir, byName, err := realm.Resolve(o.Realm, store)
+	if s.Config.Graphs != nil {
+		graphs = &realm.Store{Dir: s.Config.Graphs.Dir, Kind: "graph"}
+	}
+	graphDir, byName, err := realm.Resolve(o.Graph, graphs, "graph")
 	if err != nil {
 		return nil, err
 	}
-	if s.Lead, err = realm.Load(realmDir); err != nil {
+	if s.GraphPack, err = realm.Load(graphDir); err != nil {
 		return nil, err
 	}
-	s.Pack, s.RealmDir = s.Lead.Pack, s.Lead.Dir
-	if s.Pack.Graph == "" {
-		return nil, fmt.Errorf("the realm %s has no graph, so it can't lead a run; --realm names the realm whose graph builds the product", s.Pack.Name)
+	if s.GraphPack.Pack.Graph == "" {
+		return nil, fmt.Errorf("the pack %s holds no graph; --graph names a graph pack, such as software in Voluspa", s.GraphPack.Name)
 	}
-	graphPath := filepath.Join(s.RealmDir, s.Pack.Graph)
+	graphPath := filepath.Join(s.GraphPack.Dir, s.GraphPack.Pack.Graph)
 	graphData, err := os.ReadFile(graphPath)
 	if err != nil {
 		return nil, err
@@ -247,7 +247,7 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 	}
 	if _, ok := s.Repos[n.Repo]; !ok && !slices.Contains(s.Create, n.Repo) {
 		nodes, err := tree.Resolve(ctx, s.Root, filepath.Join(s.ProjectPath, n.Repo))
-		switch _, creatable := s.Pack.Leaves[n.Repo]; {
+		switch _, creatable := s.GraphPack.Pack.Leaves[n.Repo]; {
 		case err == nil:
 			s.Repos[n.Repo] = nodes[len(nodes)-1]
 		case creatable:
@@ -260,7 +260,7 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 		return fmt.Errorf("%s: node %s works in %s, which is an umbrella; agents, merges and pointer moves work in a leaf (spec §3.3)", graphPath, n.ID, n.Repo)
 	}
 	for _, c := range slices.Concat(n.Checks, n.Acceptance) {
-		if _, ok := s.Pack.Checks[c]; !ok {
+		if _, ok := s.GraphPack.Pack.Checks[c]; !ok {
 			return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
 		}
 	}
@@ -306,7 +306,7 @@ func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 			}
 		}
 		for _, c := range n.Acceptance {
-			if _, ok := s.Pack.Checks[c]; !ok {
+			if _, ok := s.GraphPack.Pack.Checks[c]; !ok {
 				return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
 			}
 		}
@@ -317,7 +317,7 @@ func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 // checkSession checks that a session of node (a node, or a loop's reviewer) can run: its prompt file
 // is in the realm and its role is in factory.yaml, whose adapter is built once per role.
 func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
-	if _, err := os.Stat(filepath.Join(s.RealmDir, prompt)); err != nil {
+	if _, err := os.Stat(filepath.Join(s.GraphPack.Dir, prompt)); err != nil {
 		return fmt.Errorf("%s: node %s: %w", graphPath, node, err)
 	}
 	if s.Agents[role] != nil {
@@ -360,9 +360,9 @@ func (s *Setup) checkGraphPin(byName bool) error {
 		s.PinGraph = byName
 		return nil
 	}
-	if u.Graph != s.Pack.Name || u.GraphVersion != s.Pack.Version {
+	if u.Graph != s.GraphPack.Name || u.GraphVersion != s.GraphPack.Version {
 		return fmt.Errorf("the project is built with the graph %s %s, not %s %s: a run uses the graph its project pins (%s)",
-			u.Graph, u.GraphVersion, s.Pack.Name, s.Pack.Version, filepath.Join(s.Project.Dir, schema.UmbrellaFile))
+			u.Graph, u.GraphVersion, s.GraphPack.Name, s.GraphPack.Version, filepath.Join(s.Project.Dir, schema.UmbrellaFile))
 	}
 	return nil
 }
@@ -392,7 +392,7 @@ func (s *Setup) loadRealm(name string) (*realm.Realm, error) {
 // extra name. The pins must agree with each other and with what the realm store holds (change
 // realm-leaf-naming), so a mismatch stops the run before anything is created or started.
 func (s *Setup) collectRealms(extra []schema.Pin) (*realm.Set, error) {
-	set, err := realm.Collect(s.Lead, append(s.projectPins(), extra...), s.loadRealm)
+	set, err := realm.Collect(s.GraphPack, append(s.projectPins(), extra...), s.loadRealm)
 	if err != nil {
 		return nil, err
 	}
@@ -440,16 +440,16 @@ func (r *Run) AddRealms(extra []schema.Pin) error {
 	return r.Save()
 }
 
-// Realm returns the realm called name, or the lead realm for "".
+// Realm returns the realm called name, or the graph pack for "".
 func (s *Setup) Realm(name string) *realm.Realm {
 	if name == "" {
-		return s.Lead
+		return s.GraphPack
 	}
 	return s.Realms.Realms[name]
 }
 
-// RealmOf returns the realm that provides the leaf at repo: the one the project pins for it, or the lead
-// realm when the leaf has no pin.
+// RealmOf returns the realm that provides the leaf at repo: the one the project pins for it, or, until a
+// leaf's realm comes from its pin alone, the graph pack when the leaf has none.
 func (s *Setup) RealmOf(repo string) *realm.Realm {
 	if u := s.Project.Umbrella; u != nil {
 		if c, ok := u.Children[repo]; ok && c.Realm != "" {
@@ -458,7 +458,7 @@ func (s *Setup) RealmOf(repo string) *realm.Realm {
 			}
 		}
 	}
-	return s.Lead
+	return s.GraphPack
 }
 
 // isLeaf reports whether repo is a leaf: one the tree records as a leaf, or one Start creates.
@@ -860,7 +860,7 @@ func (r *Run) pinGraph(ctx context.Context) error {
 		return nil
 	}
 	p := s.Project
-	name, version := s.Pack.Name, s.Pack.Version
+	name, version := s.GraphPack.Name, s.GraphPack.Version
 	if st, err := git.Run(ctx, p.Dir, "status", "--porcelain", "--", schema.UmbrellaFile); err != nil || st != "" {
 		return fmt.Errorf("%s has changes that are not committed, so the run can't pin the graph %s %s in it: commit or discard them first (%v)",
 			filepath.Join(p.Dir, schema.UmbrellaFile), name, version, err)
@@ -887,6 +887,11 @@ func realmNote(set *realm.Set) string {
 	return "realms: " + strings.Join(parts, "; ")
 }
 
+// graphNote is the graph pack's part of the ledger's first line: its name, version and the hash a resume compares.
+func graphNote(g *realm.Realm) string {
+	return fmt.Sprintf("graph: %s %s sha256:%s", g.Name, g.Version, g.Hash)
+}
+
 // record locks the new run and writes its run.json and first ledger line.
 func record(project, dir, id string, setup *Setup) (*Run, error) {
 	unlock, err := takeLocks(project, dir)
@@ -901,8 +906,8 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 	now := time.Now().UTC()
 	r := &Run{Project: project, Dir: dir, Setup: setup, Ledger: l, unlock: unlock, State: &State{
 		ID: id, Status: StatusRunning, Mode: setup.Mode,
-		Realm: setup.Pack.Name, RealmVersion: setup.Pack.Version, RealmDir: setup.RealmDir, Realms: realmRecords(setup),
-		GraphVersion: setup.Graph.Version, GraphSHA256: setup.GraphSHA256,
+		Graph: setup.GraphPack.Name, GraphVersion: setup.GraphPack.Version, GraphDir: setup.GraphPack.Dir, GraphPackSHA256: setup.GraphPack.Hash,
+		Realms: realmRecords(setup), GraphSHA256: setup.GraphSHA256,
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
@@ -910,7 +915,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Waived: map[string]bool{}, Judged: map[string]string{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, NewLeaves: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Created: now, Updated: now,
 	}}
 	started := gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256,
-		Realm: setup.Lead.Name, RealmVersion: setup.Lead.Version, Note: realmNote(setup.Realms)}
+		Realm: setup.GraphPack.Name, RealmVersion: setup.GraphPack.Version, Note: graphNote(setup.GraphPack) + "; " + realmNote(setup.Realms)}
 	if err := r.Log(started); err != nil {
 		r.Close()
 		return nil, err
@@ -972,10 +977,10 @@ func (r *Run) begin(ctx context.Context) error {
 // §4.1; change remote-creates-repos).
 func (r *Run) createLeaf(ctx context.Context, p string) error {
 	s := r.Setup
-	pl := s.Pack.Leaves[p]
+	pl := s.GraphPack.Pack.Leaves[p]
 	files := map[string][]byte{}
 	for _, f := range pl.FirstCommit {
-		b, err := os.ReadFile(filepath.Join(s.RealmDir, pl.Template, f))
+		b, err := os.ReadFile(filepath.Join(s.GraphPack.Dir, pl.Template, f))
 		if err != nil {
 			return err
 		}
@@ -1043,13 +1048,16 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	for name, r := range s.Realms {
 		dirs[name] = r.Dir
 	}
-	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Realm: s.RealmDir, Realms: dirs, Leaves: slices.Sorted(maps.Keys(s.Leaves)),
+	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Graph: s.GraphDir, Realms: dirs, Leaves: slices.Sorted(maps.Keys(s.Leaves)),
 		Brief: s.Brief, Mode: mode, Hooks: h})
 	if err != nil {
 		return nil, err
 	}
+	if g := setup.GraphPack; g.Version != s.GraphVersion || g.Hash != s.GraphPackSHA256 {
+		return nil, fmt.Errorf("the graph %s changed since the run started (%s), so its prompts and positions are not the ones the run began with; start a new run", s.Graph, s.GraphDir)
+	}
 	if setup.GraphSHA256 != s.GraphSHA256 {
-		return nil, errors.New("the realm's graph changed since the run started, so its positions no longer hold; start a new run")
+		return nil, errors.New("the graph changed since the run started, so its positions no longer hold; start a new run")
 	}
 	if setup.BriefSHA256 != s.BriefSHA256 {
 		return nil, errors.New("the brief changed since the run started; a brief is frozen, so start a new run")

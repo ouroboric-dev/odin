@@ -64,7 +64,7 @@ func TestSandboxEscapes(t *testing.T) {
 		t.Fatalf("sandbox build: exit %d\n%s%s", code, out, errOut)
 	}
 	dir := treetest.Project(t)
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", realm)
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", realm)
 	if code != ExitStopped && code != ExitDone {
 		t.Fatalf("run: exit %d\n%s%s", code, out, errOut)
 	}
@@ -98,7 +98,7 @@ func TestSandboxEscapes(t *testing.T) {
 
 	// The agent's devcontainer.json, with initializeCommand, is now in the leaf. A second run starts a
 	// new sandbox for the same leaf: it must use the factory's configuration, never the leaf's.
-	if code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", realm); code != ExitStopped && code != ExitDone {
+	if code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", realm); code != ExitStopped && code != ExitDone {
 		t.Fatalf("the second run: exit %d\n%s%s", code, out, errOut)
 	}
 	if _, err := os.Stat(marker); err == nil {

@@ -10,7 +10,7 @@ import (
 func TestARunTakesALeafTheGraphDoesNotNameWhenAskedAndKeepsItOnResume(t *testing.T) {
 	project := treetest.Project(t, "repos/app", "repos/extra")
 	cfg := writeConfig(t, t.TempDir(), scriptedRoles+fullCaps)
-	r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: toy(t)})
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Graph: toy(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestARunTakesALeafTheGraphDoesNotNameWhenAskedAndKeepsItOnResume(t *testing
 
 func TestAddLeafRefusesWhatIsNotALeafOfTheProject(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
-	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil {
 		t.Fatal(err)
 	}

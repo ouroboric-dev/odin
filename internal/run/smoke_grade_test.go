@@ -53,7 +53,7 @@ func TestTheGraderSmokeRealmPreparesWithRealAgentsAndRealCaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	config, tasks, suites := realExample(t, nil)
-	s, err := Prepare(ctx, Options{Project: treetest.Project(t), Config: config, Realm: smoke})
+	s, err := Prepare(ctx, Options{Project: treetest.Project(t), Config: config, Graph: smoke})
 	if err != nil {
 		t.Fatal(err)
 	}

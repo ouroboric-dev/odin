@@ -32,21 +32,21 @@ func (s *Setup) prepareSandbox() error {
 	if s.Config.Sandbox == nil {
 		return nil
 	}
-	if s.Pack.Sandbox == nil {
-		return fmt.Errorf("%s has a sandbox section, but the realm %s names no sandbox stack in its pack.yaml", s.ConfigPath, s.Pack.Name)
+	if s.GraphPack.Pack.Sandbox == nil {
+		return fmt.Errorf("%s has a sandbox section, but the realm %s names no sandbox stack in its pack.yaml", s.ConfigPath, s.GraphPack.Pack.Name)
 	}
 	for _, n := range s.Graph.All() {
 		// Acceptance checks run over several leaves, so no leaf's sandbox holds them. With a sandbox on,
 		// they run in one that holds a snapshot of the project, on the stack the lead realm names for it.
-		if len(n.Acceptance) > 0 && s.Lead.Acceptance == "" {
-			return fmt.Errorf("node %s runs acceptance checks, which need a sandbox that holds a snapshot of the project; the realm %s names none (sandbox.acceptance in its pack.yaml)", n.ID, s.Lead.Name)
+		if len(n.Acceptance) > 0 && s.GraphPack.Acceptance == "" {
+			return fmt.Errorf("node %s runs acceptance checks, which need a sandbox that holds a snapshot of the project; the realm %s names none (sandbox.acceptance in its pack.yaml)", n.ID, s.GraphPack.Name)
 		}
 	}
 	uid, gid := os.Getuid(), os.Getgid()
 	if uid == 0 {
 		return fmt.Errorf("ygg must not run as root: the sandbox's user is the operator's own")
 	}
-	cfg := sandbox.Config{Images: sandbox.ImagesFor(s.Lead.Stack), UID: uid, GID: gid}
+	cfg := sandbox.Config{Images: sandbox.ImagesFor(s.GraphPack.Stack), UID: uid, GID: gid}
 	for _, m := range s.Config.Sandbox.Mounts {
 		cfg.Mounts = append(cfg.Mounts, sandbox.PathMap{Host: m.Host, Engine: m.Engine})
 	}
@@ -57,7 +57,7 @@ func (s *Setup) prepareSandbox() error {
 		}
 	}
 	hosts = sortedUnique(hosts)
-	s.Sandbox = &SandboxSetup{Engine: s.Config.Sandbox.Engine, Config: cfg, Hosts: hosts, Egress: sortedUnique(slices.Concat(s.Pack.Sandbox.Egress, hosts))}
+	s.Sandbox = &SandboxSetup{Engine: s.Config.Sandbox.Engine, Config: cfg, Hosts: hosts, Egress: sortedUnique(slices.Concat(s.GraphPack.Pack.Sandbox.Egress, hosts))}
 	// A leaf of another realm starts on that realm's stack, so every leaf of the run must have one
 	// before anything starts, not when its sandbox comes up.
 	for _, p := range s.Leaves() {
@@ -141,11 +141,11 @@ func (s *Setup) projectLeaves() []string {
 // (change realm-content): the lead realm's acceptance stack, the services of the realm of every leaf of
 // the project, since the checks run the whole product, and the registries of those realms.
 func (s *Setup) SnapshotSandbox() (stack string, egress []string, services []gungnir.Service, err error) {
-	if s.Lead.Acceptance == "" {
-		return "", nil, nil, fmt.Errorf("the realm %s names no acceptance stack, so there is no sandbox for a snapshot of the project (sandbox.acceptance in its pack.yaml)", s.Lead.Name)
+	if s.GraphPack.Acceptance == "" {
+		return "", nil, nil, fmt.Errorf("the realm %s names no acceptance stack, so there is no sandbox for a snapshot of the project (sandbox.acceptance in its pack.yaml)", s.GraphPack.Name)
 	}
 	var set serviceSet
-	realms := []*realm.Realm{s.Lead}
+	realms := []*realm.Realm{s.GraphPack}
 	for _, p := range s.projectLeaves() {
 		if r := s.RealmOf(p); !slices.Contains(realms, r) {
 			realms = append(realms, r)
@@ -160,7 +160,7 @@ func (s *Setup) SnapshotSandbox() (stack string, egress []string, services []gun
 		}
 	}
 	slices.SortFunc(set.list, func(a, b gungnir.Service) int { return strings.Compare(a.Name, b.Name) })
-	return s.Lead.Acceptance, sortedUnique(egress), set.list, nil
+	return s.GraphPack.Acceptance, sortedUnique(egress), set.list, nil
 }
 
 func sameService(a, b gungnir.Service) bool {

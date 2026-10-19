@@ -16,8 +16,8 @@ func TestARealmWithNoLeavesNoStackAndNoRecipeRunsInAnUmbrellaWithNoLeaves(t *tes
 	r := startRealms(t, realmsSetup{mode: "unattended", nodes: publishNodes, script: publishScript,
 		roles:  "gates:\n  design: auto\n" + defaultRoles,
 		realms: []realmFiles{{name: "asgard", version: "0.1.0", files: map[string]string{"p.md": "Write the charter.\n"}}}})
-	if len(r.Setup.Leaves()) != 0 || len(r.State.Leaves) != 0 || r.Setup.Lead.Pack.Leaf != nil || r.Setup.Lead.Pack.Sandbox != nil {
-		t.Fatalf("leaves %v, recipe %v, sandbox %v", r.Setup.Leaves(), r.Setup.Lead.Pack.Leaf, r.Setup.Lead.Pack.Sandbox)
+	if len(r.Setup.Leaves()) != 0 || len(r.State.Leaves) != 0 || r.Setup.GraphPack.Pack.Leaf != nil || r.Setup.GraphPack.Pack.Sandbox != nil {
+		t.Fatalf("leaves %v, recipe %v, sandbox %v", r.Setup.Leaves(), r.Setup.GraphPack.Pack.Leaf, r.Setup.GraphPack.Pack.Sandbox)
 	}
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {

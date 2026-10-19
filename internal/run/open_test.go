@@ -18,7 +18,7 @@ func TestOpenRefusesWhatWouldMisleadARun(t *testing.T) {
 		if err := os.CopyFS(realm, os.DirFS(toy(t))); err != nil {
 			t.Fatal(err)
 		}
-		r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: realm})
+		r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: realm})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -41,7 +41,7 @@ func TestOpenRefusesWhatWouldMisleadARun(t *testing.T) {
 		g := filepath.Join(realm, "graph.yaml")
 		b, _ := os.ReadFile(g)
 		os.WriteFile(g, []byte(strings.Replace(string(b), "  - { id: dor,", "  - { id: lint, kind: exec, run: [echo], repo: repos/app }\n  - { id: dor,", 1)), 0o644)
-		if _, err := Open(ctx, project, id, ""); err == nil || !strings.Contains(err.Error(), "graph changed") {
+		if _, err := Open(ctx, project, id, ""); err == nil || !strings.Contains(err.Error(), "the graph toy changed") {
 			t.Errorf("Open() = %v, want a refusal because the graph changed", err)
 		}
 	})

@@ -114,7 +114,7 @@ func startGraded(t *testing.T, nodes, results string, edit func(*tasktest.Task))
 		NewSandbox: func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return g.box, nil },
 		NewGrader:  func(*run.SandboxSetup, string) (run.Grader, error) { return g.grader, nil },
 	}
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm, Brief: tk.Brief(), Hooks: h})
+	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Brief: tk.Brief(), Hooks: h})
 	if err != nil {
 		t.Fatal(err)
 	}

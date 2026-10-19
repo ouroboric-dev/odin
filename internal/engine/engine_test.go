@@ -66,7 +66,7 @@ func startWith(t *testing.T, o setup) *run.Run {
 			t.Fatal(err)
 		}
 	}
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm, Hooks: o.hooks})
+	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Hooks: o.hooks})
 	if err != nil {
 		t.Fatal(err)
 	}

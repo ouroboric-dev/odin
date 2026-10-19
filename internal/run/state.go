@@ -28,7 +28,11 @@ import (
 )
 
 // StateSchema names the run.json format.
-const StateSchema = "ygg.run/v2" // v2: runs live in the instance tree (Phase 2)
+const StateSchema = "ygg.run/v3" // v2: runs live in the instance tree (Phase 2); v3: a graph pack leads, not a lead realm (Voluspa)
+
+// stateSchemaV2 is the format of a run a lead realm led. It can't be resumed: its positions and prompts came
+// from that realm, which is no longer the graph.
+const stateSchemaV2 = "ygg.run/v2"
 
 // Status is where a run stands.
 type Status string
@@ -56,51 +60,51 @@ type RoleRecord struct {
 
 // State is run.json. Odin is its only writer.
 type State struct {
-	Schema       string                 `json:"schema"`
-	ID           string                 `json:"id"`
-	Status       Status                 `json:"status"`
-	Mode         gungnir.Mode           `json:"mode"`
-	Realm        string                 `json:"realm"`
-	RealmVersion string                 `json:"realm_version"`
-	RealmDir     string                 `json:"realm_dir"`
-	Realms       map[string]RealmRecord `json:"realms,omitempty"` // every realm of the run, the lead's too, by name
-	GraphVersion string                 `json:"graph_version"`
-	GraphSHA256  string                 `json:"graph_sha256"`
-	ConfigPath   string                 `json:"config_path"`
-	ConfigSHA256 string                 `json:"config_sha256"`
-	Brief        string                 `json:"brief,omitempty"`
-	BriefSHA256  string                 `json:"brief_sha256,omitempty"`
-	Roles        map[string]RoleRecord  `json:"roles"`
-	Root         string                 `json:"root"`                   // the tree's root: the project, or an umbrella above it
-	ProjectPath  string                 `json:"project"`                // the project's path from the root
-	Leaves       map[string]LeafRecord  `json:"leaves"`                 // leaf path from the project: the run's branch and checkpoint in it
-	Position     int                    `json:"position"`               // index of the next node to run
-	Attempts     map[string]int         `json:"attempts"`               // node id: attempts started
-	Pending      string                 `json:"pending,omitempty"`      // the node waiting for a decision
-	PendingGate  gungnir.Gate           `json:"pending_gate,omitempty"` // the approval point it waits at
-	Reasons      map[string]string      `json:"reasons,omitempty"`      // node id: rejection reason for its next attempt
-	Summaries    map[string]string      `json:"summaries,omitempty"`    // node id: its last result
-	Waived       map[string]bool        `json:"waived,omitempty"`       // pointer node id: shrink-guard approved for its next move
-	Judged       map[string]string      `json:"judged,omitempty"`       // pointer node id: the commit the pointer-contract gate judged, which the move must be to
-	Skills       skills.Record          `json:"skills"`                 // every skill the graph names, with the set's hash (spec §5.1)
-	Sandboxes    map[string]gungnir.Env `json:"sandboxes,omitempty"`    // leaf path: its sandbox, while one is up, so a leftover can be stopped
-	Usage        gungnir.Usage          `json:"usage"`
-	PendingSpend []budget.Entry         `json:"pending_spend,omitempty"` // spends in Usage the journal couldn't take yet, oldest first
-	Paused       *Pause                 `json:"paused,omitempty"`        // why the run is paused
-	Warned       map[string]bool        `json:"warned,omitempty"`        // the budget warnings already given, so each comes once
-	Loops        map[string]*LoopRecord `json:"loops,omitempty"`         // loop node id: where its loop stands
-	Features     []schema.FeatureRecord `json:"features,omitempty"`      // the plan's tasks in the order they are built, once the tasks node has run
-	PlanSource   string                 `json:"plan_source,omitempty"`   // the tasks.md they came from, relative to the project
-	PlanSHA256   string                 `json:"plan_sha256,omitempty"`   // that file as Odin read it
-	Expanded     map[string]bool        `json:"expanded,omitempty"`      // foreach node ids already expanded into the nodes of each task
-	NewLeaves    map[string]bool        `json:"new_leaves,omitempty"`    // leaf paths this run's init creates: only these get the realm's template
-	Returns      map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
-	Refusals     map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
-	Ledger       ledger.Anchor          `json:"ledger"`
-	Error        string                 `json:"error,omitempty"`
-	Exec         *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
-	Created      time.Time              `json:"created"`
-	Updated      time.Time              `json:"updated"`
+	Schema          string                 `json:"schema"`
+	ID              string                 `json:"id"`
+	Status          Status                 `json:"status"`
+	Mode            gungnir.Mode           `json:"mode"`
+	Graph           string                 `json:"graph"`             // the graph pack's name
+	GraphVersion    string                 `json:"graph_version"`     // the graph pack's version
+	GraphDir        string                 `json:"graph_dir"`         // the graph pack's folder, absolute: a resume loads it from there
+	GraphPackSHA256 string                 `json:"graph_pack_sha256"` // of every file of the graph pack a run could read
+	GraphSHA256     string                 `json:"graph_sha256"`      // of graph.yaml
+	Realms          map[string]RealmRecord `json:"realms,omitempty"`  // every realm of the run, by name
+	ConfigPath      string                 `json:"config_path"`
+	ConfigSHA256    string                 `json:"config_sha256"`
+	Brief           string                 `json:"brief,omitempty"`
+	BriefSHA256     string                 `json:"brief_sha256,omitempty"`
+	Roles           map[string]RoleRecord  `json:"roles"`
+	Root            string                 `json:"root"`                   // the tree's root: the project, or an umbrella above it
+	ProjectPath     string                 `json:"project"`                // the project's path from the root
+	Leaves          map[string]LeafRecord  `json:"leaves"`                 // leaf path from the project: the run's branch and checkpoint in it
+	Position        int                    `json:"position"`               // index of the next node to run
+	Attempts        map[string]int         `json:"attempts"`               // node id: attempts started
+	Pending         string                 `json:"pending,omitempty"`      // the node waiting for a decision
+	PendingGate     gungnir.Gate           `json:"pending_gate,omitempty"` // the approval point it waits at
+	Reasons         map[string]string      `json:"reasons,omitempty"`      // node id: rejection reason for its next attempt
+	Summaries       map[string]string      `json:"summaries,omitempty"`    // node id: its last result
+	Waived          map[string]bool        `json:"waived,omitempty"`       // pointer node id: shrink-guard approved for its next move
+	Judged          map[string]string      `json:"judged,omitempty"`       // pointer node id: the commit the pointer-contract gate judged, which the move must be to
+	Skills          skills.Record          `json:"skills"`                 // every skill the graph names, with the set's hash (spec §5.1)
+	Sandboxes       map[string]gungnir.Env `json:"sandboxes,omitempty"`    // leaf path: its sandbox, while one is up, so a leftover can be stopped
+	Usage           gungnir.Usage          `json:"usage"`
+	PendingSpend    []budget.Entry         `json:"pending_spend,omitempty"` // spends in Usage the journal couldn't take yet, oldest first
+	Paused          *Pause                 `json:"paused,omitempty"`        // why the run is paused
+	Warned          map[string]bool        `json:"warned,omitempty"`        // the budget warnings already given, so each comes once
+	Loops           map[string]*LoopRecord `json:"loops,omitempty"`         // loop node id: where its loop stands
+	Features        []schema.FeatureRecord `json:"features,omitempty"`      // the plan's tasks in the order they are built, once the tasks node has run
+	PlanSource      string                 `json:"plan_source,omitempty"`   // the tasks.md they came from, relative to the project
+	PlanSHA256      string                 `json:"plan_sha256,omitempty"`   // that file as Odin read it
+	Expanded        map[string]bool        `json:"expanded,omitempty"`      // foreach node ids already expanded into the nodes of each task
+	NewLeaves       map[string]bool        `json:"new_leaves,omitempty"`    // leaf paths this run's init creates: only these get the realm's template
+	Returns         map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
+	Refusals        map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
+	Ledger          ledger.Anchor          `json:"ledger"`
+	Error           string                 `json:"error,omitempty"`
+	Exec            *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
+	Created         time.Time              `json:"created"`
+	Updated         time.Time              `json:"updated"`
 }
 
 // LoopRecord is where one loop node stands (spec §4.2): Jormungandr's state, which holds the attempt,
@@ -197,6 +201,16 @@ func LoadState(dir string) (*State, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "run.json"))
 	if err != nil {
 		return nil, err
+	}
+	var head struct {
+		Schema string `json:"schema"`
+		ID     string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return nil, fmt.Errorf("%s/run.json: %w", dir, err)
+	}
+	if head.Schema == stateSchemaV2 {
+		return nil, fmt.Errorf("%s/run.json: run %s was led by a realm (schema %s), from before graphs, so it can't be resumed; start a new run with --graph", dir, head.ID, stateSchemaV2)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()

@@ -186,7 +186,7 @@ func (c *command) depsProduct(cfg *schema.Factory, root, projectPath string, pro
 	if name == "" || cfg.Realms == nil {
 		return deps.Product{}, depsPlace{}, fmt.Errorf("%s pins no realm, or factory.yaml has no realms section: the bump cannot tell which checks to run", rel)
 	}
-	rdir, err := (&realm.Store{Dir: cfg.Realms.Dir}).Find(name)
+	rdir, err := (&realm.Store{Dir: cfg.Realms.Dir, Kind: "realm"}).Find(name)
 	if err != nil {
 		return deps.Product{}, depsPlace{}, err
 	}

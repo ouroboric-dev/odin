@@ -121,7 +121,7 @@ func checkLeaves(r *run.Run, set *realm.Set, spec *schema.Leaves) error {
 		if c, ok := have[p]; ok {
 			realmName, version := c.Realm, c.RealmVersion
 			if realmName == "" { // a leaf with no pin is the lead realm's
-				realmName, version = r.Setup.Lead.Name, r.Setup.Lead.Version
+				realmName, version = r.Setup.GraphPack.Name, r.Setup.GraphPack.Version
 			}
 			switch {
 			case c.Kind != schema.ChildLeaf:

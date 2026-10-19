@@ -15,7 +15,7 @@ func store(t *testing.T, versions map[string]string) func(string) (*Realm, error
 	for name, v := range versions {
 		fixture(t, filepath.Join(root, name), name, v)
 	}
-	s := &Store{Dir: root}
+	s := &Store{Dir: root, Kind: "realm"}
 	return func(name string) (*Realm, error) {
 		dir, err := s.Find(name)
 		if err != nil {

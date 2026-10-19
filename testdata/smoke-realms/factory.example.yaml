@@ -18,3 +18,5 @@ sandbox:
     - { host: /home/OPERATOR/ygg, engine: /mnt/wsl/ygg-bind }
 realms:
   dir: /home/OPERATOR/yggdrasil/odin/testdata/smoke-realms
+graphs:
+  dir: /home/OPERATOR/yggdrasil/odin/testdata/smoke-realms

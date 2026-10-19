@@ -52,8 +52,8 @@ func gallery(t *testing.T, webServices string) (*Run, *sandboxfake.Sandbox) {
 	fake := &sandboxfake.Sandbox{}
 	h := Hooks{NewSandbox: func(*SandboxSetup, string) (gungnir.Sandbox, error) { return fake, nil }}
 	script := "{ agent: scripted, model: none, script: " + filepath.Join(toySandbox(t), "script.yaml") + " }"
-	cfg := sandboxConfig(t, script, "realms:\n  dir: "+store+"\n")
-	r, err := Start(ctx, Options{Project: treetest.Build(t, root), Config: cfg, Realm: "midgard-react", Hooks: h})
+	cfg := sandboxConfig(t, script, "realms:\n  dir: "+store+"\ngraphs:\n  dir: "+store+"\n")
+	r, err := Start(ctx, Options{Project: treetest.Build(t, root), Config: cfg, Graph: "midgard-react", Hooks: h})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,8 +130,8 @@ func TestTwoRealmsOfferingDifferentServicesOfOneNameStopTheRunBeforeASandboxStar
 		"repos/api": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: treetest.Pin{Realm: "helheim-go", Version: "0.2.0"}},
 	}}
 	script := "{ agent: scripted, model: none, script: " + filepath.Join(toySandbox(t), "script.yaml") + " }"
-	cfg := sandboxConfig(t, script, "realms:\n  dir: "+store+"\n")
-	_, err := Prepare(ctx, Options{Project: treetest.Build(t, root), Config: cfg, Realm: "midgard-react"})
+	cfg := sandboxConfig(t, script, "realms:\n  dir: "+store+"\ngraphs:\n  dir: "+store+"\n")
+	_, err := Prepare(ctx, Options{Project: treetest.Build(t, root), Config: cfg, Graph: "midgard-react"})
 	if err == nil || !strings.Contains(err.Error(), "two different services named postgres") {
 		t.Errorf("Prepare() = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestARealmThatNamesNoStackCannotProvideALeafWhenASandboxIsOn(t *testing.T) 
 		"repos/api": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: treetest.Pin{Realm: "helheim-go", Version: "0.2.0"}},
 	}}
 	script := "{ agent: scripted, model: none, script: " + filepath.Join(toySandbox(t), "script.yaml") + " }"
-	_, err := Prepare(ctx, Options{Project: treetest.Build(t, root), Config: sandboxConfig(t, script, "realms:\n  dir: "+store+"\n"), Realm: "midgard-react"})
+	_, err := Prepare(ctx, Options{Project: treetest.Build(t, root), Config: sandboxConfig(t, script, "realms:\n  dir: "+store+"\ngraphs:\n  dir: "+store+"\n"), Graph: "midgard-react"})
 	if err == nil || !strings.Contains(err.Error(), "helheim-go") || !strings.Contains(err.Error(), "repos/api") || !strings.Contains(err.Error(), "no sandbox stack") {
 		t.Errorf("Prepare() = %v", err)
 	}

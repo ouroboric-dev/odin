@@ -39,7 +39,7 @@ func escape(t *testing.T, designStep string) (dir, id string, code int) {
 	if err := os.WriteFile(config, []byte(strings.ReplaceAll(string(cfg), toy, script)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	code, _, _ = ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	code, _, _ = ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 	entries, _ := os.ReadDir(filepath.Join(dir, ".factory", "runs"))
 	if len(entries) == 1 {
 		id = entries[0].Name()
@@ -91,7 +91,7 @@ func TestAHookInTheLeafsGitDirNeverRuns(t *testing.T) {
 	// hook there still never runs, because host git runs with hooks off.
 	marker := filepath.Join(t.TempDir(), "hook-ran")
 	dir, config := project(t, "script.yaml", "")
-	code, _, _ := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	code, _, _ := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 	if code != ExitStopped {
 		t.Fatalf("run: exit %d", code)
 	}

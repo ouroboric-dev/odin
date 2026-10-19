@@ -13,7 +13,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
-// The exit criterion of the realm work, with scripted agents: a run with --realm midgard-toy walks that
+// The exit criterion of the realm work, with scripted agents: a run with --graph midgard-toy walks that
 // realm's graph; the spec stage names the leaves and their realms; init creates the API from
 // helheim-toy's template and the web leaf from midgard-toy's; each task runs in its leaf with the
 // recipe of its leaf's realm; and run.json and the status line record every realm and its version.
@@ -38,7 +38,7 @@ func galleryConfig(t *testing.T, mode, gates, script string) string {
 		t.Fatal(err)
 	}
 	body := "mode: " + mode + "\n" + gates + "roles:\n  planner: { agent: scripted, model: none, script: " + abs + " }\n  implementer: { agent: scripted, model: none, script: " + abs + " }\n" +
-		"budget:\n  per_run: { tokens: 1000000, turns: 1000 }\n  per_day: { tokens: 2000000, turns: 2000 }\nrealms:\n  dir: " + realmsDir(t) + "\n"
+		"budget:\n  per_run: { tokens: 1000000, turns: 1000 }\n  per_day: { tokens: 2000000, turns: 2000 }\nrealms:\n  dir: " + realmsDir(t) + "\ngraphs:\n  dir: " + realmsDir(t) + "\n"
 	p := filepath.Join(t.TempDir(), "factory.yaml")
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func galleryConfig(t *testing.T, mode, gates, script string) string {
 func TestARunOfTheToyRealmsBuildsAProductFromTwoRealms(t *testing.T) {
 	dir := treetest.Project(t)
 	cfg := galleryConfig(t, "key-points", "", "../../testdata/realms-scripts/gallery.yaml")
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--realm", "midgard-toy")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy")
 	if code != ExitStopped || !strings.Contains(out, "stopped at approval point design-gate") {
 		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
 	}
@@ -109,11 +109,11 @@ func TestARunOfTheToyRealmsBuildsAProductFromTwoRealms(t *testing.T) {
 		}
 	}
 	// run.json and the status line record the lead realm with its graph, and each leaf's realm.
-	if st.Realm != "midgard-toy" || st.RealmVersion != "0.1.0" || len(st.Realms) != 2 || st.Leaves["repos/api"].Realm != "helheim-toy" || st.Leaves["repos/web"].Realm != "midgard-toy" {
-		t.Errorf("run.json: realm %s %s, realms %v, leaves %+v", st.Realm, st.RealmVersion, st.Realms, st.Leaves)
+	if st.Graph != "midgard-toy" || st.GraphVersion != "0.1.0" || len(st.Realms) != 2 || st.Leaves["repos/api"].Realm != "helheim-toy" || st.Leaves["repos/web"].Realm != "midgard-toy" {
+		t.Errorf("run.json: graph %s %s, realms %v, leaves %+v", st.Graph, st.GraphVersion, st.Realms, st.Leaves)
 	}
 	_, status, _ := ygg(t, "status", id, "--project", dir)
-	for _, want := range []string{"realm:    midgard-toy 0.1.0 (graph 0.1.0)", "(helheim-toy 0.1.0)", "(midgard-toy 0.1.0)", "tasks:    4 (4 done, 0 doing, 0 to do, 0 blocked)"} {
+	for _, want := range []string{"graph:    midgard-toy 0.1.0", "(helheim-toy 0.1.0)", "(midgard-toy 0.1.0)", "tasks:    4 (4 done, 0 doing, 0 to do, 0 blocked)"} {
 		if !strings.Contains(status, want) {
 			t.Errorf("status lacks %q:\n%s", want, status)
 		}
@@ -141,7 +141,7 @@ func TestAnUnattendedRunOfTheToyRealmsGivesUpATaskAndExitsFive(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := galleryConfig(t, "unattended", "gates:\n  design: auto\n", path)
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--realm", "midgard-toy")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy")
 	if code != ExitBlocked {
 		t.Fatalf("exit %d, want %d:\n%s%s", code, ExitBlocked, out, errOut)
 	}
@@ -172,7 +172,7 @@ func TestARunWhoseRealmPinsDisagreeIsRefusedAndCreatesNothing(t *testing.T) {
 		"repos/api": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: treetest.Pin{Realm: "helheim-toy", Version: "0.9.0"}}}}
 	dir := treetest.Build(t, root)
 	cfg := galleryConfig(t, "key-points", "", "../../testdata/realms-scripts/gallery.yaml")
-	code, _, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--realm", "midgard-toy")
+	code, _, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy")
 	if code != ExitRefused || !strings.Contains(errOut, "the realm store holds helheim-toy 0.1.0, but repos/api pins 0.9.0") {
 		t.Errorf("exit %d:\n%s", code, errOut)
 	}
@@ -184,7 +184,7 @@ func TestARunWhoseRealmPinsDisagreeIsRefusedAndCreatesNothing(t *testing.T) {
 	b, _ := os.ReadFile(plain)
 	noStore := filepath.Join(t.TempDir(), "factory.yaml")
 	os.WriteFile(noStore, []byte(strings.Split(string(b), "realms:")[0]), 0o644)
-	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", noStore, "--realm", "midgard-toy"); code != ExitRefused || !strings.Contains(errOut, "realms") {
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", noStore, "--graph", "midgard-toy"); code != ExitRefused || !strings.Contains(errOut, "graphs") {
 		t.Errorf("a name with no store: exit %d:\n%s", code, errOut)
 	}
 }

@@ -188,12 +188,12 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	roles := "{ agent: scripted, model: none, script: " + path + " }"
 	cfg := filepath.Join(t.TempDir(), "factory.yaml")
 	body := "mode: key-points\nroles:\n  planner: " + roles + "\n  implementer: " + roles + "\n  reviewer: " + roles + "\n" +
-		"budget:\n  per_run: { tokens: 1000000, turns: 1000 }\n  per_day: { tokens: 2000000, turns: 2000 }\nrealms:\n  dir: " + store + "\n"
+		"budget:\n  per_run: { tokens: 1000000, turns: 1000 }\n  per_day: { tokens: 2000000, turns: 2000 }\nrealms:\n  dir: " + store + "\ngraphs:\n  dir: " + store + "\n"
 	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	dir := treetest.Project(t)
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--realm", "midgard-react")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-react")
 	if code != ExitStopped || !strings.Contains(out, "stopped at approval point design-gate") {
 		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
 	}
@@ -269,7 +269,7 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 		}
 	}
 	_, status, _ := ygg(t, "status", id, "--project", dir)
-	for _, want := range []string{"realm:    midgard-react " + versions["midgard-react"], "(helheim-go " + versions["helheim-go"] + ")", "tasks:    3 (3 done, 0 doing, 0 to do, 0 blocked)"} {
+	for _, want := range []string{"graph:    midgard-react " + versions["midgard-react"], "(helheim-go " + versions["helheim-go"] + ")", "tasks:    3 (3 done, 0 doing, 0 to do, 0 blocked)"} {
 		if !strings.Contains(status, want) {
 			t.Errorf("status lacks %q:\n%s", want, status)
 		}

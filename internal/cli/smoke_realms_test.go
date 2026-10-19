@@ -62,12 +62,12 @@ func TestTheSmokeRealmsRunWithScriptedAgentsThatWriteWhatThePromptsAsk(t *testin
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cfg := filepath.Join(t.TempDir(), "factory.yaml")
 	body := "mode: unattended\ngates:\n  design: auto\nroles:\n  planner: { agent: scripted, model: none, script: " + scriptPath + " }\n  implementer: { agent: scripted, model: none, script: " + scriptPath + " }\n" +
-		"budget:\n  per_run: { tokens: 600000, turns: 80 }\n  per_day: { tokens: 1500000, turns: 200 }\nrealms:\n  dir: " + smokeRealms(t) + "\n"
+		"budget:\n  per_run: { tokens: 600000, turns: 80 }\n  per_day: { tokens: 1500000, turns: 200 }\nrealms:\n  dir: " + smokeRealms(t) + "\ngraphs:\n  dir: " + smokeRealms(t) + "\n"
 	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	dir := treetest.Project(t)
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--realm", "smoke-lead")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "smoke-lead")
 	if code != ExitDone {
 		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
 	}
@@ -97,7 +97,7 @@ func TestTheSmokeRealmsPrepareWithTheRealAdapter(t *testing.T) {
 	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := run.Prepare(ctx, run.Options{Project: treetest.Project(t), Config: cfg, Realm: "smoke-lead"})
+	s, err := run.Prepare(ctx, run.Options{Project: treetest.Project(t), Config: cfg, Graph: "smoke-lead"})
 	if err != nil {
 		t.Fatal(err)
 	}

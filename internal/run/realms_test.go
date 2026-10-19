@@ -29,7 +29,7 @@ func realmStore(t *testing.T, versions map[string]string) (store, cfg string) {
 			t.Fatal(err)
 		}
 	}
-	return store, writeConfig(t, t.TempDir(), scriptedRoles+fullCaps+"realms:\n  dir: "+store+"\n")
+	return store, writeConfig(t, t.TempDir(), scriptedRoles+fullCaps+"realms:\n  dir: "+store+"\ngraphs:\n  dir: "+store+"\n")
 }
 
 // pinned is a project that pins the graph graph at version, and each leaf's realm.
@@ -44,32 +44,32 @@ func pinned(graph, version string, leaves map[string]treetest.Pin) treetest.Node
 func TestARealmIsNamedAndFoundInTheStore(t *testing.T) {
 	_, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0"})
 	project := treetest.Project(t, "repos/app")
-	s, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"})
+	s, err := Prepare(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"})
 	if err != nil {
 		t.Fatalf("Prepare() = %v", err)
 	}
-	if s.Lead.Name != "midgard-react" || s.Pack != s.Lead.Pack || s.RealmDir != s.Lead.Dir || s.Graph == nil || len(s.Realms.Realms) != 1 {
-		t.Errorf("lead = %+v, realms = %v", s.Lead, s.Realms.Names())
+	if s.GraphPack.Name != "midgard-react" || s.Graph == nil || len(s.Realms.Realms) != 1 {
+		t.Errorf("lead = %+v, realms = %v", s.GraphPack, s.Realms.Names())
 	}
-	if s.RealmOf("repos/app") != s.Lead || s.Realm("") != s.Lead {
+	if s.RealmOf("repos/app") != s.GraphPack || s.Realm("") != s.GraphPack {
 		t.Error("a leaf with no pin uses the lead realm")
 	}
 }
 
-func TestANameWithNoStoreIsRefusedWithAHint(t *testing.T) {
+func TestAGraphNameWithNoStoreIsRefusedWithAHint(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
 	cfg := writeConfig(t, t.TempDir(), scriptedRoles+fullCaps)
-	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"}); err == nil || !strings.Contains(err.Error(), "realms") {
+	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"}); err == nil || !strings.Contains(err.Error(), "graphs section") {
 		t.Errorf("Prepare() = %v", err)
 	}
 }
 
-func TestARealmWithoutAGraphCannotLead(t *testing.T) {
+func TestAPackWithoutAGraphCannotLead(t *testing.T) {
 	store, cfg := realmStore(t, map[string]string{"helheim-go": "0.1.0"})
 	pack := filepath.Join(store, "helheim-go", "pack.yaml")
 	b, _ := os.ReadFile(pack)
 	os.WriteFile(pack, []byte(strings.Replace(string(b), "graph: graph.yaml\n", "", 1)), 0o644)
-	if _, err := Prepare(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: cfg, Realm: "helheim-go"}); err == nil || !strings.Contains(err.Error(), "has no graph") {
+	if _, err := Prepare(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: cfg, Graph: "helheim-go"}); err == nil || !strings.Contains(err.Error(), "holds no graph") {
 		t.Errorf("Prepare() = %v", err)
 	}
 }
@@ -78,14 +78,14 @@ func TestEachLeafUsesTheRealmTheProjectPinsForIt(t *testing.T) {
 	_, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0", "helheim-go": "0.2.0"})
 	project := treetest.Build(t, pinned("midgard-react", "0.1.0", map[string]treetest.Pin{
 		"repos/app": {Realm: "midgard-react", Version: "0.1.0"}, "repos/api": {Realm: "helheim-go", Version: "0.2.0"}, "repos/old": {}}))
-	s, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"})
+	s, err := Prepare(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"})
 	if err != nil {
 		t.Fatalf("Prepare() = %v", err)
 	}
 	if got := strings.Join(s.Realms.Names(), ","); got != "helheim-go,midgard-react" {
 		t.Errorf("realms = %s", got)
 	}
-	if s.RealmOf("repos/api").Name != "helheim-go" || s.RealmOf("repos/app") != s.Lead || s.RealmOf("repos/old") != s.Lead {
+	if s.RealmOf("repos/api").Name != "helheim-go" || s.RealmOf("repos/app") != s.GraphPack || s.RealmOf("repos/old") != s.GraphPack {
 		t.Errorf("RealmOf: api %s, app %s, old %s", s.RealmOf("repos/api").Name, s.RealmOf("repos/app").Name, s.RealmOf("repos/old").Name)
 	}
 }
@@ -94,7 +94,7 @@ func TestPinsThatDisagreeStopTheRunBeforeAnythingIsWritten(t *testing.T) {
 	_, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0", "helheim-go": "0.1.0"})
 	disagree := treetest.Build(t, pinned("midgard-react", "0.1.0", map[string]treetest.Pin{
 		"repos/app": {Realm: "midgard-react", Version: "0.1.0"}, "repos/web": {Realm: "midgard-react", Version: "0.2.0"}, "repos/api": {Realm: "helheim-go", Version: "0.1.0"}}))
-	_, err := Start(ctx, Options{Project: disagree, Config: cfg, Realm: "midgard-react"})
+	_, err := Start(ctx, Options{Project: disagree, Config: cfg, Graph: "midgard-react"})
 	if err == nil || !strings.Contains(err.Error(), "midgard-react is pinned at 0.1.0 by repos/app and at 0.2.0 by repos/web") {
 		t.Errorf("Start() = %v", err)
 	}
@@ -102,11 +102,11 @@ func TestPinsThatDisagreeStopTheRunBeforeAnythingIsWritten(t *testing.T) {
 		t.Error("a refused start created .factory/")
 	}
 	other := treetest.Build(t, pinned("midgard-react", "0.1.0", nil))
-	if _, err := Prepare(ctx, Options{Project: other, Config: cfg, Realm: "helheim-go"}); err == nil || !strings.Contains(err.Error(), "the project is built with the graph midgard-react 0.1.0") {
+	if _, err := Prepare(ctx, Options{Project: other, Config: cfg, Graph: "helheim-go"}); err == nil || !strings.Contains(err.Error(), "the project is built with the graph midgard-react 0.1.0") {
 		t.Errorf("the graph is another than the project's: %v", err)
 	}
 	old := treetest.Build(t, pinned("midgard-react", "0.1.0", map[string]treetest.Pin{"repos/web": {Realm: "helheim-go", Version: "0.0.9"}}))
-	if _, err := Prepare(ctx, Options{Project: old, Config: cfg, Realm: "midgard-react"}); err == nil || !strings.Contains(err.Error(), "the realm store holds helheim-go 0.1.0, but repos/web pins 0.0.9") {
+	if _, err := Prepare(ctx, Options{Project: old, Config: cfg, Graph: "midgard-react"}); err == nil || !strings.Contains(err.Error(), "the realm store holds helheim-go 0.1.0, but repos/web pins 0.0.9") {
 		t.Errorf("the store holds another version than the pin: %v", err)
 	}
 }
@@ -115,7 +115,7 @@ func TestRunJSONRecordsEveryRealmAndAResumeRefusesOneThatChanged(t *testing.T) {
 	store, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0", "helheim-go": "0.2.0"})
 	project := treetest.Build(t, pinned("midgard-react", "0.1.0", map[string]treetest.Pin{
 		"repos/app": {Realm: "midgard-react", Version: "0.1.0"}, "repos/api": {Realm: "helheim-go", Version: "0.2.0"}}))
-	r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"})
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"})
 	if err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
@@ -125,7 +125,7 @@ func TestRunJSONRecordsEveryRealmAndAResumeRefusesOneThatChanged(t *testing.T) {
 	if got["helheim-go"].Version != "0.2.0" || got["helheim-go"].Dir != filepath.Join(store, "helheim-go") || len(got["midgard-react"].SHA256) != 64 || len(got) != 2 {
 		t.Errorf("Realms = %+v", got)
 	}
-	if s, _ := LoadState(Dir(project, id)); s.Realm != "midgard-react" || s.RealmVersion != "0.1.0" || len(s.Realms) != 2 {
+	if s, _ := LoadState(Dir(project, id)); s.Graph != "midgard-react" || s.GraphVersion != "0.1.0" || len(s.Realms) != 2 {
 		t.Errorf("run.json realms = %+v", s.Realms)
 	}
 	r, err = Open(ctx, project, id, "")
@@ -155,7 +155,7 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 func TestTheFirstRunPinsTheGraphItWasGivenByName(t *testing.T) {
 	_, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0"})
 	project := treetest.Project(t, "repos/app")
-	r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"})
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"})
 	if err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
@@ -186,7 +186,7 @@ func TestTheFirstRunPinsTheGraphItWasGivenByName(t *testing.T) {
 		t.Errorf("the first ledger line lacks the realms:\n%s", first)
 	}
 	// The next run finds the pin and agrees with it.
-	r2, err := Start(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"})
+	r2, err := Start(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"})
 	if err != nil {
 		t.Fatalf("a second Start() = %v", err)
 	}
@@ -197,7 +197,7 @@ func TestTheFirstRunPinsTheGraphItWasGivenByName(t *testing.T) {
 	// A pack given by path pins nothing.
 	byPath := treetest.Project(t, "repos/app")
 	before := gitOut(t, byPath, "rev-parse", "HEAD")
-	r3, err := Start(ctx, Options{Project: byPath, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	r3, err := Start(ctx, Options{Project: byPath, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestARunWhoseGraphIsNotTheProjectsPinStopsBeforeAnythingStarts(t *testing.T
 	sandboxedPack(t, store, "midgard-vue", "0.1.0")
 	byPath := func(name, version string) string { return sandboxedPack(t, t.TempDir(), name, version) }
 	script := "{ agent: scripted, model: none, script: " + filepath.Join(toySandbox(t), "script.yaml") + " }"
-	cfg := sandboxConfig(t, script, "realms:\n  dir: "+store+"\n")
+	cfg := sandboxConfig(t, script, "realms:\n  dir: "+store+"\ngraphs:\n  dir: "+store+"\n")
 	cases := map[string]struct {
 		realm string
 		want  bool // the run starts
@@ -236,7 +236,7 @@ func TestARunWhoseGraphIsNotTheProjectsPinStopsBeforeAnythingStarts(t *testing.T
 			project := treetest.Build(t, pinned("midgard-react", "0.1.0", map[string]treetest.Pin{"repos/app": {}, "repos/api": {}}))
 			started := 0
 			h := Hooks{NewSandbox: func(*SandboxSetup, string) (gungnir.Sandbox, error) { started++; return &sandboxfake.Sandbox{}, nil }}
-			r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: c.realm, Hooks: h})
+			r, err := Start(ctx, Options{Project: project, Config: cfg, Graph: c.realm, Hooks: h})
 			if c.want {
 				if err != nil {
 					t.Fatalf("Start() = %v; the same graph at the same version is the project's", err)
@@ -263,7 +263,7 @@ func TestARunWhoseGraphIsNotTheProjectsPinStopsBeforeAnythingStarts(t *testing.T
 func TestARealmGivenByPathIsNotPinned(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
 	before := gitOut(t, project, "rev-parse", "HEAD")
-	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestARunWontPinOverUncommittedWork(t *testing.T) {
 	f := filepath.Join(project, "umbrella.yaml")
 	b, _ := os.ReadFile(f)
 	os.WriteFile(f, append(b, []byte("# the operator's note\n")...), 0o644)
-	if _, err := Start(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"}); err == nil || !strings.Contains(err.Error(), "umbrella.yaml") {
+	if _, err := Start(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"}); err == nil || !strings.Contains(err.Error(), "umbrella.yaml") {
 		t.Errorf("Start() = %v; the operator's own edit of umbrella.yaml is not Odin's to commit", err)
 	}
 	if _, err := os.Stat(filepath.Join(project, ".factory", "runs")); err == nil {
@@ -293,7 +293,7 @@ func TestARunWontPinOverUncommittedWork(t *testing.T) {
 func TestARunTakesTheRealmsNewPinsNameAfterItStarted(t *testing.T) {
 	store, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0", "helheim-go": "0.2.0"})
 	project := treetest.Build(t, pinned("midgard-react", "0.1.0", nil))
-	r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: "midgard-react"})
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"})
 	if err != nil {
 		t.Fatal(err)
 	}

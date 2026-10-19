@@ -79,13 +79,13 @@ func startRealms(t *testing.T, o realmsSetup) *run.Run {
 	o.budget = strings.TrimRight(o.budget, "\n") + "\n  journal: " + filepath.Join(cfg, "spend") + "\n"
 	for f, body := range map[string]string{
 		"script.yaml":  o.script,
-		"factory.yaml": "mode: " + o.mode + "\n" + o.roles + o.budget + "realms:\n  dir: " + store + "\n",
+		"factory.yaml": "mode: " + o.mode + "\n" + o.roles + o.budget + "realms:\n  dir: " + store + "\ngraphs:\n  dir: " + store + "\n",
 	} {
 		if err := os.WriteFile(filepath.Join(cfg, f), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: lead.name, Hooks: o.hooks})
+	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: lead.name, Hooks: o.hooks})
 	if err != nil {
 		t.Fatal(err)
 	}

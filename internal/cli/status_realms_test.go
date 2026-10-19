@@ -12,7 +12,7 @@ import (
 
 func TestStatusShowsEachLeafsRealmAndTheTasksStartingWithTheOnesGivenUp(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
-	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t)); code != ExitStopped {
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t)); code != ExitStopped {
 		t.Fatalf("run: exit %d: %s", code, errOut)
 	}
 	id := runID(t, dir)
@@ -31,7 +31,7 @@ func TestStatusShowsEachLeafsRealmAndTheTasksStartingWithTheOnesGivenUp(t *testi
 	if code != ExitDone {
 		t.Fatalf("status: exit %d: %s", code, errOut)
 	}
-	for _, want := range []string{"realm:    toy 0.3.0 (graph 3.0.0)", "leaf:     repos/app on ygg/" + id, "(toy 0.3.0)",
+	for _, want := range []string{"graph:    toy 0.3.0", "leaf:     repos/app on ygg/" + id, "(toy 0.3.0)",
 		"blocked:  p-T2: its loop gave up (attempts-exhausted)", "tasks:    3 (1 done, 0 doing, 1 to do, 1 blocked)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)

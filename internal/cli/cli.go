@@ -31,7 +31,7 @@ const (
 )
 
 const usage = `usage:
-  ygg run     --realm <name|dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
+  ygg run     --graph <name|dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
   ygg resume  <run-id> [--project <dir>] [--mode <mode>]
   ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
@@ -70,10 +70,10 @@ type command struct {
 
 // flags holds every flag; each command reads the ones it defines.
 type flags struct {
-	project, config, realm, brief, mode, note, reason, root, task, canary string
-	realms, rollout                                                       []string        // sandbox build: every --realm given; deps bump: every --rollout given
-	all                                                                   bool            // sandbox build: --all
-	set                                                                   map[string]bool // the flags given
+	project, config, graph, realm, brief, mode, note, reason, root, task, canary string
+	realms, rollout                                                              []string        // sandbox build: every --realm given; deps bump: every --rollout given
+	all                                                                          bool            // sandbox build: --all
+	set                                                                          map[string]bool // the flags given
 }
 
 // parse parses flags that may come before, between or after the positional arguments, and
@@ -125,20 +125,24 @@ func (c *command) refuse(err error) int {
 func (c *command) run(args []string) int {
 	f, _, ok := c.parse("run", args, 0, func(fs *flag.FlagSet, f *flags) {
 		fs.StringVar(&f.config, "config", "factory.yaml", "the factory config")
-		fs.StringVar(&f.realm, "realm", "", "the lead realm: a name found in factory.yaml's realms.dir, or the directory that holds pack.yaml")
+		fs.StringVar(&f.graph, "graph", "", "the graph pack: a name found in factory.yaml's graphs.dir, or the directory that holds pack.yaml")
+		fs.StringVar(&f.realm, "realm", "", "no longer a flag of a run: a leaf's realm is pinned in the project (use --graph)")
 		fs.StringVar(&f.brief, "brief", "", "the brief")
 	})
 	if !ok {
 		return ExitRefused
 	}
-	if f.realm == "" {
-		return c.refuse(errors.New("run needs --realm"))
+	if f.set["realm"] {
+		return c.refuse(errors.New("use --graph; a leaf's realm is pinned in the project"))
+	}
+	if f.graph == "" {
+		return c.refuse(errors.New("run needs --graph"))
 	}
 	mode, ok := c.mode(f)
 	if !ok {
 		return ExitRefused
 	}
-	r, err := run.Start(c.ctx, run.Options{Project: f.project, Config: f.config, Realm: f.realm, Brief: f.brief, Mode: mode})
+	r, err := run.Start(c.ctx, run.Options{Project: f.project, Config: f.config, Graph: f.graph, Brief: f.brief, Mode: mode})
 	var failed *run.Failed
 	if errors.As(err, &failed) { // it started, so run.json records it: fix the cause, then resume
 		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", failed.ID, failed.Err, resumeHint(failed.ID))
@@ -298,8 +302,8 @@ func (c *command) status(args []string) int {
 	if s.Status == run.StatusRunning && !run.Locked(dir) {
 		status += " (no ygg process holds it: interrupted; ygg resume " + s.ID + ")"
 	}
-	fmt.Fprintf(c.out, "run:      %s\nstatus:   %s\nmode:     %s\nrealm:    %s %s (graph %s)\nposition: %d\n",
-		s.ID, status, s.Mode, s.Realm, s.RealmVersion, s.GraphVersion, s.Position)
+	fmt.Fprintf(c.out, "run:      %s\nstatus:   %s\nmode:     %s\ngraph:    %s %s\nposition: %d\n",
+		s.ID, status, s.Mode, s.Graph, s.GraphVersion, s.Position)
 	if s.Pending != "" {
 		fmt.Fprintf(c.out, "waiting:  %s (%s)\n", s.Pending, s.PendingGate)
 	}

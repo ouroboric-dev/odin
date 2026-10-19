@@ -99,7 +99,7 @@ type stackBuild struct{ ref, dir, target string }
 func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks []stackBuild, services, skipped []string, err error) {
 	var store *realm.Store
 	if cfg.Realms != nil {
-		store = &realm.Store{Dir: cfg.Realms.Dir}
+		store = &realm.Store{Dir: cfg.Realms.Dir, Kind: "realm"}
 	}
 	var dirs []string
 	if all {
@@ -117,7 +117,7 @@ func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks []stack
 		}
 	}
 	for _, ref := range refs {
-		dir, _, err := realm.Resolve(ref, store)
+		dir, _, err := realm.Resolve(ref, store, "realm")
 		if err != nil {
 			return nil, nil, nil, err
 		}

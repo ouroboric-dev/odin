@@ -50,7 +50,7 @@ func leftover(t *testing.T, project, id, script string) (pgid, child int) {
 func startToy(t *testing.T) (project, id string) {
 	t.Helper()
 	project = treetest.Project(t, "repos/app")
-	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil {
 		t.Fatal(err)
 	}

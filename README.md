@@ -16,7 +16,7 @@ go vet ./...
 ## Usage
 
 ```text
-ygg run     --realm <name|dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
+ygg run     --graph <name|dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
 ygg resume  <run-id> [--project <dir>] [--mode <mode>]
 ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
 ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
