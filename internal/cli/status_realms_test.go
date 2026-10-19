@@ -61,7 +61,7 @@ func TestDoctorListsTheRealmsOfTheStoreAndChecksEachLoads(t *testing.T) {
 	os.WriteFile(filepath.Join(store, "asgard", "pack.yaml"), []byte("name: asgard\n"), 0o644)
 	os.WriteFile(filepath.Join(store, "midgard-vue", "pack.yaml"), []byte("name: midgard-react\nversion: 0.1.0\n"), 0o644)
 	code, out, _ = ygg(t, "doctor", "--project", dir, "--config", config)
-	for _, w := range []string{"ERROR realms: asgard:", "ERROR realms: " + filepath.Join(store, "midgard-vue") + " holds the realm midgard-react, so --realm midgard-vue can't find it"} {
+	for _, w := range []string{"ERROR realms: asgard:", "ERROR realms: " + filepath.Join(store, "midgard-vue") + " holds the realm midgard-react, so a project can't pin midgard-vue"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("doctor's output lacks %q:\n%s", w, out)
 		}
@@ -73,7 +73,7 @@ func TestDoctorListsTheRealmsOfTheStoreAndChecksEachLoads(t *testing.T) {
 
 func TestDoctorSaysWhenThereAreNoRealms(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
-	if _, out, _ := ygg(t, "doctor", "--project", dir, "--config", config); !strings.Contains(out, "WARN  realms: no realms section") {
+	if _, out, _ := ygg(t, "doctor", "--project", dir, "--config", config); !strings.Contains(out, "WARN  realms: no realms section: a project can't pin a realm leaf") {
 		t.Errorf("doctor's output:\n%s", out)
 	}
 	empty := t.TempDir()

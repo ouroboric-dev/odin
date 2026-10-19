@@ -38,7 +38,7 @@ func realmsStore(t *testing.T) (store, config string) {
 	_, plain := project(t, "script.yaml", "")
 	b, _ := os.ReadFile(plain)
 	config = filepath.Join(t.TempDir(), "factory.yaml")
-	if err := os.WriteFile(config, append(b, []byte(sandboxExtra+"realms:\n  dir: "+store+"\ngraphs:\n  dir: "+store+"\n")...), 0o644); err != nil {
+	if err := os.WriteFile(config, append(b, []byte(sandboxExtra+"realms:\n  dir: "+store+"\ngraphs:\n  dir: "+graphStore(t)+"\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return store, config

@@ -64,9 +64,9 @@ type limits struct{ files, bytes int64 }
 var defaultLimits = limits{files: 5000, bytes: 64 << 20}
 
 // Hash returns a SHA-256 over every file of the realm but the contents of .git: each file's path, its
-// executable bit and its bytes, in path order. A realm folder that is a git repository is its committed
-// files at HEAD (see hashCommitted): git-ignored build output and untracked files are not part of it
-// (B-050). Any other folder is hashed as it is on disk. A run records it, and a resume refuses a realm whose hash
+// executable bit and its bytes, in path order. A realm folder in a git work tree, the repo's own or a
+// folder of it, is its committed files at HEAD (see hashCommitted): git-ignored build output and untracked
+// files are not part of it (B-050), and a folder with no committed file is refused. Any other folder is hashed as it is on disk. A run records it, and a resume refuses a realm whose hash
 // changed (spec §4.3: the run's positions mean what they meant). A realm holds regular files and folders
 // only: a symlink anywhere in it is refused, since a run reads prompts, first-commit files and the
 // template by following links, so a link could read outside the realm, and a change at its target would
@@ -80,11 +80,11 @@ func hashLimited(dir string, lim limits) (string, error) {
 	} else if st.Mode()&fs.ModeSymlink != 0 {
 		return "", fmt.Errorf("%s is a symlink; a realm holds its own files and folders, and a link could lead out of it", dir)
 	}
-	// A .git that git does not accept as a repo (a stray folder, say) leaves the realm a plain folder.
-	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
-		if gitDir, err := git.Run(context.Background(), dir, "rev-parse", "--absolute-git-dir"); err == nil {
-			return hashCommitted(gitDir, dir, lim)
-		}
+	// A folder inside a git work tree, whether it holds the repo's .git or is one folder of the repo (a graph
+	// pack in the voluspa leaf), is its committed files. A folder git does not place in a work tree (no
+	// .git, or one git does not accept as a repo) is a plain folder.
+	if gitDir, top, prefix, ok := workTreeOf(dir); ok {
+		return hashCommitted(gitDir, top, prefix, dir, lim)
 	}
 	h := sha256.New()
 	var files, size int64
@@ -182,4 +182,21 @@ func Resolve(ref string, store *Store, kind string) (dir string, byName bool, er
 	}
 	dir, err = store.Find(ref)
 	return dir, true, err
+}
+
+// workTreeOf says where dir stands in a git work tree: the repo's git dir, the work tree's top, and dir's
+// path from the top with a trailing slash ("" at the top). ok is false for a folder outside any work tree.
+func workTreeOf(dir string) (gitDir, top, prefix string, ok bool) {
+	out, err := git.Run(context.Background(), dir, "rev-parse", "--absolute-git-dir", "--show-toplevel", "--show-prefix")
+	if err != nil {
+		return "", "", "", false
+	}
+	lines := strings.Split(out, "\n")
+	if len(lines) < 2 || lines[0] == "" || lines[1] == "" {
+		return "", "", "", false
+	}
+	if len(lines) > 2 {
+		prefix = lines[2]
+	}
+	return lines[0], lines[1], prefix, true
 }

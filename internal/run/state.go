@@ -376,3 +376,22 @@ func (s *State) check(setup *Setup) error {
 	}
 	return nil
 }
+
+// BeforeGraphs says whether the run folder holds a run of schema ygg.run/v2, which a lead realm led and
+// which can't be resumed. It reads only the run's id and its exec node, which a v2 run.json had in the
+// form v3 has, so doctor can stop a leftover process without v2's other fields.
+func BeforeGraphs(dir string) (id string, exec *ExecProcess, ok bool) {
+	data, err := os.ReadFile(filepath.Join(dir, "run.json"))
+	if err != nil {
+		return "", nil, false
+	}
+	var head struct {
+		Schema string       `json:"schema"`
+		ID     string       `json:"id"`
+		Exec   *ExecProcess `json:"exec"`
+	}
+	if json.Unmarshal(data, &head) != nil || head.Schema != stateSchemaV2 {
+		return "", nil, false
+	}
+	return head.ID, head.Exec, true
+}
