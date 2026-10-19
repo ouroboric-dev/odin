@@ -30,14 +30,14 @@ func TestAcceptanceChecksRunInASandboxThatHoldsASnapshotOfTheProject(t *testing.
 	}
 	var snap *gungnir.SandboxSpec
 	for i, u := range fake.Ups {
-		if u.Name == "snapshot/move" {
+		if u.Name == "snapshot/move/test" {
 			snap = &fake.Ups[i]
 		}
 	}
 	if snap == nil {
 		t.Fatalf("no snapshot sandbox came up: %+v", fake.Ups)
 	}
-	if !snap.Scratch || snap.GitDir != "" || snap.Stack != acceptanceStack || snap.Leaf != filepath.Join(r.Dir, "snapshot", "move") || snap.Parent != r.Dir {
+	if !snap.Scratch || snap.GitDir != "" || snap.Stack != acceptanceStack || snap.Leaf != filepath.Join(r.Dir, "snapshot", "move", "test") || snap.Parent != r.Dir {
 		t.Errorf("spec = %+v; want a scratch sandbox on the acceptance stack over the run's snapshot folder", *snap)
 	}
 	if err := snap.Validate(); err != nil {
@@ -50,7 +50,7 @@ func TestAcceptanceChecksRunInASandboxThatHoldsASnapshotOfTheProject(t *testing.
 	if !ran {
 		t.Errorf("the acceptance check did not go through the sandbox: %+v", fake.Execs)
 	}
-	if b, err := os.ReadFile(filepath.Join(r.Dir, "snapshot", "move", "repos", "app", "build.txt")); err != nil || string(b) != "done\n" {
+	if b, err := os.ReadFile(filepath.Join(r.Dir, "snapshot", "move", "test", "repos", "app", "build.txt")); err != nil || string(b) != "done\n" {
 		t.Errorf("the snapshot holds repos/app/build.txt = %q, %v; the leaf at the commit it moves to", b, err)
 	}
 	filepath.WalkDir(filepath.Join(r.Dir, "snapshot"), func(p string, d os.DirEntry, err error) error {

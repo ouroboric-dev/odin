@@ -35,10 +35,10 @@ func shipRouting(r *run.Run, n schema.Node, attempt int, parent tree.Node) error
 	if len(res.Skipped) > 0 {
 		note = fmt.Sprintf("left out: %d (first: %s)", len(res.Skipped), res.Skipped[0])
 	}
-	// The pack of the lead realm sets the bar (spec §8.3). The bench is in the project umbrella, where
-	// no agent mounts. Under the bar, or with no bench to measure by, nothing is written. A pack without
-	// the block ships unmeasured.
-	if rp := r.Setup.Lead.Pack.Routing; rp != nil {
+	// The graph pack sets the bar (spec §8.3); a leaf realm's routing block does not. The bench is in the
+	// project umbrella, where no agent mounts. Under the bar, or with no bench to measure by, nothing is
+	// written. A graph pack without the block ships unmeasured.
+	if rp := r.Setup.GraphPack.Pack.Routing; rp != nil {
 		bench, err := routing.LoadBenchIn(parent.Dir, rp.BenchPath())
 		if err != nil {
 			return &nodeFailure{fmt.Errorf("the routing index does not ship, because its bench can't be read: %w", err)}

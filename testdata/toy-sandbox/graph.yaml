@@ -2,6 +2,7 @@
 # runs in the project umbrella and so outside any sandbox (Phase 3, decision 11).
 name: toy-sandbox
 version: 0.1.0
+schema: 1
 nodes:
   - { id: design, kind: agent, role: planner, prompt: prompts/design.md, repo: repos/app }
   - { id: design-gate, kind: gate, gate: design }

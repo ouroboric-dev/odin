@@ -96,7 +96,7 @@ func startGraded(t *testing.T, nodes, results string, edit func(*tasktest.Task))
 	files := map[string]string{
 		filepath.Join(tmpl, "LICENSE"):     "MIT\n",
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + gradedPack,
-		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nnodes:\n" + nodes,
+		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 1\nnodes:\n" + nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
 		filepath.Join(cfg, "script.yaml"):  gradedScript,
 		filepath.Join(cfg, "factory.yaml"): "mode: unattended\ngates: { design: auto }\nroles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n" +
@@ -114,7 +114,7 @@ func startGraded(t *testing.T, nodes, results string, edit func(*tasktest.Task))
 		NewSandbox: func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return g.box, nil },
 		NewGrader:  func(*run.SandboxSetup, string) (run.Grader, error) { return g.grader, nil },
 	}
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm, Brief: tk.Brief(), Hooks: h})
+	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Brief: tk.Brief(), Hooks: h})
 	if err != nil {
 		t.Fatal(err)
 	}

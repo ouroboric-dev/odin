@@ -4,12 +4,16 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/agents"
 	"github.com/ouroboric-dev/odin/internal/run"
+	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 )
 
 const scratchNode = "  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true, inputs: [docs/input.md, docs/more, missing.md] }\n"
@@ -230,5 +234,98 @@ func TestAnInputThatHoldsTheProjectRootLeavesOutFactoryAndGit(t *testing.T) {
 		if len(present) != 1 {
 			t.Errorf("input %q: present = %v", in, present)
 		}
+	}
+}
+
+const stackImage = "docker.io/library/golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514"
+
+func TestAScratchSandboxStartsOnTheFactoryLayerWithTheModelAPIsAsItsOnlyEgress(t *testing.T) {
+	fake := &sandboxfake.Sandbox{}
+	r := startRealms(t, realmsSetup{
+		roles:  "roles:\n  planner: { agent: claude-code, model: sonnet }\n  implementer: { agent: scripted, model: none, script: script.yaml }\n",
+		nodes:  scratchNode + build, // build names the leaf, so the run has one
+		script: "steps: {}\n",
+		realms: []realmFiles{
+			{name: "software", version: "0.1.0", pack: "", files: map[string]string{"p.md": "Prompt.\n"}}, // a graph pack with no sandbox block
+			{name: "leaf-web", version: "0.1.0", pack: "sandbox:\n  stack: " + stackImage + "\n  egress: [registry.npmjs.org, api.osv.dev]\n"},
+		},
+		leaves:  map[string]string{"repos/app": "leaf-web"},
+		sandbox: fake,
+	})
+	if r.Setup.Sandbox == nil || r.Setup.Sandbox.Config.Images != sandbox.FactoryImages() {
+		t.Fatalf("Sandbox = %+v; a graph pack with no sandbox block prepares with the factory images %+v", r.Setup.Sandbox, sandbox.FactoryImages())
+	}
+	if _, err := r.ScratchRunner(context.Background(), "design"); err != nil {
+		t.Fatal(err)
+	}
+	var scratch, leaf *gungnir.SandboxSpec
+	for i, s := range fake.Ups {
+		switch s.Name {
+		case "scratch/design":
+			scratch = &fake.Ups[i]
+		}
+	}
+	if scratch == nil {
+		t.Fatalf("no scratch sandbox came up: %+v", fake.Ups)
+	}
+	if scratch.Stack != "" {
+		t.Errorf("the scratch sandbox starts on the stack %q, want none: the factory layer alone", scratch.Stack)
+	}
+	want := slices.Clone(agents.Hosts("claude-code"))
+	slices.Sort(want)
+	if !slices.Equal(scratch.Egress, want) {
+		t.Errorf("the scratch egress is %v, want only the model API hosts %v", scratch.Egress, want)
+	}
+	if len(scratch.Services) != 0 {
+		t.Errorf("the scratch sandbox has services %v", scratch.Services)
+	}
+	if err := scratch.Validate(); err != nil {
+		t.Errorf("the scratch spec is one the driver would refuse: %v", err)
+	}
+	// A leaf of the same run keeps its realm's registries and stack.
+	if _, err := r.Runner(context.Background(), "repos/app"); err != nil {
+		t.Fatal(err)
+	}
+	for i, s := range fake.Ups {
+		if s.Name == "repos/app" {
+			leaf = &fake.Ups[i]
+		}
+	}
+	if leaf == nil || leaf.Stack != stackImage || !slices.Contains(leaf.Egress, "registry.npmjs.org") || !slices.Contains(leaf.Egress, "api.osv.dev") {
+		t.Errorf("the leaf's sandbox is %+v, want its realm's stack and registries", leaf)
+	}
+}
+
+func TestTheRoutingThresholdComesFromTheGraphPack(t *testing.T) {
+	const nodes = build + "  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +
+		"  - { id: move, kind: pointer, repo: repos/app, generated: [REPOS.md, .ygg/impact.json] }\n"
+	const routingBlock = "routing:\n  threshold: 1.0\n"
+	leafChecks := packChecks
+	launch := func(graphPack, leafPack string) (*run.Run, error) {
+		r, err := tryRealms(t, realmsSetup{nodes: nodes, script: goModScript,
+			realms: []realmFiles{
+				{name: "software", version: "0.1.0", pack: graphPack, files: map[string]string{"p.md": "Prompt.\n"}},
+				{name: "leaf-app", version: "0.1.0", pack: leafPack, files: map[string]string{"p.md": "Prompt.\n"}},
+			},
+			leaves: map[string]string{"repos/app": "leaf-app"}})
+		return r, err
+	}
+	// The threshold in the graph pack, and a bench the index misses: the move fails.
+	r, err := launch(routingBlock, leafChecks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeBench(t, r, rightBench+"  - { id: who-consumes-nothing, kind: consumers, about: repos/app, answer: [ghost] }\n")
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusFailed || out.Err == nil || !strings.Contains(out.Err.Error(), "at threshold 1.00") {
+		t.Fatalf("graph pack threshold: Advance() = %+v, %v; want a failed node that says the index does not ship", out, err)
+	}
+	// The same block in the leaf realm's pack only: nothing sets the bar, the index ships unmeasured.
+	r, err = launch("", leafChecks+routingBlock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("leaf realm threshold: Advance() = %+v, %v; want the index shipped unmeasured", out, err)
 	}
 }

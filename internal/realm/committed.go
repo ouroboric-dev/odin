@@ -20,15 +20,23 @@ type blob struct {
 	size            int64
 }
 
-// hashCommitted (gitDir is the repo's git dir) hashes a realm folder that is a git repository from its committed files at HEAD, read with
+// hashCommitted hashes a realm folder in a git work tree from its committed files at HEAD, read with
 // ls-tree and cat-file as the snapshot export reads them, in the format and order the folder walk uses, so a
-// clean checkout hashes as it did before. A run reads the realm from its folder, so a tracked file that
-// differs from HEAD is refused: it would be read but not hashed. A committed symlink, or any entry that is not
+// clean checkout hashes as it did before. gitDir is the repo's git dir, top its work tree's top, and prefix
+// the folder's path from top with a trailing slash ("" when the folder is the top): only the files under the
+// folder count, named relative to it, and a change to a file elsewhere in the repo does not matter. A folder
+// with no committed file is refused, not hashed as an empty one. A run reads the realm from its folder, so
+// a tracked file that differs from HEAD is refused: it would be read but not hashed. A committed symlink, or any entry that is not
 // a regular file, is refused as in a plain folder.
-func hashCommitted(gitDir, dir string, lim limits) (string, error) {
+func hashCommitted(gitDir, top, prefix, dir string, lim limits) (string, error) {
 	ctx := context.Background()
-	repo := git.Repo{GitDir: gitDir, WorkTree: dir}
-	changed, err := repo.Output(ctx, "status", "--porcelain", "-z", "--untracked-files=no")
+	repo := git.Repo{GitDir: gitDir, WorkTree: top}
+	// A pathspec of "" would match nothing; the top is ".".
+	spec := strings.TrimSuffix(prefix, "/")
+	if spec == "" {
+		spec = "."
+	}
+	changed, err := repo.Output(ctx, "status", "--porcelain", "-z", "--untracked-files=no", "--", ":(literal)"+spec)
 	if err != nil {
 		return "", err
 	}
@@ -41,7 +49,7 @@ func hashCommitted(gitDir, dir string, lim limits) (string, error) {
 		}
 		return "", fmt.Errorf("%s: %s differs from the committed realm; commit it or undo it, since a run reads the folder and the realm's hash is of the commit", dir, strings.Join(names, ", "))
 	}
-	out, err := repo.Output(ctx, "ls-tree", "-r", "-l", "-z", "--full-tree", "HEAD")
+	out, err := repo.Output(ctx, "ls-tree", "-r", "-l", "-z", "HEAD", "--", spec)
 	if err != nil {
 		return "", err
 	}
@@ -56,7 +64,7 @@ func hashCommitted(gitDir, dir string, lim limits) (string, error) {
 		if !ok || len(f) != 4 {
 			return "", fmt.Errorf("git ls-tree gave an entry that is not understood: %q", rec)
 		}
-		b := blob{mode: f[0], sha: f[2], name: name}
+		b := blob{mode: f[0], sha: f[2], name: strings.TrimPrefix(name, prefix)}
 		switch b.mode {
 		case "100644", "100755":
 		case "120000":
@@ -74,6 +82,10 @@ func hashCommitted(gitDir, dir string, lim limits) (string, error) {
 			return "", fmt.Errorf("%s holds more than %d bytes; a realm is text and small, so this is not one", dir, lim.bytes)
 		}
 		blobs = append(blobs, b)
+	}
+	if len(blobs) == 0 {
+		return "", fmt.Errorf("%s: none of its files is committed (untracked or git-ignored files are not part of a realm's hash); "+
+			"commit them", dir)
 	}
 	// The folder walk visits a folder's entries in name order, so "a/b" comes before "a.b".
 	slices.SortFunc(blobs, func(a, b blob) int {

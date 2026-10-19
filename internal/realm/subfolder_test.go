@@ -1,0 +1,140 @@
+package realm
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ouroboric-dev/odin/internal/git"
+)
+
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if _, err := git.Run(context.Background(), dir, args...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A graph pack is one folder of a repo, such as software in the voluspa leaf. Its hash is of the files
+// committed under it, named relative to it, so it is what the same files hash to as a folder of their own.
+func TestASubfolderOfAGitRepoIsHashedFromItsCommittedFiles(t *testing.T) {
+	base := t.TempDir()
+	plain := filepath.Join(base, "plain")
+	fixture(t, plain, "software", "0.1.0")
+	want, err := Hash(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := filepath.Join(base, "repo")
+	soft := filepath.Join(repo, "software")
+	fixture(t, soft, "software", "0.1.0")
+	fixture(t, filepath.Join(repo, "untracked"), "untracked", "0.1.0")
+	fixture(t, filepath.Join(repo, "ignored"), "ignored", "0.1.0")
+	write(t, repo, ".gitignore", "ignored/\n", 0o644)
+	write(t, repo, "README.md", "the repo\n", 0o644)
+	gitIn(t, repo, "init", "-q")
+	gitIn(t, repo, "add", "--", "software", ".gitignore", "README.md")
+	gitIn(t, repo, "commit", "-q", "-m", "pack")
+
+	t.Run("a clean subfolder hashes as a plain copy of it", func(t *testing.T) {
+		if got, err := Hash(soft); err != nil || got != want {
+			t.Errorf("Hash(software) = %q, %v; want %q", got, err, want)
+		}
+	})
+	t.Run("an untracked file in it leaves the hash unchanged", func(t *testing.T) {
+		write(t, soft, "notes.md", "not committed\n", 0o644)
+		write(t, soft, "dist/app.js", "built\n", 0o644)
+		if got, err := Hash(soft); err != nil || got != want {
+			t.Errorf("Hash(software) = %q, %v; want %q", got, err, want)
+		}
+	})
+	t.Run("a file elsewhere in the repo that changed leaves it loading with the same hash", func(t *testing.T) {
+		write(t, repo, "README.md", "changed, not committed\n", 0o644)
+		if got, err := Hash(soft); err != nil || got != want {
+			t.Errorf("Hash(software) = %q, %v; want %q", got, err, want)
+		}
+		write(t, repo, "README.md", "the repo\n", 0o644)
+	})
+	t.Run("a folder with no committed file is refused, not hashed as empty", func(t *testing.T) {
+		for _, name := range []string{"untracked", "ignored"} {
+			if got, err := Hash(filepath.Join(repo, name)); err == nil || !strings.Contains(err.Error(), "none of its files is committed") {
+				t.Errorf("Hash(%s) = %q, %v; want a refusal saying none of its files is committed", name, got, err)
+			}
+		}
+	})
+	t.Run("a file that is only staged is refused", func(t *testing.T) {
+		write(t, soft, "prompts/new.md", "staged only\n", 0o644)
+		gitIn(t, repo, "add", "--", "software/prompts/new.md")
+		if got, err := Hash(soft); err == nil || !strings.Contains(err.Error(), "differs from the committed realm") || !strings.Contains(err.Error(), "prompts/new.md") {
+			t.Errorf("Hash(software) = %q, %v; want a refusal naming the staged file", got, err)
+		}
+		gitIn(t, repo, "reset", "-q", "--", "software/prompts/new.md")
+		write(t, soft, "prompts/new.md", "", 0o644)
+		if err := os.Remove(filepath.Join(soft, "prompts/new.md")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("a deleted tracked file is refused", func(t *testing.T) {
+		if err := os.Remove(filepath.Join(soft, "prompts/implementer.md")); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Hash(soft); err == nil || !strings.Contains(err.Error(), "differs from the committed realm") || !strings.Contains(err.Error(), "prompts/implementer.md") {
+			t.Errorf("Hash(software) = %q, %v; want a refusal naming the deleted file", got, err)
+		}
+		gitIn(t, repo, "checkout", "-q", "--", "software/prompts/implementer.md")
+	})
+	t.Run("a changed tracked file in it is refused", func(t *testing.T) {
+		write(t, soft, "prompts/implementer.md", "Changed, not committed.\n", 0o644)
+		if got, err := Hash(soft); err == nil || !strings.Contains(err.Error(), "differs from the committed realm") || !strings.Contains(err.Error(), "prompts/implementer.md") {
+			t.Errorf("Hash(software) = %q, %v; want a refusal naming the changed file", got, err)
+		}
+	})
+}
+
+// A folder that holds a .git git does not accept is not a plain folder: its files could be a repo's, so its
+// hash can't be taken from disk as if git had nothing to say.
+func TestAFolderWithAGitThatGitRejectsIsRefused(t *testing.T) {
+	base := t.TempDir()
+	for name, mutate := range map[string]func(dir string){
+		"a .git file that points nowhere":  func(d string) { write(t, d, ".git", "gitdir: /nonexistent/elsewhere\n", 0o644) },
+		"a .git folder that is not a repo": func(d string) { write(t, d, ".git/HEAD", "ref: x", 0o644) },
+	} {
+		dir := filepath.Join(base, strings.ReplaceAll(name, " ", "-"))
+		fixture(t, dir, "software", "0.1.0")
+		mutate(dir)
+		if got, err := Hash(dir); err == nil || !strings.Contains(err.Error(), ".git") || !strings.Contains(err.Error(), "git rev-parse") {
+			t.Errorf("%s: Hash() = %q, %v; want a refusal that names git's error", name, got, err)
+		}
+	}
+}
+
+// A pack in a subfolder of a repo that git refuses (for example for its owner, since Odin sets
+// GIT_CONFIG_GLOBAL=/dev/null and so ignores a global safe.directory; the test uses a repo format git does not know) is not a plain folder: hashing it from
+// disk would take uncommitted files for the pack. The hash fails closed and gives git's error.
+func TestASubfolderOfARepoThatGitRefusesIsRefusedNotHashedFromDisk(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "repo")
+	soft := filepath.Join(repo, "software")
+	fixture(t, soft, "software", "0.1.0")
+	gitIn(t, repo, "init", "-q")
+	gitIn(t, repo, "add", "--", "software")
+	gitIn(t, repo, "commit", "-q", "-m", "pack")
+	if _, err := Hash(soft); err != nil {
+		t.Fatalf("Hash() before git refuses the repo = %v", err)
+	}
+	// Odin strips GIT_* from git's environment, so a repo owned by someone else can't be faked; a repo of a
+	// format this git does not know is refused by git in the same way, with its own error.
+	write(t, repo, ".git/config", "[core]\n\trepositoryformatversion = 99\n", 0o644)
+	got, err := Hash(soft)
+	if err == nil || !strings.Contains(err.Error(), "git repository that git does not accept") || !strings.Contains(err.Error(), "repo version") {
+		t.Fatalf("Hash() = %q, %v; want a refusal with git's error", got, err)
+	}
+	// A plain folder outside any work tree still hashes from disk.
+	plain := filepath.Join(t.TempDir(), "plain")
+	fixture(t, plain, "software", "0.1.0")
+	if _, err := Hash(plain); err != nil {
+		t.Errorf("Hash() of a plain folder = %v", err)
+	}
+}

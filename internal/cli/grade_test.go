@@ -61,7 +61,7 @@ func gradedRun(t *testing.T, withGrader bool) (dir, config, id string, tk *taskt
 	for p, body := range map[string]string{
 		filepath.Join(realm, "t", "LICENSE"):  "MIT\n",
 		filepath.Join(realm, "pack.yaml"):     "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + gradePack,
-		filepath.Join(realm, "graph.yaml"):    "name: test\nversion: 1.0.0\nnodes:\n  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n",
+		filepath.Join(realm, "graph.yaml"):    "name: test\nversion: 1.0.0\nschema: 1\nnodes:\n  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n",
 		filepath.Join(realm, "p.md"):          "Do the work.\n",
 		filepath.Join(cfgDir, "script.yaml"):  script,
 		filepath.Join(cfgDir, "factory.yaml"): cfg,
@@ -72,7 +72,7 @@ func gradedRun(t *testing.T, withGrader bool) (dir, config, id string, tk *taskt
 	}
 	dir, config = treetest.Project(t, "repos/app"), filepath.Join(cfgDir, "factory.yaml")
 	h := run.Hooks{NewSandbox: func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return &sandboxfake.Sandbox{}, nil }}
-	r, err := run.Start(context.Background(), run.Options{Project: dir, Config: config, Realm: realm, Brief: tk.Brief(), Hooks: h})
+	r, err := run.Start(context.Background(), run.Options{Project: dir, Config: config, Graph: realm, Brief: tk.Brief(), Hooks: h})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestGradeNeedsADoneRunAndTheGraderSection(t *testing.T) {
 	// A run that did not finish is not graded: its sandboxes may be up and its work is not final.
 	p, _ := filepath.Abs("../../testdata/toy")
 	dir2, config2 := project(t, "script.yaml", "")
-	ygg(t, "run", "--project", dir2, "--config", config2, "--realm", p)
+	ygg(t, "run", "--project", dir2, "--config", config2, "--graph", p)
 	if code, _, errOut := ygg(t, "grade", runID(t, dir2), "--project", dir2); code != ExitRefused {
 		t.Errorf("grade of a stopped run: exit %d, %q", code, errOut)
 	}

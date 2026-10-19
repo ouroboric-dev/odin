@@ -23,7 +23,7 @@ func startSandboxed(t *testing.T) (*Run, *sandboxfake.Sandbox, string, Hooks) {
 	fake := &sandboxfake.Sandbox{}
 	h := Hooks{NewSandbox: func(*SandboxSetup, string) (gungnir.Sandbox, error) { return fake, nil }}
 	script := "{ agent: scripted, model: none, script: " + filepath.Join(toySandbox(t), "script.yaml") + " }"
-	r, err := Start(ctx, Options{Project: project, Config: sandboxConfig(t, script, ""), Realm: toySandbox(t), Hooks: h})
+	r, err := Start(ctx, Options{Project: project, Config: sandboxConfig(t, script, ""), Graph: toySandbox(t), Hooks: h})
 	if err != nil {
 		t.Fatal(err)
 	}

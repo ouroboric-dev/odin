@@ -46,7 +46,7 @@ const loopRoles = "roles:\n  implementer: { agent: scripted, model: none, script
 
 func TestPrepareAcceptsALoopAndBuildsTheRolesOfItsReviewers(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
-	s, err := Prepare(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Realm: loopRealm(t, nil)})
+	s, err := Prepare(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Graph: loopRealm(t, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestPrepareRefusesALoopThatCouldNotRun(t *testing.T) {
 		}}, "umbrella"},
 	}
 	for name, c := range cases {
-		_, err := Prepare(ctx, Options{Project: project, Config: loopConfig(t, c.roles), Realm: loopRealm(t, c.edit)})
+		_, err := Prepare(ctx, Options{Project: project, Config: loopConfig(t, c.roles), Graph: loopRealm(t, c.edit)})
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Prepare() = %v, want an error containing %q", name, err, c.want)
 		}
@@ -91,18 +91,18 @@ func TestTheSkillsOfALoopsReviewersAreInTheRecord(t *testing.T) {
 		return strings.Replace(s, "prompts/review-quality.md }", "prompts/review-quality.md, skills: [plain-language] }", 1)
 	}})
 	lib := skillfake.Libraries(t, "plain-language", "Write plainly.")
-	s, err := Prepare(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Realm: realm, Hooks: Hooks{Libs: lib}})
+	s, err := Prepare(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Graph: realm, Hooks: Hooks{Libs: lib}})
 	if err != nil || strings.Join(s.Skills.Skills, ",") != "plain-language" || len(s.Skills.Hash) != 64 {
 		t.Fatalf("Prepare() = %+v, %v; the reviewer's skill belongs in the record", s.Skills, err)
 	}
-	if _, err := Prepare(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Realm: realm, Hooks: Hooks{Libs: &skills.Libraries{Pinned: skillfake.Libraries(t, "other", "x").Pinned}}}); err == nil || !strings.Contains(err.Error(), "skill") {
+	if _, err := Prepare(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Graph: realm, Hooks: Hooks{Libs: &skills.Libraries{Pinned: skillfake.Libraries(t, "other", "x").Pinned}}}); err == nil || !strings.Contains(err.Error(), "skill") {
 		t.Errorf("Prepare() = %v; a reviewer that names a skill nobody vendored never starts", err)
 	}
 }
 
 func TestDiscardWorkPutsALeafBackToItsCheckpointAndSavesWhatItRemoved(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
-	r, err := Start(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Realm: loopRealm(t, nil)})
+	r, err := Start(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Graph: loopRealm(t, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestDiscardWorkPutsALeafBackToItsCheckpointAndSavesWhatItRemoved(t *testing
 
 func TestALoopsStateSurvivesInRunJSON(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
-	r, err := Start(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Realm: loopRealm(t, nil)})
+	r, err := Start(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Graph: loopRealm(t, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,13 +168,13 @@ func TestTheLoopSmokeRealmPreparesWithBothRealAdapters(t *testing.T) {
 	if err := os.WriteFile(cfg, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := Prepare(ctx, Options{Project: treetest.Project(t), Config: cfg, Realm: smoke})
+	s, err := Prepare(ctx, Options{Project: treetest.Project(t), Config: cfg, Graph: smoke})
 	if err != nil {
 		t.Fatal(err)
 	}
 	n := s.Graph.Nodes[0]
 	if n.Kind != "loop" || s.Agents["implementer"].Name() != "claude-code" || s.Agents["reviewer"].Name() != "opencode" ||
-		strings.Join(s.Sandbox.Egress, ",") != "api.anthropic.com,openrouter.ai" || len(n.Reviewers) != 1 || n.Attempts != 2 {
-		t.Errorf("node %+v, agents %v, egress %v", n, s.Agents, s.Sandbox.Egress)
+		strings.Join(s.Sandbox.Hosts, ",") != "api.anthropic.com,openrouter.ai" || len(n.Reviewers) != 1 || n.Attempts != 2 {
+		t.Errorf("node %+v, agents %v, scratch egress %v (want the adapters' model APIs only)", n, s.Agents, s.Sandbox.Hosts)
 	}
 }

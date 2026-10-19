@@ -2,12 +2,13 @@
 # fills the places written between two at signs (engine, folder, bind mount, tasks, suites) from its flags and
 # writes the result to the run's folder. It never writes your factory.yaml. The implementer is Claude Code (subscription: CLAUDE_CODE_OAUTH_TOKEN) and the reviewer is
 # OpenCode on OpenRouter (a paid API: OPENROUTER_API_KEY), so the caps count dollars. The credentials come
-# from the environment, never from this file.
+# from the environment, never from this file. The run names its graph pack by path (--graph <dir>), so this
+# file needs no graphs: section; to name a pack by its name, set graphs.dir to the folder that holds it.
 #
 # The caps, from the widest to the narrowest:
 #   - budget.per_day and budget.per_run: tokens (input and output, not cache reads), turns and dollars. The
 #     run stops at the hard approval point budget-cap before a session would start over one of them.
-#   - the graph's own caps for each session: max_turns and timeout of the implementer (40 turns, 20 minutes)
+#   - the graph pack's own caps for each session: max_turns and timeout of the implementer (40 turns, 20 minutes)
 #     and of the reviewer (10 turns, 5 minutes). There is no token cap for one agent; the turns and the time
 #     are the per-agent limit.
 #   - the wall clock: the script runs ygg under `timeout` (--wall, 90 minutes by default) and stops it

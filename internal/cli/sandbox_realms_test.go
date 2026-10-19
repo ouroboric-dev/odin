@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ouroboric-dev/gleipnir/sandbox"
 )
 
 const (
@@ -36,17 +38,19 @@ func realmsStore(t *testing.T) (store, config string) {
 	_, plain := project(t, "script.yaml", "")
 	b, _ := os.ReadFile(plain)
 	config = filepath.Join(t.TempDir(), "factory.yaml")
-	if err := os.WriteFile(config, append(b, []byte(sandboxExtra+"realms:\n  dir: "+store+"\n")...), 0o644); err != nil {
+	if err := os.WriteFile(config, append(b, []byte(sandboxExtra+"realms:\n  dir: "+store+"\ngraphs:\n  dir: "+graphStore(t)+"\n")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return store, config
 }
 
+// builds returns the work images built for realms' stacks: the factory layer, which every build makes first,
+// is not one of them.
 func builds(log string) []string {
 	b, _ := os.ReadFile(log)
 	var out []string
 	for _, line := range strings.Split(string(b), "\n") {
-		if strings.Contains(line, "--target work") {
+		if strings.Contains(line, "--target work") && !strings.Contains(line, "STACK_IMAGE="+sandbox.FactoryStack) {
 			out = append(out, line)
 		}
 	}
@@ -75,7 +79,7 @@ func TestSandboxBuildBuildsTheStackOfEveryRealmNamed(t *testing.T) {
 	if len(got) != 2 || !strings.Contains(strings.Join(got, "\n"), "STACK_IMAGE="+nodeStack) || !strings.Contains(strings.Join(got, "\n"), "STACK_IMAGE="+goStack) {
 		t.Errorf("work images built:\n%s", strings.Join(got, "\n"))
 	}
-	if strings.Count(out, "Built:") != 2 {
+	if strings.Count(out, "Built:") != 3 { // the factory layer, then the two realms
 		t.Errorf("output:\n%s", out)
 	}
 	if got := pulls(log); len(got) != 1 || !strings.Contains(out, "Pulling the service image "+pgImage) {

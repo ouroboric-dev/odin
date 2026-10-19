@@ -1,5 +1,5 @@
 // Package realm loads realm leaves (change realm-leaf-naming): the repos that hold a pack.yaml with a
-// graph, prompts, templates and checks. A run loads its lead realm and each leaf's realm once, at the
+// graph, prompts, templates and checks. A run loads each leaf's realm once, at the
 // version the project pins, and records a hash of each so a resume can tell nothing changed under it.
 package realm
 
@@ -64,9 +64,9 @@ type limits struct{ files, bytes int64 }
 var defaultLimits = limits{files: 5000, bytes: 64 << 20}
 
 // Hash returns a SHA-256 over every file of the realm but the contents of .git: each file's path, its
-// executable bit and its bytes, in path order. A realm folder that is a git repository is its committed
-// files at HEAD (see hashCommitted): git-ignored build output and untracked files are not part of it
-// (B-050). Any other folder is hashed as it is on disk. A run records it, and a resume refuses a realm whose hash
+// executable bit and its bytes, in path order. A realm folder in a git work tree, the repo's own or a
+// folder of it, is its committed files at HEAD (see hashCommitted): git-ignored build output and untracked
+// files are not part of it (B-050), and a folder with no committed file is refused. Any other folder is hashed as it is on disk. A run records it, and a resume refuses a realm whose hash
 // changed (spec §4.3: the run's positions mean what they meant). A realm holds regular files and folders
 // only: a symlink anywhere in it is refused, since a run reads prompts, first-commit files and the
 // template by following links, so a link could read outside the realm, and a change at its target would
@@ -80,11 +80,24 @@ func hashLimited(dir string, lim limits) (string, error) {
 	} else if st.Mode()&fs.ModeSymlink != 0 {
 		return "", fmt.Errorf("%s is a symlink; a realm holds its own files and folders, and a link could lead out of it", dir)
 	}
-	// A .git that git does not accept as a repo (a stray folder, say) leaves the realm a plain folder.
-	if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
-		if gitDir, err := git.Run(context.Background(), dir, "rev-parse", "--absolute-git-dir"); err == nil {
-			return hashCommitted(gitDir, dir, lim)
-		}
+	// A folder inside a git work tree, whether it holds the repo's .git or is one folder of the repo (a graph
+	// pack in the voluspa leaf), is its committed files. A folder with a .git that git refuses (an invalid
+	// file, or a repo it finds dubious) is refused too, not hashed from disk. A folder with no .git that is
+	// outside any work tree (git says "not a git repository") is a plain folder; any other refusal of git, for a repo
+	// that holds the folder, is final.
+	gitDir, top, prefix, gitErr := workTreeOf(dir)
+	_, statErr := os.Lstat(filepath.Join(dir, ".git"))
+	switch {
+	case gitErr == nil:
+		return hashCommitted(gitDir, top, prefix, dir, lim)
+	case statErr == nil:
+		return "", fmt.Errorf("%s holds a .git that git does not accept, so its files can't be hashed from the commit: %w",
+			dir, gitErr)
+	case !strings.Contains(gitErr.Error(), "not a git repository"):
+		// git refuses a repo that holds dir (for example for its owner: Odin sets GIT_CONFIG_GLOBAL=/dev/null,
+		// so a global safe.directory does not apply). Its files could be the repo's, so fail closed.
+		return "", fmt.Errorf("%s is inside a git repository that git does not accept, so its files can't be hashed from the commit: %w",
+			dir, gitErr)
 	}
 	h := sha256.New()
 	var files, size int64
@@ -142,38 +155,62 @@ func hashLimited(dir string, lim limits) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Store is a folder with one checkout of each realm leaf: <Dir>/<name>/pack.yaml (factory.yaml,
-// realms.dir).
-type Store struct{ Dir string }
+// Store is a folder with one checkout of each leaf of a kind: <Dir>/<name>/pack.yaml. Kind is "realm" (factory.yaml,
+// realms.dir) or "graph" (graphs.dir); it names the store in messages and picks the name rule.
+type Store struct{ Dir, Kind string }
 
-// Find returns the folder of the realm called name. The pack in it must say it is that realm.
+// Find returns the folder of the pack called name. The pack in it must say it is that realm or graph.
 func (s *Store) Find(name string) (string, error) {
-	if !gungnir.ValidRealm(name) {
-		return "", fmt.Errorf("%q is not a realm name (lower case words joined by dashes)", name)
+	valid := gungnir.ValidRealm
+	if s.Kind == "graph" {
+		valid = gungnir.ValidGraph
+	}
+	if !valid(name) {
+		return "", fmt.Errorf("%q is not a %s name (lower case words joined by dashes)", name, s.Kind)
 	}
 	dir := filepath.Join(s.Dir, name)
 	p, err := schema.LoadPack(dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return "", fmt.Errorf("there is no realm %s in %s (factory.yaml, realms.dir)", name, s.Dir)
+		return "", fmt.Errorf("there is no %s %s in %s (factory.yaml, %ss.dir)", s.Kind, name, s.Dir, s.Kind)
 	case err != nil:
 		return "", err
 	case p.Name != name:
-		return "", fmt.Errorf("%s holds the realm %s, not %s", dir, p.Name, name)
+		return "", fmt.Errorf("%s holds the %s %s, not %s", dir, s.Kind, p.Name, name)
 	}
 	return dir, nil
 }
 
-// Resolve turns what --realm says into a folder. A value with a path separator, or one that starts
-// with a dot, is a path: a realm checked out anywhere, used as it is. Anything else is a realm name,
-// found in the store; byName is true for it. A name with no store is an error that says where to set one.
-func Resolve(ref string, store *Store) (dir string, byName bool, err error) {
+// Resolve turns what --realm or --graph says (kind is "realm" or "graph") into a folder. A value with a path
+// separator, or one that starts with a dot, is a path: a pack checked out anywhere, used as it is. Anything
+// else is a name, found in the store; byName is true for it. A name with no store is an error that says
+// where to set one.
+func Resolve(ref string, store *Store, kind string) (dir string, byName bool, err error) {
 	if strings.ContainsRune(ref, filepath.Separator) || strings.HasPrefix(ref, ".") {
 		return ref, false, nil
 	}
 	if store == nil {
-		return "", true, fmt.Errorf("--realm %s names a realm leaf, but factory.yaml has no realms section to find it in: set realms: {dir: <folder with the realm leaves>}, or give --realm a path", ref)
+		return "", true, fmt.Errorf("--%s %s names a %s leaf, but factory.yaml has no %ss section to find it in: set %ss: {dir: <folder with the %s leaves>}, or give --%s a path",
+			kind, ref, kind, kind, kind, kind, kind)
 	}
 	dir, err = store.Find(ref)
 	return dir, true, err
+}
+
+// workTreeOf says where dir stands in a git work tree: the repo's git dir, the work tree's top, and dir's
+// path from the top with a trailing slash ("" at the top). The error is git's, for a folder outside any work
+// tree or in one git refuses.
+func workTreeOf(dir string) (gitDir, top, prefix string, err error) {
+	out, err := git.Run(context.Background(), dir, "rev-parse", "--absolute-git-dir", "--show-toplevel", "--show-prefix")
+	if err != nil {
+		return "", "", "", err
+	}
+	lines := strings.Split(out, "\n")
+	if len(lines) < 2 || lines[0] == "" || lines[1] == "" {
+		return "", "", "", fmt.Errorf("git rev-parse gave %q, not a git dir and a work tree", out)
+	}
+	if len(lines) > 2 {
+		prefix = lines[2]
+	}
+	return lines[0], lines[1], prefix, nil
 }

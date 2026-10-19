@@ -52,7 +52,7 @@ func TestAGradeNodeNeedsTheGraderAndTheSandboxSections(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cfg := filepath.Join(t.TempDir(), "factory.yaml")
 			os.WriteFile(cfg, []byte(body), 0o644)
-			_, err := Prepare(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: cfg, Realm: gradeRealm(t)})
+			_, err := Prepare(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: cfg, Graph: gradeRealm(t)})
 			if err == nil || !strings.Contains(err.Error(), "node score") || !strings.Contains(err.Error(), "grader and the sandbox sections") {
 				t.Errorf("Prepare() = %v, want a refusal that names the node and the sections", err)
 			}
@@ -73,7 +73,7 @@ func TestTheRunHoldsAGraderOnlyWithBothSections(t *testing.T) {
 				NewGrader:  func(*SandboxSetup, string) (Grader, error) { made++; return noGrader{}, nil },
 			}
 			realm := toySandbox(t)
-			r, err := Start(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: sandboxConfig(t, "{ agent: scripted, model: none, script: "+filepath.Join(realm, "script.yaml")+" }", c.extra), Realm: realm, Hooks: h})
+			r, err := Start(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: sandboxConfig(t, "{ agent: scripted, model: none, script: "+filepath.Join(realm, "script.yaml")+" }", c.extra), Graph: realm, Hooks: h})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -88,7 +88,7 @@ func TestTheRunHoldsAGraderOnlyWithBothSections(t *testing.T) {
 func TestExportAppIsTheProjectAsCommittedAndNothingMore(t *testing.T) {
 	realm := toySandbox(t)
 	h := Hooks{NewSandbox: func(*SandboxSetup, string) (gungnir.Sandbox, error) { return &sandboxfake.Sandbox{}, nil }}
-	r, err := Start(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: sandboxConfig(t, "{ agent: scripted, model: none, script: "+filepath.Join(realm, "script.yaml")+" }", ""), Realm: realm, Hooks: h})
+	r, err := Start(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: sandboxConfig(t, "{ agent: scripted, model: none, script: "+filepath.Join(realm, "script.yaml")+" }", ""), Graph: realm, Hooks: h})
 	if err != nil {
 		t.Fatal(err)
 	}

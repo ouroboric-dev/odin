@@ -39,18 +39,21 @@ func sandboxConfig(t *testing.T, implementer, extra string) string {
 func TestPrepareSetsUpTheSandboxFromTheConfigAndThePack(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
 	cfg := sandboxConfig(t, "{ agent: claude-code, model: sonnet }", "")
-	s, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: toySandbox(t)})
+	s, err := Prepare(ctx, Options{Project: project, Config: cfg, Graph: toySandbox(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.Sandbox == nil || s.Sandbox.Engine != "unix:///mnt/wsl/podman-sockets/podman-machine-default/podman-user.sock" ||
-		s.Sandbox.Config.Images != sandbox.ImagesFor(s.Pack.Sandbox.Stack) || s.Sandbox.Config.Mounts[0].Engine != "/mnt/wsl/ygg-bind" {
+		s.Sandbox.Config.Images != sandbox.FactoryImages() || s.Sandbox.Config.Mounts[0].Engine != "/mnt/wsl/ygg-bind" {
 		t.Errorf("Sandbox = %+v", s.Sandbox)
 	}
-	// The scripted planner needs no host; the claude-code implementer needs api.anthropic.com. The
-	// realm's registries come with them, once each, sorted.
-	if got := strings.Join(s.Sandbox.Egress, ","); got != "api.anthropic.com,proxy.golang.org,sum.golang.org" {
-		t.Errorf("egress = %s", got)
+	// The scripted planner needs no host; the claude-code implementer needs api.anthropic.com. That is all a
+	// scratch session opens; a leaf's sandbox adds its realm's registries, once each, sorted.
+	if got := strings.Join(s.Sandbox.Hosts, ","); got != "api.anthropic.com" {
+		t.Errorf("hosts = %s", got)
+	}
+	if _, egress, _, err := s.SandboxFor("repos/app"); err != nil || strings.Join(egress, ",") != "api.anthropic.com,proxy.golang.org,sum.golang.org" {
+		t.Errorf("the leaf's egress = %v, %v", egress, err)
 	}
 	if s.Agents["implementer"].Name() != "claude-code" {
 		t.Errorf("the implementer is %s", s.Agents["implementer"].Name())
@@ -59,7 +62,7 @@ func TestPrepareSetsUpTheSandboxFromTheConfigAndThePack(t *testing.T) {
 
 func TestPrepareWithoutASandboxSectionLeavesTheHost(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
-	s, err := Prepare(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	s, err := Prepare(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil || s.Sandbox != nil {
 		t.Errorf("Prepare() = %v, sandbox %v; a scripted-only config runs on the host", err, s.Sandbox)
 	}
@@ -90,19 +93,19 @@ func TestPrepareRefusesWhatWouldRunOutsideTheSandbox(t *testing.T) {
 	acceptance := variant(t, "graph.yaml", func(g string) string {
 		return strings.Replace(g, "kind: pointer, repo: repos/app, checks: [unit] }", "kind: pointer, repo: repos/app, checks: [unit], acceptance: [unit] }", 1)
 	})
-	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: acceptance}); err == nil || !strings.Contains(err.Error(), "runs acceptance checks") {
+	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Graph: acceptance}); err == nil || !strings.Contains(err.Error(), "runs acceptance checks") {
 		t.Errorf("a realm with acceptance checks and a sandbox: %v", err)
 	}
 	// The same in a task shape, whose nodes are the body of a foreach node.
 	inBody := variant(t, "graph.yaml", func(g string) string {
 		return g + "  - { id: tasks, kind: foreach, over: tasks, nodes: [ { id: move, kind: pointer, realm: leaf, acceptance: [unit] } ] }\n"
 	})
-	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: inBody}); err == nil || !strings.Contains(err.Error(), "node move runs acceptance checks") {
+	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Graph: inBody}); err == nil || !strings.Contains(err.Error(), "node move runs acceptance checks") {
 		t.Errorf("a task shape with acceptance checks and a sandbox: %v", err)
 	}
 	// A pack with no stack can't build an image.
 	noStack := variant(t, "pack.yaml", func(p string) string { return strings.SplitN(p, "sandbox:", 2)[0] })
-	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Realm: noStack}); err == nil || !strings.Contains(err.Error(), "names no sandbox stack") {
+	if _, err := Prepare(ctx, Options{Project: project, Config: cfg, Graph: noStack}); err == nil || !strings.Contains(err.Error(), "names no sandbox stack") {
 		t.Errorf("a pack without a stack: %v", err)
 	}
 	// privacy: strict with a model the adapter can't tighten stops the run before it starts.
@@ -110,7 +113,7 @@ func TestPrepareRefusesWhatWouldRunOutsideTheSandbox(t *testing.T) {
 	b, _ := os.ReadFile(strict)
 	paid := strings.NewReplacer("turns: 100 }", "turns: 100, usd: 5 }", "turns: 200 }", "turns: 200, usd: 9 }").Replace(string(b))
 	os.WriteFile(strict, []byte(paid), 0o644)
-	if _, err := Prepare(ctx, Options{Project: project, Config: strict, Realm: toySandbox(t)}); err == nil || !strings.Contains(err.Error(), "openrouter") {
+	if _, err := Prepare(ctx, Options{Project: project, Config: strict, Graph: toySandbox(t)}); err == nil || !strings.Contains(err.Error(), "openrouter") {
 		t.Errorf("strict privacy on a model the adapter can't tighten: %v; want the adapter's refusal", err)
 	}
 }
@@ -137,7 +140,7 @@ func realmWithSkills(t *testing.T, names string) string {
 func TestAGraphNamingASkillNobodyVendoredNeverStarts(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
 	cfg := writeConfig(t, t.TempDir(), scriptedRoles+fullCaps)
-	if _, err := Start(ctx, Options{Project: project, Config: cfg, Realm: realmWithSkills(t, "no-such-skill")}); err == nil || !strings.Contains(err.Error(), "skill") {
+	if _, err := Start(ctx, Options{Project: project, Config: cfg, Graph: realmWithSkills(t, "no-such-skill")}); err == nil || !strings.Contains(err.Error(), "skill") {
 		t.Errorf("Start() = %v, want a refusal naming the missing skill", err)
 	}
 	if _, err := os.Stat(filepath.Join(project, ".factory")); err == nil {
@@ -149,7 +152,7 @@ func TestRunJSONRecordsTheSkillSetAndAResumeNeedsTheSameSkills(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
 	cfg := writeConfig(t, t.TempDir(), scriptedRoles+fullCaps)
 	realm := realmWithSkills(t, "plain-language")
-	r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: realm, Hooks: Hooks{Libs: skillLib(t)}})
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Graph: realm, Hooks: Hooks{Libs: skillLib(t)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,12 +181,27 @@ func TestTheSmokeRealmPreparesWithBothRealAdapters(t *testing.T) {
 	if err := os.WriteFile(cfg, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := Prepare(ctx, Options{Project: treetest.Project(t), Config: cfg, Realm: smoke})
+	s, err := Prepare(ctx, Options{Project: treetest.Project(t), Config: cfg, Graph: smoke})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.Agents["implementer"].Name() != "claude-code" || s.Agents["reviewer"].Name() != "opencode" ||
-		strings.Join(s.Sandbox.Egress, ",") != "api.anthropic.com,openrouter.ai" {
-		t.Errorf("agents %v, egress %v", s.Agents, s.Sandbox.Egress)
+		strings.Join(s.Sandbox.Hosts, ",") != "api.anthropic.com,openrouter.ai" {
+		t.Errorf("agents %v, scratch egress %v (want the adapters' model APIs only)", s.Agents, s.Sandbox.Hosts)
+	}
+}
+
+// The pack schema refuses a sandbox block with neither stack nor build, so a realm with an empty Stack should
+// never load. If one reaches SandboxFor all the same, its leaf must not start silently on the factory layer.
+func TestALeafWhoseRealmHasASandboxBlockButNoStackIsRefused(t *testing.T) {
+	project := treetest.Project(t, "repos/app")
+	cfg := sandboxConfig(t, "{ agent: claude-code, model: sonnet }", "")
+	s, err := Prepare(ctx, Options{Project: project, Config: cfg, Graph: toySandbox(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.GraphPack.Stack = ""
+	if _, _, _, err := s.SandboxFor("repos/app"); err == nil || !strings.Contains(err.Error(), "names no sandbox stack") {
+		t.Errorf("SandboxFor() with an empty stack = %v; the leaf would start silently on the factory layer", err)
 	}
 }

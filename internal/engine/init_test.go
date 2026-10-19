@@ -93,7 +93,9 @@ func TestInitCreatesEachLeafFromTheTemplateOfItsRealmAndRecordsThePin(t *testing
 			t.Errorf("%s: record %+v; the checkpoint is the template's commit, after the base", leaf, rec)
 		}
 	}
-	if r.Setup.RealmOf("repos/api").Name != "helheim-go" || r.Setup.RealmOf("repos/web").Name != "midgard-react" {
+	apiRealm, _ := r.Setup.RealmOf("repos/api")
+	webRealm, _ := r.Setup.RealmOf("repos/web")
+	if apiRealm == nil || webRealm == nil || apiRealm.Name != "helheim-go" || webRealm.Name != "midgard-react" {
 		t.Error("the run does not use each new leaf's realm")
 	}
 	if rec := r.State.Realms["helheim-go"]; rec.Version != "0.2.0" || len(rec.SHA256) != 64 {
@@ -133,10 +135,10 @@ func TestInitCreatesWhatALeafConsumesFirst(t *testing.T) {
 
 func TestInitRefusesBeforeItCreatesAnything(t *testing.T) {
 	cases := map[string]struct{ leaves, want string }{
-		"a pin of the lead realm at another version": {strings.Replace(galleryLeaves, "realm_version: 0.1.0", "realm_version: 0.3.0", 1), "midgard-react is pinned at 0.1.0 by . and at 0.3.0 by repos/web"},
-		"a realm the store lacks":                    {strings.Replace(galleryLeaves, "helheim-go", "asgard", 1), "asgard"},
-		"a leaf that consumes a leaf nobody has":     {strings.Replace(galleryLeaves, "consumes: [repos/api]", "consumes: [repos/db]", 1), "it consumes repos/db"},
-		"no leaves file":                             {"", "is not there as a regular file"},
+		"a pin at another version than the store holds": {strings.Replace(galleryLeaves, "realm_version: 0.1.0", "realm_version: 0.3.0", 1), "the realm store holds midgard-react 0.1.0, but repos/web pins 0.3.0"},
+		"a realm the store lacks":                       {strings.Replace(galleryLeaves, "helheim-go", "asgard", 1), "asgard"},
+		"a leaf that consumes a leaf nobody has":        {strings.Replace(galleryLeaves, "consumes: [repos/api]", "consumes: [repos/db]", 1), "it consumes repos/db"},
+		"no leaves file":                                {"", "is not there as a regular file"},
 	}
 	for name, c := range cases {
 		r := initRun(t, c.leaves)
@@ -523,5 +525,28 @@ func TestAnInitWhoseRecordFailedRecordsTheTemplateWhenRunAgain(t *testing.T) {
 		if main, _ := l.Rev(ctx, "main"); recordedAt(t, r, p) != main || main != r.State.Leaves[p].Checkpoint {
 			t.Errorf("%s: the umbrella records %s, want the template at %s", p, recordedAt(t, r, p), main)
 		}
+	}
+}
+
+// Prepare refuses an unpinned leaf the project has when the run starts, so init's own check guards a leaf
+// that joins the project after that. The test adds one to the run's view of the project, and runs init.
+func TestInitRefusesAnExistingLeafThatPinsNoRealmUnderAGraphPackWithNoRecipe(t *testing.T) {
+	graph := realmFiles{name: "graph-toy", version: "0.1.0"}
+	r := startRealms(t, realmsSetup{nodes: initNode, script: "steps: {}\n",
+		realms: []realmFiles{graph, recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")}})
+	if err := os.MkdirAll(filepath.Join(r.Project, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leaves := "leaves:\n  repos/api:\n    realm: helheim-go\n    realm_version: 0.2.0\n    description: The API.\n  repos/web:\n    realm: helheim-go\n    realm_version: 0.2.0\n    description: The web app.\n"
+	if err := os.WriteFile(filepath.Join(r.Project, "docs", "leaves.yaml"), []byte(leaves), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.Setup.Project.Umbrella.Children["repos/api"] = schema.Child{Kind: schema.ChildLeaf}
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "the leaf repos/api pins no realm") {
+		t.Fatalf("Advance() = %+v, %v; want a refusal naming the leaf", out, err)
+	}
+	if u, _ := schema.LoadUmbrella(r.Project); len(u.Children) != 0 {
+		t.Errorf("init created %v before it refused", u.Paths())
 	}
 }

@@ -1,7 +1,7 @@
-# An example factory.yaml for the realms smoke run (v0-H13). Copy it, set the engine, the mounts and the
-# realm folder for your machine, and the caps you want; the factory ships no defaults. The credentials
-# come from the environment: CLAUDE_CODE_OAUTH_TOKEN, never from this file. Both roles are Claude Code,
-# so no OpenRouter key is needed.
+# An example factory.yaml for the realms smoke run (v0-H13). Copy it, set the engine, the mounts, and the
+# realm and graph folders for your machine (the graph pack and the leaf realms sit in the same folder here),
+# and the caps you want; the factory ships no defaults. The credentials come from the environment:
+# CLAUDE_CODE_OAUTH_TOKEN, never from this file. Both roles are Claude Code, so no OpenRouter key is needed.
 mode: unattended
 privacy: strict
 gates:
@@ -17,4 +17,6 @@ sandbox:
   mounts:
     - { host: /home/OPERATOR/ygg, engine: /mnt/wsl/ygg-bind }
 realms:
+  dir: /home/OPERATOR/yggdrasil/odin/testdata/smoke-realms
+graphs:
   dir: /home/OPERATOR/yggdrasil/odin/testdata/smoke-realms

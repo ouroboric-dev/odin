@@ -55,6 +55,7 @@ func (c *command) doctor(args []string) int {
 	}
 	if factory != nil {
 		checkRealms(factory, report)
+		checkGraphs(factory, report)
 		checkBudget(factory, report)
 		checkGrader(factory, report)
 		c.checkSandbox(f.project, factory, report)
@@ -68,6 +69,10 @@ func (c *command) doctor(args []string) int {
 		dir := filepath.Join(runs, e.Name())
 		if !e.IsDir() || !run.ValidID(e.Name()) {
 			report("WARN", "runs", e.Name()+" is not a run")
+			continue
+		}
+		if exec, ok := run.BeforeGraphs(dir); ok {
+			c.checkRunBeforeGraphs(dir, exec, report)
 			continue
 		}
 		s, err := run.LoadState(dir)
@@ -95,6 +100,32 @@ func (c *command) doctor(args []string) int {
 	return exit(bad)
 }
 
+// checkRunBeforeGraphs reports a run that a realm led (ygg.run/v2) as a warning: it can't be resumed, so
+// it is not an error, and its folder can go once no older ygg holds it (then doctor says the older ygg is still running it). A process group its exec node left is still stopped, from
+// the two fields of run.json that name it; a leftover container is found by its label and stopped by
+// checkSandbox, whatever the run's state.
+func (c *command) checkRunBeforeGraphs(dir string, exec *run.ExecProcess, report func(level, what, msg string)) {
+	what := "run " + filepath.Base(dir)
+	if exec != nil {
+		if err := exec.Check(); err != nil {
+			report("ERROR", what, err.Error())
+			exec = nil
+		}
+	}
+	if exec != nil && !run.Locked(dir) && run.LeftoverProcess(exec) {
+		if err := run.StopLeftoverProcess(exec); err != nil {
+			report("ERROR", what, err.Error())
+		} else {
+			report("WARN", what, fmt.Sprintf("node %s left process group %d running; stopped it", exec.Node, exec.PGID))
+		}
+	}
+	if run.Locked(dir) {
+		report("WARN", what, "an older ygg is still running this run (schema ygg.run/v2); this ygg can't resume it")
+		return
+	}
+	report("WARN", what, "this run is from before graphs (schema ygg.run/v2) and can't be resumed; remove its folder "+dir+" when you no longer need its ledger")
+}
+
 func exit(bad bool) int {
 	if bad {
 		return ExitFailed
@@ -119,10 +150,10 @@ func checkConfig(path string, report func(level, what, msg string)) *schema.Fact
 
 // checkRealms says which realm leaves the store holds and at which versions, and that each loads: a realm
 // a project pins must load at the pinned version, or its runs stop before they start (change
-// realm-leaf-naming). A config with no realms section takes --realm as a path, which is fine.
+// realm-leaf-naming). A config with no realms section is fine: a project just can't pin a realm leaf.
 func checkRealms(f *schema.Factory, report func(level, what, msg string)) {
 	if f.Realms == nil {
-		report("WARN", "realms", "no realms section: --realm takes a path, and a project can't pin a realm leaf")
+		report("WARN", "realms", "no realms section: a project can't pin a realm leaf")
 		return
 	}
 	entries, err := os.ReadDir(f.Realms.Dir)
@@ -142,7 +173,7 @@ func checkRealms(f *schema.Factory, report func(level, what, msg string)) {
 			continue
 		}
 		if r.Name != e.Name() {
-			report("ERROR", "realms", fmt.Sprintf("%s holds the realm %s, so --realm %s can't find it", dir, r.Name, e.Name()))
+			report("ERROR", "realms", fmt.Sprintf("%s holds the realm %s, so a project can't pin %s", dir, r.Name, e.Name()))
 			continue
 		}
 		found = append(found, r.Name+" "+r.Version)
@@ -152,6 +183,60 @@ func checkRealms(f *schema.Factory, report func(level, what, msg string)) {
 		return
 	}
 	report("OK", "realms", f.Realms.Dir+" ("+strings.Join(found, ", ")+")")
+}
+
+// checkGraphs says which graph packs the store holds and at which versions, and that each loads and holds a
+// graph: --graph NAME finds a pack there, and a run takes its graph from it. A pack with no graph in the
+// store is an error, since a run named for it would refuse. A config with no graphs section is fine: --graph
+// takes a path, and a project can't pin a graph. When graphs.dir is realms.dir (ruling R16), a pack with no
+// graph is a realm, not a broken graph pack: it is left out, and the store is an error only when it holds
+// no graph pack at all.
+func checkGraphs(f *schema.Factory, report func(level, what, msg string)) {
+	if f.Graphs == nil {
+		report("WARN", "graphs", "no graphs section: --graph takes a path, and a project can't pin a graph")
+		return
+	}
+	entries, err := os.ReadDir(f.Graphs.Dir)
+	if err != nil {
+		report("ERROR", "graphs", err.Error())
+		return
+	}
+	shared := f.Realms != nil && sameFolder(f.Realms.Dir, f.Graphs.Dir)
+	var found []string
+	for _, e := range entries {
+		dir := filepath.Join(f.Graphs.Dir, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "pack.yaml")); err != nil {
+			continue // not a pack
+		}
+		r, err := realm.Load(dir)
+		switch {
+		case err == nil && r.Name == e.Name() && r.Pack.Graph == "" && shared:
+			// a realm: checkRealms reports on it
+		case err != nil:
+			report("ERROR", "graphs", e.Name()+": "+err.Error())
+		case r.Name != e.Name():
+			report("ERROR", "graphs", fmt.Sprintf("%s holds the graph %s, so --graph %s can't find it", dir, r.Name, e.Name()))
+		case r.Pack.Graph == "":
+			report("ERROR", "graphs", e.Name()+": the pack holds no graph, so --graph "+e.Name()+" would be refused")
+		default:
+			found = append(found, r.Name+" "+r.Version)
+		}
+	}
+	if len(found) == 0 {
+		report("ERROR", "graphs", f.Graphs.Dir+" holds no graph pack")
+		return
+	}
+	report("OK", "graphs", f.Graphs.Dir+" ("+strings.Join(found, ", ")+")")
+}
+
+// sameFolder says whether a and b are one folder, by their paths or by what they resolve to.
+func sameFolder(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	sa, errA := os.Stat(a)
+	sb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }
 
 // checkBudget says what the caps are and how much of today's is used, and checks that the spend

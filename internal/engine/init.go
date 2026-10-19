@@ -48,6 +48,15 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := checkLeaves(r, set, spec); err != nil {
 		return &nodeFailure{err}
 	}
+	// Acceptance checks run over the leaves' realms, so a move that asks for one needs a realm of the leaves
+	// to define it, and a stack to run it on, before any leaf is created (change voluspa).
+	var leafRealms []*realm.Realm
+	for _, p := range spec.Paths() {
+		leafRealms = append(leafRealms, set.Realms[spec.Leaves[p].Realm])
+	}
+	if err := r.Setup.CheckAcceptance(leafRealms); err != nil {
+		return &nodeFailure{err}
+	}
 	if err := r.AddRealms(spec.Pins()); err != nil {
 		return &nodeFailure{err}
 	}
@@ -120,8 +129,13 @@ func checkLeaves(r *run.Run, set *realm.Set, spec *schema.Leaves) error {
 		}
 		if c, ok := have[p]; ok {
 			realmName, version := c.Realm, c.RealmVersion
-			if realmName == "" { // a leaf with no pin is the lead realm's
-				realmName, version = r.Setup.Lead.Name, r.Setup.Lead.Version
+			if realmName == "" { // a leaf with no pin is the graph pack's when it holds a recipe, else refused
+				g, err := r.Setup.RealmOf(p)
+				if err != nil {
+					problems = append(problems, fmt.Sprintf("%s: %v", p, err))
+					continue
+				}
+				realmName, version = g.Name, g.Version
 			}
 			switch {
 			case c.Kind != schema.ChildLeaf:

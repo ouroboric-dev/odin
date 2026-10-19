@@ -182,14 +182,11 @@ func (c *command) depsProduct(cfg *schema.Factory, root, projectPath string, pro
 	if !ok || child.Kind != schema.ChildLeaf {
 		return deps.Product{}, depsPlace{}, fmt.Errorf("%s is not a leaf of the project: --canary and --rollout name a leaf by its path, such as repos/api", dir)
 	}
-	name := child.Realm
-	if name == "" {
-		name = project.Umbrella.Realm
-	}
+	name := child.Realm // a leaf's realm is its own pin; the project's graph is no realm
 	if name == "" || cfg.Realms == nil {
 		return deps.Product{}, depsPlace{}, fmt.Errorf("%s pins no realm, or factory.yaml has no realms section: the bump cannot tell which checks to run", rel)
 	}
-	rdir, err := (&realm.Store{Dir: cfg.Realms.Dir}).Find(name)
+	rdir, err := (&realm.Store{Dir: cfg.Realms.Dir, Kind: "realm"}).Find(name)
 	if err != nil {
 		return deps.Product{}, depsPlace{}, err
 	}

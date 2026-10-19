@@ -8,6 +8,7 @@ import (
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
@@ -51,7 +52,7 @@ func depsProject(t *testing.T, stack string) (dir, config string) {
 	}
 	pin := treetest.Pin{Realm: "helheim-go", Version: "0.1.0"}
 	leaf := treetest.Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Leaf: true, Pin: pin}
-	dir = treetest.Build(t, treetest.Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate,
+	dir = treetest.Build(t, treetest.Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, GraphPin: pin,
 		Children: map[string]treetest.Node{"repos/api": leaf, "repos/web": leaf, "repos/old": leaf}})
 	for name, v := range map[string]string{"api": "0.41.0", "web": "0.41.0", "old": "0.43.0"} {
 		ns, err := tree.Resolve(ctx, dir, "repos/"+name) // checks the leaf out
@@ -67,7 +68,7 @@ func depsProject(t *testing.T, stack string) (dir, config string) {
 	commitFixtures(t, dir)
 	_, base := project(t, "script.yaml", "")
 	b, _ := os.ReadFile(base)
-	extra := "realms:\n  dir: " + store + "\n"
+	extra := "realms:\n  dir: " + store + "\ngraphs:\n  dir: " + store + "\n"
 	if stack != "" {
 		extra += sandboxExtra
 	}
@@ -100,6 +101,28 @@ func bumpLedger(t *testing.T, dir string) string {
 	}
 	b, _ := os.ReadFile(p)
 	return string(b)
+}
+
+func TestALeafThatPinsNoRealmIsRefusedWhateverTheUmbrellaPins(t *testing.T) {
+	dir, config := depsProject(t, "")
+	u, err := schema.LoadUmbrella(dir)
+	if err != nil || u.Graph == "" {
+		t.Fatalf("the umbrella = %+v, %v; the fixture pins a graph", u, err)
+	}
+	c := u.Children["repos/old"]
+	c.Realm, c.RealmVersion = "", ""
+	u.Children["repos/old"] = c
+	if err := u.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git.Run(ctx, dir, "commit", "-q", "-am", "repos/old pins no realm"); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config,
+		"--canary", "repos/old", "--rollout", "repos/web")
+	if code != ExitRefused || !strings.Contains(errOut, "pins no realm") {
+		t.Errorf("exit %d, want %d and %q:\n%s%s", code, ExitRefused, "pins no realm", out, errOut)
+	}
 }
 
 func TestDepsBumpMovesTheCanaryThenTheRolloutProduct(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 const shape = `
 name: g
 version: 1.0.0
+schema: 1
 nodes:
   - { id: before, kind: exec, run: [echo, before], repo: . }
   - id: tasks

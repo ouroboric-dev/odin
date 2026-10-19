@@ -22,7 +22,7 @@ func TestDoctorReportsMissingCaps(t *testing.T) {
 
 func TestDoctorFindsAChangedLedger(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
-	ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 	id := runID(t, dir)
 	if code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config); code != ExitDone || !strings.Contains(out, "OK    run "+id+": stopped") {
 		t.Fatalf("doctor on a good run: exit %d:\n%s", code, out)

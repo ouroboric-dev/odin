@@ -3,6 +3,7 @@
 # task shape that repeats for every task, in the leaf and the realm the task names.
 name: midgard-toy
 version: 0.1.0
+schema: 1
 nodes:
   - { id: design, kind: agent, role: planner, prompt: prompts/design.md, scratch: true }
   - { id: design-gate, kind: gate, gate: design }

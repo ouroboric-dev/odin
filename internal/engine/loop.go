@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -81,11 +80,11 @@ type loopSteps struct {
 
 var _ jormungandr.Steps = (*loopSteps)(nil)
 
-// prompt is the text of a session: the prompt file of the realm named realm ("" is the lead realm), the
+// prompt is the text of a session: the prompt file of the realm named realm ("" is the graph pack), the
 // skills it names, and the brief. The implementer's prompt comes from the realm of the task's leaf; a
-// reviewer's from the lead realm.
+// reviewer's from the graph pack.
 func (l *loopSteps) prompt(realm, file string, skillNames []string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(l.r.Setup.Realm(realm).Dir, file))
+	b, err := readPrompt(l.r.Setup, realm, file)
 	if err != nil {
 		return "", err
 	}
@@ -144,9 +143,13 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormungandr.CheckOutcome, error) {
 	r, n := l.r, l.n
 	rel := filepath.Join("logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, name))
-	argv := r.Setup.Realm(n.Realm).Pack.Checks[name]
+	rl, err := r.Setup.NodeRealm(n)
+	if err != nil {
+		return jormungandr.CheckOutcome{}, &nodeFailure{err}
+	}
+	argv := rl.Pack.Checks[name]
 	if len(argv) == 0 {
-		return jormungandr.CheckOutcome{}, &nodeFailure{fmt.Errorf("the realm %s defines no check %s", r.Setup.Realm(n.Realm).Name, name)}
+		return jormungandr.CheckOutcome{}, &nodeFailure{fmt.Errorf("the realm %s defines no check %s", rl.Name, name)}
 	}
 	res, err := runCheck(ctx, r, n.ID, n.Repo, r.RepoDir(n.Repo), checks.Spec{Name: name, Argv: argv, Timeout: ExecTimeout},
 		filepath.Join(r.Dir, rel))

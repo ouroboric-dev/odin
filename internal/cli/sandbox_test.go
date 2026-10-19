@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -38,7 +39,8 @@ case "$1" in
   image) case "$2 $3" in
       "exists localhost/ygg-stack-"*) [ -f "$d/built-$(echo "$3" | tr '/:' '__')" ] || exit 1 ;;
     esac ;;
-  build) prev=; for a in "$@"; do
+  build) case "$*" in *-t\ localhost/ygg-factory-stack:*) [ -f "$d/fail-factory" ] && exit 1 ;; esac
+    prev=; for a in "$@"; do
       [ "$prev" = -t ] && case "$a" in localhost/ygg-stack-*) touch "$d/built-$(echo "$a" | tr '/:' '__')" ;; esac
       prev=$a
     done ;;
@@ -82,7 +84,7 @@ func TestDoctorChecksTheEngineAndStopsLeftoverSandboxes(t *testing.T) {
 	dir, plain := project(t, "script.yaml", "")
 	config := withSandbox(t, plain)
 	// A run of this project that no ygg holds: its sandbox is a leftover.
-	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", plain, "--realm", toyRealm(t)); code != ExitStopped {
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", plain, "--graph", toyRealm(t)); code != ExitStopped {
 		t.Fatalf("run: exit %d: %s", code, errOut)
 	}
 	id := runID(t, dir)
@@ -105,7 +107,7 @@ func TestDoctorLeavesWhatALiveRunOrAnotherProjectOwns(t *testing.T) {
 	log := stubEngine(t)
 	dir, plain := project(t, "script.yaml", "")
 	config := withSandbox(t, plain)
-	if code, _, _ := ygg(t, "run", "--project", dir, "--config", plain, "--realm", toyRealm(t)); code != ExitStopped {
+	if code, _, _ := ygg(t, "run", "--project", dir, "--config", plain, "--graph", toyRealm(t)); code != ExitStopped {
 		t.Fatal("run")
 	}
 	id := runID(t, dir)
@@ -165,6 +167,61 @@ func TestSandboxBuildPullsAndBuilds(t *testing.T) {
 	} {
 		if code, _, _ := ygg(t, args...); code != ExitRefused {
 			t.Errorf("%s: exit %d, want %d", name, code, ExitRefused)
+		}
+	}
+}
+
+func TestSandboxBuildAlsoBuildsTheFactoryLayer(t *testing.T) {
+	log := stubEngine(t)
+	_, plain := project(t, "script.yaml", "")
+	config := withSandbox(t, plain)
+	realm, _ := filepath.Abs("../../testdata/toy-sandbox")
+	if code, out, errOut := ygg(t, "sandbox", "build", "--config", config, "--realm", realm); code != ExitDone {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	b, _ := os.ReadFile(log)
+	factory := sandbox.FactoryImages()
+	at := func(substr string) (found []int) {
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, "podman build") && strings.Contains(line, substr) {
+				found = append(found, i)
+			}
+		}
+		return found
+	}
+	// The factory stack is built from the pinned Node image, then the layer on it, once; both before the realm's stack.
+	stack, layer := at("-t "+sandbox.FactoryStack+" "), at("-t "+factory.Work+" ")
+	if len(stack) != 1 || len(layer) != 1 || stack[0] > layer[0] {
+		t.Fatalf("the factory stack was built at %v and its layer at %v; want once each, stack first:\n%s", stack, layer, b)
+	}
+	var realmLayers []int
+	for _, i := range at("--target work") {
+		if i != layer[0] {
+			realmLayers = append(realmLayers, i)
+		}
+	}
+	if len(realmLayers) != 1 || realmLayers[0] < layer[0] {
+		t.Errorf("the realm's layer was built at %v, the factory layer at %v; the factory layer comes first:\n%s", realmLayers, layer, b)
+	}
+}
+
+func TestSandboxBuildStopsWhenTheFactoryLayerFailsToBuild(t *testing.T) {
+	log := stubEngine(t)
+	stubSays(t, log, "fail-factory", "yes")
+	_, plain := project(t, "script.yaml", "")
+	config := withSandbox(t, plain)
+	realm, _ := filepath.Abs("../../testdata/toy-sandbox")
+	code, _, errOut := ygg(t, "sandbox", "build", "--config", config, "--realm", realm)
+	if code != ExitFailed || !strings.Contains(errOut, "factory layer") {
+		t.Errorf("exit %d, want %d with the factory layer named:\n%s", code, ExitFailed, errOut)
+	}
+	b, _ := os.ReadFile(log)
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "podman build") && !strings.Contains(line, "ygg-factory-stack") {
+			t.Errorf("a build ran after the factory stack failed: %s", line)
+		}
+		if strings.Contains(line, "golang:") {
+			t.Errorf("the realm's stack was pulled after the factory layer failed: %s", line)
 		}
 	}
 }

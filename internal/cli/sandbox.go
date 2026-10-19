@@ -58,6 +58,14 @@ func (c *command) sandbox(args []string) int {
 	if err != nil {
 		return c.refuse(err)
 	}
+	// The factory layer comes first: a scratch session starts on it, whatever realms the project has.
+	fmt.Fprintf(c.out, "Building the factory layer on %s.\n", sandbox.FactoryStack)
+	fimgs, err := d.BuildFactory(c.ctx)
+	if err != nil {
+		fmt.Fprintf(c.err, "ygg: building the factory layer failed: %v\n", err)
+		return ExitFailed
+	}
+	fmt.Fprintf(c.out, "Built:\n  %s\n  %s\n", fimgs.Work, fimgs.Firewall)
 	for _, st := range stacks {
 		if st.dir != "" {
 			fmt.Fprintf(c.out, "Building the stack %s from the realm's context.\n", st.ref)
@@ -99,7 +107,7 @@ type stackBuild struct{ ref, dir, target string }
 func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks []stackBuild, services, skipped []string, err error) {
 	var store *realm.Store
 	if cfg.Realms != nil {
-		store = &realm.Store{Dir: cfg.Realms.Dir}
+		store = &realm.Store{Dir: cfg.Realms.Dir, Kind: "realm"}
 	}
 	var dirs []string
 	if all {
@@ -117,7 +125,7 @@ func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks []stack
 		}
 	}
 	for _, ref := range refs {
-		dir, _, err := realm.Resolve(ref, store)
+		dir, _, err := realm.Resolve(ref, store, "realm")
 		if err != nil {
 			return nil, nil, nil, err
 		}

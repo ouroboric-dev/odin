@@ -40,7 +40,7 @@ func withStateFolder(m *testing.M) int {
 // walk starts the toy run and approves every stop. It returns the gates it stopped at, in order.
 func walk(t *testing.T, dir, config string, runArgs ...string) (string, []string) {
 	t.Helper()
-	args := append([]string{"run", "--project", dir, "--config", config, "--realm", toyRealm(t)}, runArgs...)
+	args := append([]string{"run", "--project", dir, "--config", config, "--graph", toyRealm(t)}, runArgs...)
 	code, out, errOut := ygg(t, args...)
 	id := runID(t, dir)
 	var stops []string
@@ -146,7 +146,7 @@ func TestToyGraphEndToEnd(t *testing.T) {
 
 	t.Run("a rejection re-runs the node with the reason", func(t *testing.T) {
 		dir, config := project(t, "script.yaml", "mode: key-points\ngates: { spec: stop }\n")
-		ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+		ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 		id := runID(t, dir)
 		ygg(t, "approve", id, "design-gate", "--project", dir)
 		code, _, errOut := ygg(t, "reject", id, "spec-gate", "--project", dir, "--reason", "Name the users.")
@@ -167,7 +167,7 @@ func TestToyGraphEndToEnd(t *testing.T) {
 
 	t.Run("a killed run resumes at the interrupted node", func(t *testing.T) {
 		dir, config := project(t, "script-hang.yaml", "mode: unattended\ngates: { design: auto }\n")
-		cmd := exec.Command(os.Args[0], "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+		cmd := exec.Command(os.Args[0], "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 		cmd.Env = append(os.Environ(), "YGG_E2E_MAIN=1")
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -220,7 +220,7 @@ func TestToyGraphEndToEnd(t *testing.T) {
 
 	t.Run("no complete caps, no run", func(t *testing.T) {
 		dir, config := project(t, "script.yaml", "budget:\n  per_run: { tokens: 100000, turns: 100 }\n")
-		code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+		code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 		if code != ExitRefused || !strings.Contains(errOut, "budget.per_day") || !strings.Contains(errOut, "per_day: { tokens: <tokens>") {
 			t.Errorf("run: exit %d:\n%s", code, errOut)
 		}
@@ -231,7 +231,7 @@ func TestToyGraphEndToEnd(t *testing.T) {
 
 	t.Run("a stopped run refuses to continue once the caps are removed", func(t *testing.T) {
 		dir, config := project(t, "script.yaml", "")
-		ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+		ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 		id := runID(t, dir)
 		b, _ := os.ReadFile(config)
 		os.WriteFile(config, []byte(strings.Split(string(b), "budget:")[0]), 0o644)
@@ -246,7 +246,7 @@ func TestToyGraphEndToEnd(t *testing.T) {
 
 func TestARunThatReachesItsCapStopsAtBudgetCapAndOnlyApproveIsOffered(t *testing.T) {
 	dir, config := project(t, "script.yaml", "budget:\n  per_run: { tokens: 2500, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\n")
-	code, out, _ := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	code, out, _ := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 	id := runID(t, dir)
 	if code != ExitStopped {
 		t.Fatalf("run: exit %d, %q", code, out)
@@ -278,7 +278,7 @@ func TestARunThatReachesItsCapStopsAtBudgetCapAndOnlyApproveIsOffered(t *testing
 
 func TestAUsedUpQuotaPausesTheRunWithExitCode4AndResumeGoesOn(t *testing.T) {
 	dir, config := project(t, "script-quota.yaml", "")
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 	if code != ExitPaused || ExitPaused != 4 || !strings.Contains(errOut, "paused") || !strings.Contains(errOut, "usage limit reached") || !strings.Contains(errOut, "ygg resume") {
 		t.Fatalf("run: exit %d:\n%s%s\nwant exit 4 and a message that says why and how to resume", code, out, errOut)
 	}
@@ -301,7 +301,7 @@ func TestAUsedUpQuotaPausesTheRunWithExitCode4AndResumeGoesOn(t *testing.T) {
 
 func TestStatusShowsHowMuchOfTheCapsTheRunAndTheDayHaveUsed(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
-	ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 	id := runID(t, dir)
 	_, out, _ := ygg(t, "status", id, "--project", dir)
 	if !strings.Contains(out, "caps:     this run 1100 of 100000 tokens, 2 of 100 turns; today 1100 of 200000 tokens, 2 of 200 turns") {

@@ -116,10 +116,7 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 			return tidied(ctx, l, runChecks(ctx, r, n, attempt, n.Checks, n.Repo, l.Dir()))
 		},
 		Acceptance: func(ctx context.Context) error {
-			if r.Sandbox == nil || len(n.Acceptance) == 0 {
-				return runChecks(ctx, r, n, attempt, n.Acceptance, "", parent.Dir)
-			}
-			return runAcceptance(ctx, r, n, attempt, parentRepo, n.Repo, to)
+			return runAcceptance(ctx, r, n, attempt, parentRepo, parent.Dir, n.Repo, to)
 		},
 		Generated: n.Generated, SkipShrink: s.Waived[n.ID],
 		Message: fmt.Sprintf("Move %s to %.12s (run %s, node %s)", child, to, s.ID, n.ID)})
@@ -178,24 +175,47 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	return nil
 }
 
-// runAcceptance runs a pointer node's acceptance checks, in a run with a sandbox, in the sandbox that holds
-// a snapshot of the project (change realm-content): the lead realm's checks, on the lead realm's
-// acceptance stack, over the committed files of every leaf, the one being moved at the commit it moves to.
-// Nothing of a leaf's working copy or git dir is in it, and what the checks write stays in the snapshot.
-func runAcceptance(ctx context.Context, r *run.Run, n schema.Node, attempt int, parentRepo, leafRepo, to string) error {
-	if parentRepo != "." {
-		return &nodeFailure{fmt.Errorf("node %s runs acceptance checks in the umbrella %s; the snapshot sandbox holds the project, so they run where the leaf's parent is the project", n.ID, parentRepo)}
+// runAcceptance runs a pointer node's acceptance checks (change voluspa): for each check the node names, the
+// check of each realm of the project's leaves that defines it, in realm-name order, the first failure being
+// the move's. In a run with a sandbox, each realm's check runs in a sandbox of its own that holds a snapshot of
+// the project, on that realm's acceptance stack, over the committed files of every leaf, the one being moved
+// at the commit it moves to; nothing of a leaf's working copy or git dir is in it, and what the check writes
+// stays in the snapshot. With no sandbox, the same checks run on the host in the project, as before. No
+// realm having the check is a failure, never a pass: Prepare refuses such a project, and this is the second line.
+func runAcceptance(ctx context.Context, r *run.Run, n schema.Node, attempt int, parentRepo, parentDir, leafRepo, to string) error {
+	for _, c := range n.Acceptance {
+		realms, err := r.Setup.AcceptanceRealms(c)
+		if err != nil {
+			return &nodeFailure{err}
+		}
+		if len(realms) == 0 {
+			return &nodeFailure{fmt.Errorf("node %s runs the acceptance check %s, and no realm of this project has an acceptance check %s", n.ID, c, c)}
+		}
+		for _, rl := range realms {
+			exec := func(argv []string, logPath string) (error, error) {
+				return command(ctx, r, n.ID, "", parentDir, argv, time.Duration(n.Timeout), logPath)
+			}
+			if r.Sandbox != nil {
+				if parentRepo != "." {
+					return &nodeFailure{fmt.Errorf("node %s runs acceptance checks in the umbrella %s; the snapshot sandbox holds the project, so they run where the leaf's parent is the project", n.ID, parentRepo)}
+				}
+				runner, err := r.SnapshotRunner(ctx, n.ID, rl, map[string]string{leafRepo: to})
+				var se *run.SnapshotError
+				if errors.As(err, &se) {
+					return &nodeFailure{err}
+				} else if err != nil {
+					return sandboxStart(err)
+				}
+				exec = func(argv []string, logPath string) (error, error) {
+					return commandOn(ctx, runner, n.ID, argv, time.Duration(n.Timeout), logPath)
+				}
+			}
+			if err := runChecksWith(ctx, r, n, attempt, []string{c}, rl, true, exec); err != nil {
+				return err
+			}
+		}
 	}
-	runner, err := r.SnapshotRunner(ctx, n.ID, map[string]string{leafRepo: to})
-	var se *run.SnapshotError
-	if errors.As(err, &se) {
-		return &nodeFailure{err}
-	} else if err != nil {
-		return sandboxStart(err)
-	}
-	return runChecksWith(ctx, r, n, attempt, n.Acceptance, r.Setup.Realm(""), func(argv []string, logPath string) (error, error) {
-		return commandOn(ctx, runner, n.ID, argv, time.Duration(n.Timeout), logPath)
-	})
+	return nil
 }
 
 // failLanding fails a merge or pointer node that the gate refused, or whose target another process

@@ -1,8 +1,9 @@
-# An example factory.yaml for the content smoke run (v0-H15): the real midgard-react and helheim-go realms,
-# built with scripted agents on a real container engine. The agents cost nothing: they answer from
-# script.yaml, and every command the realms run (the check ladder, the services, the acceptance run) is
-# real. Copy it, set the engine, the mounts and the realm folder for your machine. The factory ships no
-# defaults for the caps.
+# An example factory.yaml for the content smoke run (v0-H15): the real software graph pack of Voluspa and the
+# real midgard-react and helheim-go realms, built with scripted agents on a real container engine. The agents
+# cost nothing: they answer from script.yaml, and every command the realms run (the check ladder, the
+# services, the acceptance run) is real. Copy it, set the engine, the mounts, the realm folder and the graph
+# folder for your machine (`ygg run --graph software` finds the pack in graphs.dir; each leaf's realm comes
+# from the realm store). The factory ships no defaults for the caps.
 mode: unattended
 privacy: strict
 gates:
@@ -20,3 +21,5 @@ sandbox:
     - { host: /home/OPERATOR/ygg, engine: /mnt/wsl/ygg-bind }
 realms:
   dir: /home/OPERATOR/yggdrasil
+graphs:
+  dir: /home/OPERATOR/yggdrasil/voluspa

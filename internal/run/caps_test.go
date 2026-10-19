@@ -54,7 +54,7 @@ func TestRunRefusesWithoutCompleteCaps(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			project := treetest.Project(t, "repos/app")
-			_, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), c.config), Realm: toy(t)})
+			_, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), c.config), Graph: toy(t)})
 			var ce *schema.CapsError
 			if !errors.As(err, &ce) {
 				t.Fatalf("Start() error = %v, want a *schema.CapsError", err)
@@ -72,7 +72,7 @@ func TestRunRefusesWithoutCompleteCaps(t *testing.T) {
 	t.Run("resume refuses in the same cases", func(t *testing.T) {
 		project := treetest.Project(t, "repos/app")
 		cfgDir := t.TempDir()
-		r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, cfgDir, scriptedRoles+fullCaps), Realm: toy(t)})
+		r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, cfgDir, scriptedRoles+fullCaps), Graph: toy(t)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestRunRefusesWithoutCompleteCaps(t *testing.T) {
 	})
 	t.Run("complete caps start a run", func(t *testing.T) {
 		project := treetest.Project(t, "repos/app")
-		r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+		r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 		if err != nil {
 			t.Fatalf("Start() = %v", err)
 		}

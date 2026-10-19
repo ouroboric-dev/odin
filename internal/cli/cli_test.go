@@ -65,8 +65,8 @@ func TestUsageErrorsRefuseAndCreateNothing(t *testing.T) {
 	cases := map[string][]string{
 		"no command":            {},
 		"an unknown command":    {"deploy"},
-		"run without --realm":   {"run", "--project", dir, "--config", config},
-		"run with a bad mode":   {"run", "--project", dir, "--config", config, "--realm", toyRealm(t), "--mode", "fast"},
+		"run without --graph":   {"run", "--project", dir, "--config", config},
+		"run with a bad mode":   {"run", "--project", dir, "--config", config, "--graph", toyRealm(t), "--mode", "fast"},
 		"approve without gate":  {"approve", "20261015-090000-a1b2c3", "--project", dir},
 		"a path as the run id":  {"approve", "../../../tmp", "design-gate", "--project", dir},
 		"status of a path":      {"status", "../..", "--project", dir},
@@ -84,7 +84,7 @@ func TestUsageErrorsRefuseAndCreateNothing(t *testing.T) {
 
 func TestRunStopsAndApproveContinues(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
-	code, out, _ := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	code, out, _ := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 	if code != ExitStopped || !strings.Contains(out, "stopped at approval point design-gate") {
 		t.Fatalf("run: exit %d, %q; want 3 at design-gate", code, out)
 	}
@@ -113,7 +113,7 @@ func TestRunStopsAndApproveContinues(t *testing.T) {
 // changed since the last command (decision 10).
 func TestARefusedCommandChangesNothing(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
-	ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 	id := runID(t, dir)
 	runDir := filepath.Join(dir, ".factory", "runs", id)
 	read := func(name string) string {
@@ -164,9 +164,80 @@ func TestAFailedStartExitsOne(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "repos", "app", "README.md"), []byte("a person's edit\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
 	id := runID(t, dir)
 	if code != ExitFailed || !strings.Contains(errOut, "ygg resume "+id) || !strings.Contains(errOut, "refs/ygg/"+id+"/discarded/") {
 		t.Errorf("run with a dirty leaf: exit %d, want %d with the resume hint:\n%s", code, ExitFailed, errOut)
+	}
+}
+
+// A project made before the graph pin pins a realm at the top of umbrella.yaml (the realm that led its
+// runs). It is refused with the way to pin a graph, before anything starts (review focus 1).
+func TestARunOnAProjectThatPinsARealmAtTheTopStopsBeforeAnythingStarts(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	f := filepath.Join(dir, "umbrella.yaml")
+	b, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f, append([]byte("realm: toy\nrealm_version: 0.3.0\n"), b...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t))
+	if code != ExitRefused || !strings.Contains(errOut, "graph and graph_version") {
+		t.Errorf("exit %d, stderr %q; want %d and the way to pin a graph", code, errOut, ExitRefused)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".factory", "runs")); err == nil {
+		t.Error("a refused run left .factory/runs")
+	}
+}
+
+// --realm is no flag of a run: a leaf's realm is pinned in the project, and --graph names the graph.
+func TestRunWithRealmStopsAndSaysUseGraph(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	for name, args := range map[string][]string{
+		"realm alone":     {"--realm", "toy"},
+		"graph and realm": {"--graph", toyRealm(t), "--realm", "toy"},
+	} {
+		code, _, errOut := ygg(t, append([]string{"run", "--project", dir, "--config", config}, args...)...)
+		if code != ExitRefused || !strings.Contains(errOut, "ygg: use --graph; a leaf's realm is pinned in the project") {
+			t.Errorf("%s: exit %d, stderr %q; want %d and the way to name a graph", name, code, errOut, ExitRefused)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".factory", "runs")); err == nil {
+			t.Errorf("%s: a refused run left .factory/runs", name)
+		}
+	}
+	code, _, errOut := ygg(t, "run", "--project", dir, "--config", config)
+	if code != ExitRefused || !strings.Contains(errOut, "run needs --graph") {
+		t.Errorf("no flag: exit %d, stderr %q; want %d and run needs --graph", code, errOut, ExitRefused)
+	}
+}
+
+// A run that a realm led (schema ygg.run/v2) is refused by resume and by status, with the way on.
+func TestAResumeOfARunLedByARealmExitsTwoWithTheWayOn(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t)); code != ExitStopped {
+		t.Fatalf("run: exit %d: %s", code, errOut)
+	}
+	id := runID(t, dir)
+	file := filepath.Join(dir, ".factory", "runs", id, "run.json")
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := strings.Replace(string(b), `"schema": "ygg.run/v3"`, `"schema": "ygg.run/v2"`, 1)
+	if old == string(b) {
+		old = strings.Replace(string(b), `"schema":"ygg.run/v3"`, `"schema":"ygg.run/v2"`, 1)
+	}
+	if err := os.WriteFile(file, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := ygg(t, "resume", id, "--project", dir)
+	if code != ExitRefused || !strings.Contains(errOut, "can't be resumed") || !strings.Contains(errOut, "start a new run with --graph") {
+		t.Errorf("resume: exit %d, stderr %q", code, errOut)
+	}
+	code, out, errOut := ygg(t, "status", id, "--project", dir)
+	if code != ExitRefused || out != "" || !strings.Contains(errOut, "can't be resumed") || !strings.Contains(errOut, "start a new run with --graph") {
+		t.Errorf("status: exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }

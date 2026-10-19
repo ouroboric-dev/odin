@@ -56,19 +56,19 @@ func TestARealmWhoseStackIsBuiltFromItsContextGivesItsLeavesTheTagOfTheBuild(t *
 	sandboxRealm(t, store, "midgard-react", "0.1.0", nodeStack, "registry.npmjs.org", "")
 	sandboxRealm(t, store, "helheim-go", "0.2.0", nodeStack, "proxy.golang.org", "")
 	webRef := buildContext(t, store, "midgard-react")
-	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", Pin: treetest.Pin{Realm: "midgard-react", Version: "0.1.0"}, Children: map[string]treetest.Node{
+	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", GraphPin: treetest.Pin{Realm: "midgard-react", Version: "0.1.0"}, Children: map[string]treetest.Node{
 		"repos/app": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true},
 		"repos/api": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: treetest.Pin{Realm: "helheim-go", Version: "0.2.0"}},
 	}}
 	fake := &sandboxfake.Sandbox{}
 	h := Hooks{NewSandbox: func(s *SandboxSetup, _ string) (gungnir.Sandbox, error) {
-		if want := sandbox.ImagesFor(webRef); s.Config.Images != want {
-			t.Errorf("the default images are %+v, want those of the lead realm's built stack %+v", s.Config.Images, want)
+		if want := sandbox.FactoryImages(); s.Config.Images != want {
+			t.Errorf("the default images are %+v, want those of the factory layer %+v", s.Config.Images, want)
 		}
 		return fake, nil
 	}}
 	script := "{ agent: scripted, model: none, script: " + filepath.Join(toySandbox(t), "script.yaml") + " }"
-	r, err := Start(ctx, Options{Project: treetest.Build(t, root), Config: sandboxConfig(t, script, "realms:\n  dir: "+store+"\n"), Realm: "midgard-react", Hooks: h})
+	r, err := Start(ctx, Options{Project: treetest.Build(t, root), Config: sandboxConfig(t, script, "realms:\n  dir: "+store+"\ngraphs:\n  dir: "+store+"\n"), Graph: "midgard-react", Hooks: h})
 	if err != nil {
 		t.Fatal(err)
 	}

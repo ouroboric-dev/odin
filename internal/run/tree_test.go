@@ -18,7 +18,7 @@ import (
 func startToyRun(t *testing.T, config string) *Run {
 	t.Helper()
 	project := treetest.Project(t, "repos/app")
-	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), config), Realm: toy(t)})
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), config), Graph: toy(t)})
 	if err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
@@ -27,7 +27,7 @@ func startToyRun(t *testing.T, config string) *Run {
 
 func TestARunWorksInItsProjectsLeaves(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
-	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
@@ -55,7 +55,7 @@ func TestARunWorksInItsProjectsLeaves(t *testing.T) {
 
 func TestStartRefusesAProjectOutsideTheTree(t *testing.T) {
 	outside := t.TempDir()
-	_, err := Start(ctx, Options{Project: outside, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	_, err := Start(ctx, Options{Project: outside, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err == nil || !strings.Contains(err.Error(), "not inside an instance tree") {
 		t.Errorf("Start() = %v, want a refusal: a resume resets leaves, so Odin works only in the tree", err)
 	}
@@ -65,7 +65,7 @@ func TestStartRefusesAProjectOutsideTheTree(t *testing.T) {
 	r := startToyRun(t, scriptedRoles+fullCaps)
 	r.Close()
 	leafDir := r.RepoDir("repos/app")
-	if _, err := Start(ctx, Options{Project: leafDir, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)}); err == nil || !strings.Contains(err.Error(), "is a leaf") {
+	if _, err := Start(ctx, Options{Project: leafDir, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)}); err == nil || !strings.Contains(err.Error(), "is a leaf") {
 		t.Errorf("Start() in a leaf = %v, want a refusal", err)
 	}
 }
@@ -83,7 +83,7 @@ func TestPrepareRefusesAGraphTheProjectCantRun(t *testing.T) {
 		realm := t.TempDir()
 		files := map[string]string{
 			"pack.yaml":                     "name: t\nversion: 0.1.0\ngraph: graph.yaml\nchecks:\n  unit: [echo]\nleaves:\n  repos/app: { description: d, template: tpl, first_commit: [LICENSE] }\n",
-			"graph.yaml":                    "name: t\nversion: 1.0.0\nnodes:\n" + c.nodes,
+			"graph.yaml":                    "name: t\nversion: 1.0.0\nschema: 1\nnodes:\n" + c.nodes,
 			"p.md":                          "Do it.\n",
 			filepath.Join("tpl", "LICENSE"): "AGPL-3.0-only\n",
 		}
@@ -93,7 +93,7 @@ func TestPrepareRefusesAGraphTheProjectCantRun(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		_, err := Prepare(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: realm})
+		_, err := Prepare(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: realm})
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Prepare() = %v, want an error containing %q", name, err, c.want)
 		}
@@ -109,7 +109,7 @@ func TestAFailureAfterTheRunStartedIsRecorded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(nodes[1].Dir, "README.md"), []byte("a person's edit\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err = Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	_, err = Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	var f *Failed
 	if !errors.As(err, &f) || !strings.Contains(err.Error(), "uncommitted") {
 		t.Fatalf("Start() = %v, want a *Failed: the leaf has a person's uncommitted edit", err)
@@ -145,7 +145,7 @@ func TestAFailureAfterTheRunStartedIsRecorded(t *testing.T) {
 func TestTheRealmCreatesTheLeavesAProjectLacks(t *testing.T) {
 	project := treetest.Project(t) // no leaves yet
 	commits, _ := git.Run(ctx, project, "rev-list", "--count", "HEAD")
-	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil {
 		t.Fatalf("Start() = %v", err)
 	}
@@ -164,7 +164,7 @@ func TestTheRealmCreatesTheLeavesAProjectLacks(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(r.Dir, "ledger.jsonl")); !strings.Contains(string(b), `"event":"repo_created"`) {
 		t.Error("the ledger doesn't record the created leaf")
 	}
-	second, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	second, err := Start(ctx, Options{Project: project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil {
 		t.Fatalf("a second run in the project = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestTheRealmCreatesTheLeavesAProjectLacks(t *testing.T) {
 func TestOneRunAdvancesAProjectAtATime(t *testing.T) {
 	r := startToyRun(t, scriptedRoles+fullCaps)
 	defer r.Close()
-	_, err := Start(ctx, Options{Project: r.Project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	_, err := Start(ctx, Options{Project: r.Project, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if !errors.Is(err, ErrProjectBusy) {
 		t.Errorf("a second run in a busy project = %v, want ErrProjectBusy", err)
 	}
@@ -243,7 +243,7 @@ func TestAStricterModeSwitchIsAllowed(t *testing.T) {
 func TestRolesFollowAConfigChange(t *testing.T) {
 	cfgDir := t.TempDir()
 	project := treetest.Project(t)
-	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, cfgDir, scriptedRoles+fullCaps), Realm: toy(t)})
+	r, err := Start(ctx, Options{Project: project, Config: writeConfig(t, cfgDir, scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestRolesFollowAConfigChange(t *testing.T) {
 // above it, and works in the sub-project's own leaves.
 func TestARunWorksInASubProject(t *testing.T) {
 	root, sub := treetest.SubProject(t, "repos/app")
-	r, err := Start(ctx, Options{Project: sub, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Realm: toy(t)})
+	r, err := Start(ctx, Options{Project: sub, Config: writeConfig(t, t.TempDir(), scriptedRoles+fullCaps), Graph: toy(t)})
 	if err != nil {
 		t.Fatalf("Start() in a sub-project = %v", err)
 	}

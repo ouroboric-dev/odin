@@ -54,9 +54,13 @@ func startWith(t *testing.T, o setup) *run.Run {
 		o.journal = filepath.Join(cfg, "spend")
 	}
 	o.budget = strings.TrimRight(o.budget, "\n") + "\n  journal: " + o.journal + "\n"
+	// The project's leaf pins no realm, so the pack must hold a recipe to serve it: one check no node runs.
+	if !strings.Contains(o.pack, "checks:") {
+		o.pack += "checks:\n  noop: [echo, noop]\n"
+	}
 	files := map[string]string{
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + o.pack,
-		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nnodes:\n" + o.nodes,
+		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 1\nnodes:\n" + o.nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
 		filepath.Join(cfg, "script.yaml"):  o.script,
 		filepath.Join(cfg, "factory.yaml"): "mode: " + o.mode + "\n" + o.gates + o.roles + o.budget,
@@ -66,7 +70,7 @@ func startWith(t *testing.T, o setup) *run.Run {
 			t.Fatal(err)
 		}
 	}
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Realm: realm, Hooks: o.hooks})
+	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Hooks: o.hooks})
 	if err != nil {
 		t.Fatal(err)
 	}
