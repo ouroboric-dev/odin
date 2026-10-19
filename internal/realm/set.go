@@ -22,8 +22,8 @@ func (s *Set) Names() []string { return slices.Sorted(maps.Keys(s.Realms)) }
 // Collect builds the set for a run whose lead realm is loaded. pins are the pins of the project's leaves;
 // the project's graph pin is no realm pin, and run.Setup checks it. One version of a realm leaf serves the
 // whole run (change realm-leaf-naming), so Collect refuses, before anything starts: two pins of one realm
-// at different versions; and a realm store that holds another version of a realm than the one pinned. Every problem is listed. load finds a realm by
-// name, and is called once for each realm but the lead.
+// at different versions; and a realm store that holds another version of a realm than the one pinned.
+// Every problem is listed. load finds a realm by name, and is called once for each realm but the lead.
 func Collect(lead *Realm, pins []schema.Pin, load func(name string) (*Realm, error)) (*Set, error) {
 	var problems []string
 	byRealm := map[string][]schema.Pin{}

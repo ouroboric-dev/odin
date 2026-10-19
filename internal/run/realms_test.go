@@ -207,35 +207,33 @@ func TestTheFirstRunPinsTheGraphItWasGivenByName(t *testing.T) {
 	}
 }
 
-// packAt copies the toy pack into a new folder as name at version, and returns the folder.
-func packAt(t *testing.T, name, version string) string {
+// sandboxedPack makes a pack with a sandbox section, as name at version, in a new folder of the store dir.
+func sandboxedPack(t *testing.T, store, name, version string) string {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), name)
-	if err := os.CopyFS(dir, os.DirFS(toy(t))); err != nil {
-		t.Fatal(err)
-	}
-	b, _ := os.ReadFile(filepath.Join(dir, "pack.yaml"))
-	b = []byte(strings.Replace(strings.Replace(string(b), "name: toy", "name: "+name, 1), "version: 0.3.0", "version: "+version, 1))
-	if err := os.WriteFile(filepath.Join(dir, "pack.yaml"), b, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return dir
+	sandboxRealm(t, store, name, version, nodeStack, "proxy.golang.org", "")
+	return filepath.Join(store, name)
 }
 
 func TestARunWhoseGraphIsNotTheProjectsPinStopsBeforeAnythingStarts(t *testing.T) {
-	_, cfg := realmStore(t, map[string]string{"midgard-react": "0.2.0", "midgard-vue": "0.1.0"})
+	// The packs have a sandbox section, so a run that starts opens a sandbox and the fake counts it.
+	store := t.TempDir()
+	sandboxedPack(t, store, "midgard-react", "0.2.0")
+	sandboxedPack(t, store, "midgard-vue", "0.1.0")
+	byPath := func(name, version string) string { return sandboxedPack(t, t.TempDir(), name, version) }
+	script := "{ agent: scripted, model: none, script: " + filepath.Join(toySandbox(t), "script.yaml") + " }"
+	cfg := sandboxConfig(t, script, "realms:\n  dir: "+store+"\n")
 	cases := map[string]struct {
 		realm string
 		want  bool // the run starts
 	}{
 		"another name, by name":                {"midgard-vue", false},
 		"the same name, another version, name": {"midgard-react", false},
-		"the same name, another version, path": {packAt(t, "midgard-react", "0.2.0"), false},
-		"the same name and version, by path":   {packAt(t, "midgard-react", "0.1.0"), true},
+		"the same name, another version, path": {byPath("midgard-react", "0.2.0"), false},
+		"the same name and version, by path":   {byPath("midgard-react", "0.1.0"), true},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			project := treetest.Build(t, pinned("midgard-react", "0.1.0", nil))
+			project := treetest.Build(t, pinned("midgard-react", "0.1.0", map[string]treetest.Pin{"repos/app": {}, "repos/api": {}}))
 			started := 0
 			h := Hooks{NewSandbox: func(*SandboxSetup, string) (gungnir.Sandbox, error) { started++; return &sandboxfake.Sandbox{}, nil }}
 			r, err := Start(ctx, Options{Project: project, Config: cfg, Realm: c.realm, Hooks: h})
@@ -244,13 +242,16 @@ func TestARunWhoseGraphIsNotTheProjectsPinStopsBeforeAnythingStarts(t *testing.T
 					t.Fatalf("Start() = %v; the same graph at the same version is the project's", err)
 				}
 				r.Close()
+				if started == 0 {
+					t.Error("the run started and no sandbox was opened: the counter is not live")
+				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), "the project is built with the graph") {
 				t.Fatalf("Start() = %v, want a refusal that names the project's graph", err)
 			}
-			if entries, _ := filepath.Glob(filepath.Join(project, ".factory", "runs", "*")); len(entries) != 0 {
-				t.Errorf("a refused start left run directories: %v", entries)
+			if _, err := os.Stat(filepath.Join(project, ".factory")); err == nil {
+				t.Error("a refused start created .factory/")
 			}
 			if started != 0 {
 				t.Errorf("%d sandboxes started", started)
