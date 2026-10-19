@@ -109,7 +109,7 @@ func TestARunOfTheToyRealmsBuildsAProductFromTwoRealms(t *testing.T) {
 			t.Errorf("task %s is %s", f.ID, f.Status)
 		}
 	}
-	// run.json and the status line record the lead realm with its graph, and each leaf's realm.
+	// run.json and the status line record the graph pack, and each leaf's realm.
 	if st.Graph != "midgard-toy" || st.GraphVersion != "0.1.0" || len(st.Realms) != 2 || st.Leaves["repos/api"].Realm != "helheim-toy" || st.Leaves["repos/web"].Realm != "midgard-toy" {
 		t.Errorf("run.json: graph %s %s, realms %v, leaves %+v", st.Graph, st.GraphVersion, st.Realms, st.Leaves)
 	}

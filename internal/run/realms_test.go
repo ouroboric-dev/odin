@@ -50,7 +50,7 @@ func TestARealmIsNamedAndFoundInTheStore(t *testing.T) {
 		t.Fatalf("Prepare() = %v", err)
 	}
 	if s.GraphPack.Name != "midgard-react" || s.Graph == nil || len(s.Realms.Realms) != 1 {
-		t.Errorf("lead = %+v, realms = %v", s.GraphPack, s.Realms.Names())
+		t.Errorf("graph pack = %+v, realms = %v", s.GraphPack, s.Realms.Names())
 	}
 	if rl, err := s.RealmOf("repos/app"); err != nil || rl != s.GraphPack {
 		t.Errorf("RealmOf(repos/app) = %v, %v; a leaf with no pin is served by a graph pack that holds a recipe", rl, err)
@@ -184,7 +184,7 @@ func TestTheFirstRunPinsTheGraphItWasGivenByName(t *testing.T) {
 	raw, _ := os.ReadFile(filepath.Join(project, "umbrella.yaml"))
 	for _, line := range strings.Split(string(raw), "\n") {
 		if strings.HasPrefix(line, "realm:") || strings.HasPrefix(line, "realm_version:") {
-			t.Errorf("umbrella.yaml has a top-level %q; the project pins a graph, not a lead realm", line)
+			t.Errorf("umbrella.yaml has a top-level %q; the project pins a graph, not a realm", line)
 		}
 	}
 	if !strings.Contains(string(raw), "graph: midgard-react") || !strings.Contains(string(raw), "graph_version: 0.1.0") {

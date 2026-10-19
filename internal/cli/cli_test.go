@@ -171,9 +171,9 @@ func TestAFailedStartExitsOne(t *testing.T) {
 	}
 }
 
-// A project made before the graph pin pins a lead realm at the top of umbrella.yaml. It is refused with the
+// A project made before the graph pin pins a realm at the top of umbrella.yaml (the realm that led its runs). It is refused with the
 // way to pin a graph, before anything starts (review focus 1).
-func TestARunOnAProjectThatPinsALeadRealmStopsBeforeAnythingStarts(t *testing.T) {
+func TestARunOnAProjectThatPinsARealmAtTheTopStopsBeforeAnythingStarts(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
 	f := filepath.Join(dir, "umbrella.yaml")
 	b, err := os.ReadFile(f)
@@ -213,7 +213,7 @@ func TestRunWithRealmStopsAndSaysUseGraph(t *testing.T) {
 	}
 }
 
-// A run that a lead realm led (schema ygg.run/v2) is refused by resume and by status, with the way on.
+// A run that a realm led (schema ygg.run/v2) is refused by resume and by status, with the way on.
 func TestAResumeOfARunLedByARealmExitsTwoWithTheWayOn(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
 	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t)); code != ExitStopped {

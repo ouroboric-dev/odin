@@ -100,7 +100,7 @@ func (c *command) doctor(args []string) int {
 	return exit(bad)
 }
 
-// checkRunBeforeGraphs reports a run a lead realm led (ygg.run/v2) as a warning: it can't be resumed, so
+// checkRunBeforeGraphs reports a run that a realm led (ygg.run/v2) as a warning: it can't be resumed, so
 // it is not an error, and its folder can go. A process group its exec node left is still stopped, from
 // the two fields of run.json that name it; a leftover container is found by its label and stopped by
 // checkSandbox, whatever the run's state.

@@ -37,7 +37,9 @@ The factory ships no defaults, so a config without them runs nothing.
 `root: true`; inside a company umbrella, every umbrella above it lists the one below, up to the one
 that sets `root: true`. A run works on its
 own branch, `ygg/<run-id>`, in each leaf its graph names, and commits a checkpoint after every node.
-The realm creates a leaf the project lacks. `ygg doctor --root <dir>` checks a tree without a project.
+`--graph` names a graph pack, from `graphs.dir` in `factory.yaml` or as a path; the first run pins it in
+`umbrella.yaml`, and each leaf's realm comes from its own pin. A leaf the project lacks is created from the
+template of its realm. `ygg doctor --root <dir>` checks a tree without a project.
 
 ## Docs
 

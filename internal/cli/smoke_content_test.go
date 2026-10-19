@@ -28,4 +28,7 @@ func TestTheContentSmokeFilesLoad(t *testing.T) {
 			t.Errorf("factory.example.yaml gives the %s no script", role)
 		}
 	}
+	if !strings.Contains(string(example), "graphs:\n  dir: /home/OPERATOR/yggdrasil/voluspa") {
+		t.Errorf("factory.example.yaml has no graphs: dir for the graph pack of Voluspa")
+	}
 }

@@ -1,4 +1,4 @@
-# The lead realm of the realms smoke run: real planners write the leaves file and the plan in scratch
+# The graph pack and a leaf realm of the realms smoke run: real planners write the leaves file and the plan in scratch
 # workspaces, Odin publishes them and creates the leaves, and a real implementer builds one small task in
 # each leaf. It costs a few cents. The prompts ask for exact files: this run tests the machinery, not the
 # planner's judgment.
@@ -8,7 +8,7 @@ graph: graph.yaml
 checks:
   unit: [grep, -q, hello, hello.txt]
 leaf:
-  description: A smoke leaf of the lead realm.
+  description: A smoke leaf of this realm.
   template: templates/leaf
   first_commit: [LICENSE]
   implementer: prompts/implementer.md

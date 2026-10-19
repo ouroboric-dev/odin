@@ -12,19 +12,27 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 
 ## Responsibilities
 
-- Loads realm graphs and `factory.yaml`.
+- Loads the graph pack and `factory.yaml`.
 - Walks the graph and runs exec, agent, loop, gate and grade nodes; checkpoints runs and resumes them. A
   loop node is Jormungandr's loop with Odin's steps: sessions, checks, ledger lines and `run.json`.
-- Loads realm leaves (change realm-leaf-naming): `--realm` names the lead realm, found in the realm
-  store of `factory.yaml` or given as a path; each leaf runs with the realm the project pins for it;
-  each realm loads once, at the pinned version, and two pins that disagree stop the run before any
-  sandbox comes up. `run.json` records every realm with a hash of what a run could read, and a resume
-  refuses a realm that changed. The first run of a project pins its lead realm.
+- Loads the graph pack and the realm leaves (change realm-leaf-naming, Voluspa): `--graph` names the
+  graph pack, found in `graphs.dir` of `factory.yaml` or given as a path. The pack holds the graph and its
+  prompts and no recipe. Each leaf runs with the realm the project pins for it in `umbrella.yaml`, and
+  the realm of a leaf comes from that pin alone. The first run of a project writes the graph pin, a
+  top-level `graph:` and `graph_version:` in `umbrella.yaml`; a later run of another graph or version is
+  refused. A project that still pins a realm at the top is refused, with the way to pin a graph. Each
+  realm loads once, at the pinned version, and two pins that disagree stop the run before any sandbox
+  comes up. `run.json` (schema `ygg.run/v3`) records the graph pack and every realm with a hash of what
+  a run could read, and a resume refuses a pack or a realm that changed. A run of schema `ygg.run/v2`,
+  which a realm led, is refused by `resume` and `status`; `ygg doctor` reports it as a WARN, and its
+  folder can go. A pack or realm that is a subfolder of a repo is hashed from its committed files.
 - Runs the stages before the code: a scratch agent works in a workspace of its own (the brief, copies
   of what it reads, an `out/` folder); `publish` copies its documents into the project and commits them,
   after checking they are documents and hold no secret; `tasks` reads `tasks.md`, applies the Definition
   of Ready and writes `features.json`; `init` creates the leaves the spec stage named from their realms'
-  templates and records the pins.
+  templates and records the pins. Scratch sessions (the spec, plan and review stages and the reviewers)
+  run in a Gleipnir sandbox on the factory layer, the stack every session shares, never on a realm's
+  stack; the model APIs of their adapters are their only egress.
 - Repeats a task shape for every ready task (`foreach`), in the leaf and the realm of the task. A
   merge gate or pointer move that refuses the work's checks sends it back into the loop that made it
   (`back_to`, a few times). An unattended run gives up a task whose loop gave up, keeps its work on a
@@ -32,14 +40,21 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Starts each leaf's sandbox on its realm's stack, with the services of its realm and of the leaves it
   consumes (spec §6.1, §9.2). A realm's stack is an image pinned by digest or one that `ygg sandbox build`
   builds from the realm's own build context (change realm-content); the tag is a hash of the context.
+  `ygg sandbox build` builds the factory layer first, then each realm's stack on it.
 - Runs a pointer move's acceptance checks, when the run has a sandbox, in a sandbox that holds a snapshot
   of the project: the committed files of the umbrella and of each leaf, at the commits they are on, in a
-  plain folder with no git directory, on the lead realm's acceptance stack and with the services of every
-  leaf's realm. What a leaf's working copy holds beyond its commits never reaches it.
+  plain folder with no git directory. Each leaf realm that defines the check runs it, in realm-name
+  order, on its own stack and with the services of every leaf's realm, in a snapshot of its own at
+  `snapshot/<node>/<realm>`; the first failure is the move's, and a project where no realm has the check is
+  refused. What a leaf's working copy holds beyond its
+  commits never reaches it.
 - Reads the design-conformance verdict (`out/conformance.json` of a scratch reviewer that reviews another
   scratch agent's output, which it finds as `reviewed/`) and gives it to the spec gate: a deviation stops the
   gate in every mode, with the proposed amendment in the gate file; a verdict that cannot be read is asked
   for once more and then stops the run, never a pass (spec §4.2, §4.6).
+- Checks the graphs with `ygg doctor`: each pack in `graphs.dir` must load, hold a graph and have the
+  name of its folder, or `--graph <name>` could not find it. It warns when `factory.yaml` has no `graphs`
+  section, since a project can then not pin a graph.
 - Counts every session's usage, a failed one's too, in the run and in a daily spend journal outside
   any project, and stops the run at the hard approval point `budget-cap` before a session would start
   over a cap (spec §7.4). Pauses the run when the provider's quota is used up (spec §12).

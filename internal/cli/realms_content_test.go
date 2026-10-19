@@ -15,26 +15,43 @@ import (
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
-// The exit criterion of Phase 5b, with scripted agents: the real realms midgard-react and helheim-go build a
-// product from a brief, end to end, through Odin's real code: their graph, their prompts, their templates,
-// their leaf recipes. Only two things are not the realms': the agents, which answer from a script, and the
+// The exit criterion of Phase 5b, with scripted agents: the real graph pack software (Voluspa) and the real
+// realms midgard-react and helheim-go build a product from a brief, end to end, through Odin's real code: the
+// graph and prompts of the graph pack, the templates and leaf recipes of the realms. Only two things are not the realms': the agents, which answer from a script, and the
 // check ladder's commands, which are replaced by plain ones because the ladder's tools live in the stack images
-// (the ladder runs on a real engine, v0-H14 and v0-H15). The test needs the realms beside odin, as they are in
+// (the ladder runs on a real engine, v0-H14 and v0-H15). The test needs voluspa and the realms beside odin, as they are in
 // the yggdrasil umbrella; it skips without them.
 
 // realRealm copies the realm repo at src into store/name, leaving out git, packages and build output, and
 // swaps the ladder's scripts for commands any machine runs.
 func realRealm(t *testing.T, store, name string) {
 	t.Helper()
+	dst := copyBesideOdin(t, store, name)
+	pack := filepath.Join(dst, "pack.yaml")
+	b, _ := os.ReadFile(pack)
+	plain := regexp.MustCompile(`\[/opt/ygg/checks/accept-e2e\.sh\]`).ReplaceAllString(string(b), "[test, -f, umbrella.yaml]")
+	plain = regexp.MustCompile(`\[/opt/ygg/checks/[a-z0-9-]+\.sh\]`).ReplaceAllString(plain, "[test, -f, AGENTS.md]")
+	if plain == string(b) {
+		t.Fatalf("%s: no check to replace", pack)
+	}
+	if err := os.WriteFile(pack, []byte(plain), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// copyBesideOdin copies the repo ../../../name into store/name, leaving out git, packages and build output, and
+// returns the copy. It skips the test when the repo is not beside odin.
+func copyBesideOdin(t *testing.T, store, name string) string {
+	t.Helper()
 	src, err := filepath.Abs(filepath.Join("..", "..", "..", name))
 	if err == nil {
-		src, err = filepath.EvalSymlinks(src) // beside odin, the realm may be a link (a plan's reference workspace)
+		src, err = filepath.EvalSymlinks(src) // beside odin, the repo may be a link (a plan's reference workspace)
 	}
 	if err != nil {
-		t.Skipf("the realm %s is not beside odin: %v", name, err)
+		t.Skipf("%s is not beside odin: %v", name, err)
 	}
-	if st, err := os.Stat(filepath.Join(src, "pack.yaml")); err != nil || !st.Mode().IsRegular() {
-		t.Skipf("the realm %s is not beside odin (%s); run this test in the yggdrasil umbrella", name, src)
+	if st, err := os.Stat(src); err != nil || !st.IsDir() {
+		t.Skipf("%s is not beside odin (%s); run this test in the yggdrasil umbrella", name, src)
 	}
 	dst := filepath.Join(store, name)
 	err = filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
@@ -42,7 +59,13 @@ func realRealm(t *testing.T, store, name string) {
 			return err
 		}
 		rel, _ := filepath.Rel(src, p)
-		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "dist") {
+		if d.Name() == ".git" { // a folder, or the file a submodule has: a copy is a plain folder
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() && (d.Name() == "node_modules" || d.Name() == "dist") {
 			return filepath.SkipDir
 		}
 		if d.IsDir() {
@@ -58,16 +81,7 @@ func realRealm(t *testing.T, store, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pack := filepath.Join(dst, "pack.yaml")
-	b, _ := os.ReadFile(pack)
-	plain := regexp.MustCompile(`\[/opt/ygg/checks/accept-e2e\.sh\]`).ReplaceAllString(string(b), "[test, -f, umbrella.yaml]")
-	plain = regexp.MustCompile(`\[/opt/ygg/checks/[a-z0-9-]+\.sh\]`).ReplaceAllString(plain, "[test, -f, AGENTS.md]")
-	if plain == string(b) {
-		t.Fatalf("%s: no check to replace", pack)
-	}
-	if err := os.WriteFile(pack, []byte(plain), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	return dst
 }
 
 const leafReviewers = "  gallery-t%d-implement-spec-compliance:\n    - result: { status: ok, report: [] }\n  gallery-t%d-implement-simplicity:\n    - result: { status: ok, report: [] }\n" +
@@ -158,6 +172,7 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	store := t.TempDir()
 	realRealm(t, store, "midgard-react")
 	realRealm(t, store, "helheim-go")
+	graphs := copyBesideOdin(t, t.TempDir(), "voluspa") // the graph pack's repo: graphs.dir holds software
 	versions := map[string]string{}
 	for _, name := range []string{"midgard-react", "helheim-go"} {
 		p, err := schema.LoadPack(filepath.Join(store, name))
@@ -169,11 +184,15 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 			t.Fatalf("%s offers no leaf recipe", name)
 		}
 	}
+	gp, err := schema.LoadPack(filepath.Join(graphs, "software"))
+	if err != nil || gp.Graph == "" {
+		t.Fatalf("the software graph pack does not load: %+v, %v", gp, err)
+	}
 	// The spec prompt offers each realm at the version it has: a spec that names another fails the leaves check.
-	specPrompt, _ := os.ReadFile(filepath.Join(store, "midgard-react", "prompts", "spec.md"))
+	specPrompt, _ := os.ReadFile(filepath.Join(graphs, "software", "prompts", "spec.md"))
 	for name, v := range versions {
 		if !strings.Contains(string(specPrompt), "`"+name+"` "+v) {
-			t.Errorf("midgard-react's spec prompt does not offer %s %s", name, v)
+			t.Errorf("the software graph's spec prompt does not offer %s %s", name, v)
 		}
 	}
 	script := strings.NewReplacer("HELHEIM_VERSION", versions["helheim-go"], "MIDGARD_VERSION", versions["midgard-react"]).Replace(realScript)
@@ -188,12 +207,12 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	roles := "{ agent: scripted, model: none, script: " + path + " }"
 	cfg := filepath.Join(t.TempDir(), "factory.yaml")
 	body := "mode: key-points\nroles:\n  planner: " + roles + "\n  implementer: " + roles + "\n  reviewer: " + roles + "\n" +
-		"budget:\n  per_run: { tokens: 1000000, turns: 1000 }\n  per_day: { tokens: 2000000, turns: 2000 }\nrealms:\n  dir: " + store + "\ngraphs:\n  dir: " + store + "\n"
+		"budget:\n  per_run: { tokens: 1000000, turns: 1000 }\n  per_day: { tokens: 2000000, turns: 2000 }\nrealms:\n  dir: " + store + "\ngraphs:\n  dir: " + graphs + "\n"
 	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	dir := treetest.Project(t)
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-react")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "software")
 	if code != ExitStopped || !strings.Contains(out, "stopped at approval point design-gate") {
 		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
 	}
@@ -225,7 +244,7 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Graph != "midgard-react" || u.Children["repos/api"].Realm != "helheim-go" || u.Children["repos/web"].Realm != "midgard-react" {
+	if u.Graph != "software" || u.Children["repos/api"].Realm != "helheim-go" || u.Children["repos/web"].Realm != "midgard-react" {
 		t.Errorf("the project's pins: graph %s; api %+v; web %+v", u.Graph, u.Children["repos/api"], u.Children["repos/web"])
 	}
 	for leaf, f := range map[string]string{"repos/api": "api.txt", "repos/web": "gallery.txt"} {
@@ -269,7 +288,7 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 		}
 	}
 	_, status, _ := ygg(t, "status", id, "--project", dir)
-	for _, want := range []string{"graph:    midgard-react " + versions["midgard-react"], "(helheim-go " + versions["helheim-go"] + ")", "tasks:    3 (3 done, 0 doing, 0 to do, 0 blocked)"} {
+	for _, want := range []string{"graph:    software " + gp.Version, "(helheim-go " + versions["helheim-go"] + ")", "tasks:    3 (3 done, 0 doing, 0 to do, 0 blocked)"} {
 		if !strings.Contains(status, want) {
 			t.Errorf("status lacks %q:\n%s", want, status)
 		}

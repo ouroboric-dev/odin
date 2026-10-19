@@ -28,9 +28,9 @@ import (
 )
 
 // StateSchema names the run.json format.
-const StateSchema = "ygg.run/v3" // v2: runs live in the instance tree (Phase 2); v3: a graph pack leads, not a lead realm (Voluspa)
+const StateSchema = "ygg.run/v3" // v2: runs live in the instance tree (Phase 2); v3: a graph pack leads, not a realm (Voluspa)
 
-// stateSchemaV2 is the format of a run a lead realm led. It can't be resumed: its positions and prompts came
+// stateSchemaV2 is the format of a run that a realm led. It can't be resumed: its positions and prompts came
 // from that realm, which is no longer the graph.
 const stateSchemaV2 = "ygg.run/v2"
 
@@ -135,8 +135,8 @@ type LeafRecord struct {
 	// TaskBase is the leaf's main when the task working in it now started: a task given up after its
 	// merge landed puts main back there (spec §7.3).
 	TaskBase string `json:"task_base,omitempty"`
-	// Realm and RealmVersion are the realm leaf that provides this leaf, as the run used it (the lead
-	// realm's, for a leaf with no pin).
+	// Realm and RealmVersion are the realm leaf that provides this leaf, as the run used it, from the leaf's
+	// own pin.
 	Realm        string `json:"realm,omitempty"`
 	RealmVersion string `json:"realm_version,omitempty"`
 }
@@ -392,7 +392,7 @@ func (s *State) check(setup *Setup) error {
 	return nil
 }
 
-// BeforeGraphs says whether the run folder holds a run of schema ygg.run/v2, which a lead realm led and
+// BeforeGraphs says whether the run folder holds a run of schema ygg.run/v2, which a realm led and
 // which can't be resumed. It reads only the run's exec node, which a v2 run.json had in the
 // form v3 has, so doctor can stop a leftover process without v2's other fields.
 func BeforeGraphs(dir string) (exec *ExecProcess, ok bool) {

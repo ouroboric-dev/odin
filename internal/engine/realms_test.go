@@ -144,7 +144,7 @@ func TestANodeReadsItsPromptAndRunsItsChecksFromItsOwnRealm(t *testing.T) {
 		t.Fatalf("runAgent() = %v", err)
 	}
 	if got := transcriptPrompt(t, r, "web-build"); !strings.Contains(got, "Lead prompt.") {
-		t.Errorf("a node with no realm got %q; it is the lead realm's", got)
+		t.Errorf("a node with no realm got %q; it is the graph pack's", got)
 	}
 	if err := runChecks(ctx, r, api, 1, api.Checks, "repos/api", r.RepoDir("repos/api")); err != nil {
 		t.Fatalf("runChecks() = %v", err)
@@ -161,9 +161,9 @@ func TestANodeReadsItsPromptAndRunsItsChecksFromItsOwnRealm(t *testing.T) {
 	}
 }
 
-// Replaces TestAPointersAcceptanceChecksAreTheLeadRealmsEvenInALeafOfAnotherRealm: the move of a leaf whose
+// Replaces the test that named the realm that led a run: the move of a leaf whose
 // realm has no acceptance check still runs the check of the realm that has it. The realm is now the leaf realm
-// that defines the check, not the lead; the lead realm no longer exists.
+// that defines the check; no realm leads a run any more.
 func TestAPointersAcceptanceChecksAreTheRealmsThatDefineThemEvenInALeafOfAnotherRealm(t *testing.T) {
 	realms := twoRealms()
 	realms[0].pack += "  accept: [sh, -c, \"echo midgard > accepted-by.txt\"]\n"

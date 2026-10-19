@@ -44,7 +44,7 @@ func TestEachRealmLoadsOnceAtThePinnedVersion(t *testing.T) {
 		t.Fatalf("Collect() = %v", err)
 	}
 	if loads != 2 {
-		t.Errorf("%d realms loaded, want 2 (the lead is already loaded, and each other realm once)", loads)
+		t.Errorf("%d realms loaded, want 2 (the first realm is already loaded, and each other realm once)", loads)
 	}
 	if len(set.Realms) != 3 || set.Realms["helheim-go"].Version != "0.1.0" || set.Realms["midgard-react"] != lead {
 		t.Errorf("set = %+v", set)

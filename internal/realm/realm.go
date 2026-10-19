@@ -1,5 +1,5 @@
 // Package realm loads realm leaves (change realm-leaf-naming): the repos that hold a pack.yaml with a
-// graph, prompts, templates and checks. A run loads its lead realm and each leaf's realm once, at the
+// graph, prompts, templates and checks. A run loads each leaf's realm once, at the
 // version the project pins, and records a hash of each so a resume can tell nothing changed under it.
 package realm
 
