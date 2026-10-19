@@ -101,8 +101,13 @@ func TestCollectLoadsOnlyTheRealmsTheLeavesPin(t *testing.T) {
 	if err != nil || strings.Join(set.Names(), ",") != "midgard-react,midgard-vue" {
 		t.Errorf("a realm in hand and one pin: %v, %v", err, set)
 	}
+	before := len(loaded)
+	set, err = Collect([]*Realm{vue}, nil, counting)
+	if err != nil || strings.Join(set.Names(), ",") != "midgard-vue" || len(loaded) != before {
+		t.Errorf("a realm in hand and no pins: %v, %v; loaded %v", err, set, loaded)
+	}
 	set, err = Collect(nil, nil, counting)
-	if err != nil || len(set.Realms) != 0 || len(loaded) != 1 {
+	if err != nil || len(set.Realms) != 0 || len(loaded) != before {
 		t.Errorf("no pins and nothing in hand: %v, %+v; loaded %v", err, set, loaded)
 	}
 }

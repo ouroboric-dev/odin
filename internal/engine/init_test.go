@@ -528,12 +528,12 @@ func TestAnInitWhoseRecordFailedRecordsTheTemplateWhenRunAgain(t *testing.T) {
 	}
 }
 
-// A leaf the project has with no pin is no leaf of any realm, unless the graph pack holds a recipe: init
-// refuses it before it creates anything.
+// Prepare refuses an unpinned leaf the project has when the run starts, so init's own check guards a leaf
+// that joins the project after that. The test adds one to the run's view of the project, and runs init.
 func TestInitRefusesAnExistingLeafThatPinsNoRealmUnderAGraphPackWithNoRecipe(t *testing.T) {
 	graph := realmFiles{name: "graph-toy", version: "0.1.0"}
 	r := startRealms(t, realmsSetup{nodes: initNode, script: "steps: {}\n",
-		realms: []realmFiles{graph, recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")}, leaves: map[string]string{"repos/api": ""}})
+		realms: []realmFiles{graph, recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")}})
 	if err := os.MkdirAll(filepath.Join(r.Project, "docs"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -541,11 +541,12 @@ func TestInitRefusesAnExistingLeafThatPinsNoRealmUnderAGraphPackWithNoRecipe(t *
 	if err := os.WriteFile(filepath.Join(r.Project, "docs", "leaves.yaml"), []byte(leaves), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	r.Setup.Project.Umbrella.Children["repos/api"] = schema.Child{Kind: schema.ChildLeaf}
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "the leaf repos/api pins no realm") {
 		t.Fatalf("Advance() = %+v, %v; want a refusal naming the leaf", out, err)
 	}
-	if u, _ := schema.LoadUmbrella(r.Project); len(u.Children) != 1 {
+	if u, _ := schema.LoadUmbrella(r.Project); len(u.Children) != 0 {
 		t.Errorf("init created %v before it refused", u.Paths())
 	}
 }

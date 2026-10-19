@@ -9,6 +9,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/git"
+	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
@@ -92,9 +93,15 @@ func TestEachLeafUsesTheRealmTheProjectPinsForIt(t *testing.T) {
 	if got := strings.Join(s.Realms.Names(), ","); got != "helheim-go,midgard-react" {
 		t.Errorf("realms = %s", got)
 	}
-	api, _ := s.RealmOf("repos/api")
-	app, _ := s.RealmOf("repos/app")
-	old, _ := s.RealmOf("repos/old")
+	realmOf := func(repo string) *realm.Realm {
+		t.Helper()
+		rl, err := s.RealmOf(repo)
+		if err != nil {
+			t.Fatalf("RealmOf(%s) = %v", repo, err)
+		}
+		return rl
+	}
+	api, app, old := realmOf("repos/api"), realmOf("repos/app"), realmOf("repos/old")
 	if api.Name != "helheim-go" || app != s.GraphPack || old != s.GraphPack {
 		t.Errorf("RealmOf: api %s, app %s, old %s", api.Name, app.Name, old.Name)
 	}

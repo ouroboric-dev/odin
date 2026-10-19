@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -85,7 +84,7 @@ var _ jormungandr.Steps = (*loopSteps)(nil)
 // skills it names, and the brief. The implementer's prompt comes from the realm of the task's leaf; a
 // reviewer's from the graph pack.
 func (l *loopSteps) prompt(realm, file string, skillNames []string) (string, error) {
-	b, err := os.ReadFile(l.r.Setup.PromptFile(realm, file))
+	b, err := readPrompt(l.r.Setup, realm, file)
 	if err != nil {
 		return "", err
 	}

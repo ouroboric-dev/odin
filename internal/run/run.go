@@ -156,7 +156,7 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
-	for _, p := range s.Leaves() {
+	for _, p := range s.projectLeaves() { // every leaf the project has, whether or not the graph names it
 		if _, err := s.RealmOf(p); err != nil {
 			return nil, err
 		}
@@ -333,7 +333,11 @@ func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 // checkSession checks that a session of node (a node, or a loop's reviewer) can run: its prompt file
 // is in the graph pack and its role is in factory.yaml, whose adapter is built once per role.
 func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
-	if _, err := os.Stat(s.PromptFile("", prompt)); err != nil {
+	path, err := s.PromptFile("", prompt)
+	if err == nil {
+		_, err = os.Stat(path)
+	}
+	if err != nil {
 		return fmt.Errorf("%s: node %s: %w", graphPath, node, err)
 	}
 	if s.Agents[role] != nil {
@@ -343,7 +347,6 @@ func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
 	if !ok {
 		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, node, role, s.ConfigPath)
 	}
-	var err error
 	if s.Agents[role], err = agents.New(r, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy}); err != nil {
 		return fmt.Errorf("role %s: %w", role, err)
 	}
@@ -492,15 +495,15 @@ func (s *Setup) NodeRealm(n schema.Node) (*realm.Realm, error) {
 
 // PromptFile is the path of a prompt file: in the realm called realmName, or in the graph pack for "". The
 // prompts of agent nodes and reviewers are the graph pack's; a task's implementer prompt is its leaf's
-// realm's. A realm that is not loaded gives "", which no file read accepts.
-func (s *Setup) PromptFile(realmName, file string) string {
+// realm's. A realm that is not loaded is an error.
+func (s *Setup) PromptFile(realmName, file string) (string, error) {
 	if realmName == "" {
-		return filepath.Join(s.GraphPack.Dir, file)
+		return filepath.Join(s.GraphPack.Dir, file), nil
 	}
 	if r := s.Realms.Realms[realmName]; r != nil {
-		return filepath.Join(r.Dir, file)
+		return filepath.Join(r.Dir, file), nil
 	}
-	return ""
+	return "", fmt.Errorf("the realm %s is not loaded", realmName)
 }
 
 // isLeaf reports whether repo is a leaf: one the tree records as a leaf, or one Start creates.

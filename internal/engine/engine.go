@@ -184,9 +184,18 @@ func startAttempt(r *run.Run, n schema.Node) (int, error) {
 	return r.State.Attempts[n.ID], r.Save()
 }
 
+// readPrompt reads the prompt file of the realm named realm ("" is the graph pack).
+func readPrompt(s *run.Setup, realm, file string) ([]byte, error) {
+	path, err := s.PromptFile(realm, file)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
 func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
-	prompt, err := os.ReadFile(r.Setup.PromptFile(n.Realm, n.Prompt))
+	prompt, err := readPrompt(r.Setup, n.Realm, n.Prompt)
 	if err != nil {
 		return err
 	}
