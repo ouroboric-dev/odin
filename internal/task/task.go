@@ -90,6 +90,9 @@ type taskFile struct {
 	} `toml:"verifier"`
 }
 
+// ValidID reports whether id can name a task: the ledger records no other.
+func ValidID(id string) bool { return taskID.MatchString(id) }
+
 // Load reads task id from tasksDir and its hidden suite from suiteDir, and checks them in this order:
 // the task file (bad_task), the retired mark (retired), the brief's hash (brief_changed), the suite's
 // folders (missing_suite) and the suite's manifest (bad_manifest). Any failure is a *Refusal.

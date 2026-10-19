@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
+	"github.com/ouroboric-dev/odin/internal/task"
 	"github.com/ouroboric-dev/odin/internal/task/tasktest"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
@@ -269,5 +271,38 @@ func TestMixedLimitsReachTheDriverAsWritten(t *testing.T) {
 				t.Errorf("limits = %q, %d; want %q, %d", spec.Memory, spec.CPUs, c.memory, c.cpus)
 			}
 		})
+	}
+}
+
+// A task id that task.Load rejects must not reach the ledger: its event schema would refuse the line and the
+// refusal would become an error of Odin's own.
+func TestATaskIdThatIsNotATaskIdIsARefusalWithNoTaskInTheEvent(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
+	for _, id := range []string{"Smoke_Notes", ".."} {
+		_, err := Grade(context.Background(), g.r, id)
+		var refusal *task.Refusal
+		if !errors.As(err, &refusal) || refusal.Reason != gungnir.GradeBadTask {
+			t.Fatalf("Grade(%q) = %v, want a bad_task refusal", id, err)
+		}
+	}
+	if text := ledgerText(t, g.r); !strings.Contains(text, `"ygg.grade.reason":"bad_task"`) || strings.Contains(text, "Smoke_Notes") {
+		t.Errorf("the ledger:\n%s", text)
+	}
+}
+
+func TestABriefWhoseTaskIdIsNotATaskIdFailsTheGradeNodeAsARefusal(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(nil), func(k *tasktest.Task) {
+		bad := filepath.Join(k.TasksDir, "Bad_Id")
+		if err := os.Rename(k.Dir, bad); err != nil {
+			t.Fatal(err)
+		}
+		k.Dir = bad
+	})
+	out := g.advance(t)
+	if out.Status != run.StatusFailed || out.Err == nil || !strings.Contains(out.Err.Error(), string(gungnir.GradeBadTask)) {
+		t.Fatalf("Advance() = %+v, want a failed run whose error says bad_task", out)
+	}
+	if text := ledgerText(t, g.r); !strings.Contains(text, `"event":"grade_refused"`) || !strings.Contains(text, `"event":"node_failed"`) {
+		t.Errorf("the ledger:\n%s", text)
 	}
 }

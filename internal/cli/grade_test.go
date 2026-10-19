@@ -143,6 +143,10 @@ func TestGradeRefusesWithExitTwoAndBuildsNothing(t *testing.T) {
 	if code, _, errOut := ygg(t, "grade", id, "--project", dir, "--task", "no-such-task"); code != ExitRefused || !strings.Contains(errOut, "bad_task") {
 		t.Errorf("grade --task no-such-task: exit %d, %q", code, errOut)
 	}
+	// An id that is not a task id at all is a refusal too, not an error of Odin's own.
+	if code, _, errOut := ygg(t, "grade", id, "--project", dir, "--task", "Smoke_Notes"); code != ExitRefused || !strings.Contains(errOut, "bad_task") {
+		t.Errorf("grade --task Smoke_Notes: exit %d, %q", code, errOut)
+	}
 }
 
 func TestGradeNeedsADoneRunAndTheGraderSection(t *testing.T) {

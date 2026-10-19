@@ -164,6 +164,9 @@ func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 // what comes back instead: Odin's own.
 func refused(r *run.Run, taskID, suite string, reason gungnir.GradeReason, format string, a ...any) error {
 	ref := &task.Refusal{Reason: reason, Detail: fmt.Sprintf(format, a...)}
+	if !task.ValidID(taskID) {
+		taskID = "" // the event's schema takes no other id; the refusal's detail still names it
+	}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventGradeRefused, Task: taskID, Suite: suite, Reason: reason}); err != nil {
 		return err
 	}
