@@ -187,6 +187,21 @@ func TestTheSmokeRealmPreparesWithBothRealAdapters(t *testing.T) {
 	}
 	if s.Agents["implementer"].Name() != "claude-code" || s.Agents["reviewer"].Name() != "opencode" ||
 		strings.Join(s.Sandbox.Hosts, ",") != "api.anthropic.com,openrouter.ai" {
-		t.Errorf("agents %v, egress %v", s.Agents, s.Sandbox.Hosts)
+		t.Errorf("agents %v, scratch egress %v (want the adapters' model APIs only)", s.Agents, s.Sandbox.Hosts)
+	}
+}
+
+// The pack schema refuses a sandbox block with neither stack nor build, so a realm with an empty Stack should
+// never load. If one reaches SandboxFor all the same, its leaf must not start silently on the factory layer.
+func TestALeafWhoseRealmHasASandboxBlockButNoStackIsRefused(t *testing.T) {
+	project := treetest.Project(t, "repos/app")
+	cfg := sandboxConfig(t, "{ agent: claude-code, model: sonnet }", "")
+	s, err := Prepare(ctx, Options{Project: project, Config: cfg, Graph: toySandbox(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.GraphPack.Stack = ""
+	if _, _, _, err := s.SandboxFor("repos/app"); err == nil || !strings.Contains(err.Error(), "names no sandbox stack") {
+		t.Errorf("SandboxFor() with an empty stack = %v; the leaf would start silently on the factory layer", err)
 	}
 }

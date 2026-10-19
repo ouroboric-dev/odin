@@ -317,7 +317,7 @@ func TestTheRoutingThresholdComesFromTheGraphPack(t *testing.T) {
 	}
 	writeBench(t, r, rightBench+"  - { id: who-consumes-nothing, kind: consumers, about: repos/app, answer: [ghost] }\n")
 	out, err := Advance(bg, r)
-	if err != nil || out.Status != run.StatusFailed || out.Err == nil || !strings.Contains(out.Err.Error(), "does not ship") {
+	if err != nil || out.Status != run.StatusFailed || out.Err == nil || !strings.Contains(out.Err.Error(), "at threshold 1.00") {
 		t.Fatalf("graph pack threshold: Advance() = %+v, %v; want a failed node that says the index does not ship", out, err)
 	}
 	// The same block in the leaf realm's pack only: nothing sets the bar, the index ships unmeasured.

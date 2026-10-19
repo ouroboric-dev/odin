@@ -73,7 +73,7 @@ func (s *Setup) SandboxFor(repo string) (stack string, egress []string, services
 	if err != nil {
 		return "", nil, nil, err
 	}
-	if r.Pack.Sandbox == nil {
+	if r.Pack.Sandbox == nil || r.Stack == "" {
 		return "", nil, nil, fmt.Errorf("the leaf %s is provided by the realm %s, which names no sandbox stack in its pack.yaml, and %s has a sandbox section", repo, r.Name, s.ConfigPath)
 	}
 	var set serviceSet

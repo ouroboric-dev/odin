@@ -62,7 +62,7 @@ func TestTheGraderSmokeRealmPreparesWithRealAgentsAndRealCaps(t *testing.T) {
 		t.Errorf("first node %+v, last node %+v, agents %v", loop, last, s.Agents)
 	}
 	if strings.Join(s.Sandbox.Hosts, ",") != "api.anthropic.com,openrouter.ai" {
-		t.Errorf("egress %v: the realm adds nothing to what the two adapters need", s.Sandbox.Hosts)
+		t.Errorf("egress %v: the scratch egress is the two adapters' model APIs and nothing else", s.Sandbox.Hosts)
 	}
 	// Every session has a turn cap and a time cap in the graph; the run has token, turn and dollar caps.
 	if loop.MaxTurns != 40 || time.Duration(loop.Timeout) != 20*time.Minute || len(loop.Reviewers) != 1 ||

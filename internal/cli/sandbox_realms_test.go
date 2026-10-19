@@ -80,7 +80,6 @@ func TestSandboxBuildBuildsTheStackOfEveryRealmNamed(t *testing.T) {
 		t.Errorf("work images built:\n%s", strings.Join(got, "\n"))
 	}
 	if strings.Count(out, "Built:") != 3 { // the factory layer, then the two realms
-
 		t.Errorf("output:\n%s", out)
 	}
 	if got := pulls(log); len(got) != 1 || !strings.Contains(out, "Pulling the service image "+pgImage) {

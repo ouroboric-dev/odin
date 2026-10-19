@@ -39,7 +39,8 @@ case "$1" in
   image) case "$2 $3" in
       "exists localhost/ygg-stack-"*) [ -f "$d/built-$(echo "$3" | tr '/:' '__')" ] || exit 1 ;;
     esac ;;
-  build) prev=; for a in "$@"; do
+  build) case "$*" in *-t\ localhost/ygg-factory-stack:*) [ -f "$d/fail-factory" ] && exit 1 ;; esac
+    prev=; for a in "$@"; do
       [ "$prev" = -t ] && case "$a" in localhost/ygg-stack-*) touch "$d/built-$(echo "$a" | tr '/:' '__')" ;; esac
       prev=$a
     done ;;
@@ -201,5 +202,26 @@ func TestSandboxBuildAlsoBuildsTheFactoryLayer(t *testing.T) {
 	}
 	if len(realmLayers) != 1 || realmLayers[0] < layer[0] {
 		t.Errorf("the realm's layer was built at %v, the factory layer at %v; the factory layer comes first:\n%s", realmLayers, layer, b)
+	}
+}
+
+func TestSandboxBuildStopsWhenTheFactoryLayerFailsToBuild(t *testing.T) {
+	log := stubEngine(t)
+	stubSays(t, log, "fail-factory", "yes")
+	_, plain := project(t, "script.yaml", "")
+	config := withSandbox(t, plain)
+	realm, _ := filepath.Abs("../../testdata/toy-sandbox")
+	code, _, errOut := ygg(t, "sandbox", "build", "--config", config, "--realm", realm)
+	if code != ExitFailed || !strings.Contains(errOut, "factory layer") {
+		t.Errorf("exit %d, want %d with the factory layer named:\n%s", code, ExitFailed, errOut)
+	}
+	b, _ := os.ReadFile(log)
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "podman build") && !strings.Contains(line, "ygg-factory-stack") {
+			t.Errorf("a build ran after the factory stack failed: %s", line)
+		}
+		if strings.Contains(line, "golang:") {
+			t.Errorf("the realm's stack was pulled after the factory layer failed: %s", line)
+		}
 	}
 }

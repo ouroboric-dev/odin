@@ -175,6 +175,6 @@ func TestTheLoopSmokeRealmPreparesWithBothRealAdapters(t *testing.T) {
 	n := s.Graph.Nodes[0]
 	if n.Kind != "loop" || s.Agents["implementer"].Name() != "claude-code" || s.Agents["reviewer"].Name() != "opencode" ||
 		strings.Join(s.Sandbox.Hosts, ",") != "api.anthropic.com,openrouter.ai" || len(n.Reviewers) != 1 || n.Attempts != 2 {
-		t.Errorf("node %+v, agents %v, egress %v", n, s.Agents, s.Sandbox.Hosts)
+		t.Errorf("node %+v, agents %v, scratch egress %v (want the adapters' model APIs only)", n, s.Agents, s.Sandbox.Hosts)
 	}
 }
