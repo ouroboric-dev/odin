@@ -22,7 +22,8 @@ type Node struct {
 	Leaf       bool            // a leaf holds a README; an umbrella holds umbrella.yaml
 	Children   map[string]Node // path relative to this umbrella: child node
 	Plain      []string        // submodules that are not nodes, such as shared assets an umbrella vendors
-	Pin        Pin             // the realm leaf this node is built with: a leaf's own, an umbrella's lead realm
+	Pin        Pin             // a leaf's realm leaf, and its version
+	GraphPin   Pin             // an umbrella's graph pack and its version (Realm holds the graph's name)
 	Consumes   []string        // a leaf: the sibling leaves it calls
 }
 
@@ -83,7 +84,7 @@ func build(t *testing.T, ctx context.Context, remotes, name string, n Node, root
 	if n.Leaf {
 		write(t, filepath.Join(dir, "README.md"), "# "+name+"\n")
 	} else {
-		u := schema.Umbrella{Root: root, Owner: n.Owner, Visibility: n.Visibility, Realm: n.Pin.Realm, RealmVersion: n.Pin.Version,
+		u := schema.Umbrella{Root: root, Owner: n.Owner, Visibility: n.Visibility, Graph: n.GraphPin.Realm, GraphVersion: n.GraphPin.Version,
 			Children: map[string]schema.Child{}}
 		for path, c := range n.Children {
 			kind := schema.ChildUmbrella

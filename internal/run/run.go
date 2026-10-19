@@ -77,7 +77,7 @@ type Setup struct {
 	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
 	Backoff      jormungandr.Backoff
 	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
-	PinLead      bool                                             // the lead realm was named, and the project doesn't pin one yet: Start pins it
+	PinGraph     bool                                             // the graph pack was named, and the project doesn't pin a graph yet: Start pins it
 	store        *realm.Store                                     // where a realm is found by name; nil without factory.yaml's realms section
 	recorded     map[string]string                                // a resume: the folder of each realm the run recorded
 
@@ -140,6 +140,9 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		return nil, err
 	}
 	s.store, s.recorded = store, o.Realms
+	if err := s.checkGraphPin(byName); err != nil {
+		return nil, err
+	}
 	if s.Realms, err = s.collectRealms(nil); err != nil {
 		return nil, err
 	}
@@ -148,9 +151,6 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
-	// A realm named in the store is pinned by the project's first run; one given as a path is a checkout
-	// being worked on, and pins nothing.
-	s.PinLead = byName && s.Project.Umbrella != nil && s.Project.Umbrella.Realm == ""
 	for _, n := range s.Graph.Nodes {
 		if err := s.checkNode(ctx, graphPath, n); err != nil {
 			return nil, err
@@ -334,17 +334,37 @@ func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
 	return nil
 }
 
-// projectPins returns the realm pins of the project: its lead realm's, and each leaf's.
+// projectPins returns the realm pins of the project's leaves.
 func (s *Setup) projectPins() []schema.Pin {
 	var pins []schema.Pin
 	if u := s.Project.Umbrella; u != nil {
 		for _, p := range u.Pins() {
-			if p.Where == "." || u.Children[p.Where].Kind == schema.ChildLeaf {
+			if u.Children[p.Where].Kind == schema.ChildLeaf {
 				pins = append(pins, p)
 			}
 		}
 	}
 	return pins
+}
+
+// checkGraphPin checks the graph the run was given against the project's graph pin, by name or by path,
+// name and version, before any realm is collected or anything is created. A project that pins no graph
+// is pinned by its first run when the graph was named in the store (byName); a graph given as a path is a
+// checkout being worked on, and pins nothing.
+func (s *Setup) checkGraphPin(byName bool) error {
+	u := s.Project.Umbrella
+	if u == nil {
+		return nil
+	}
+	if u.Graph == "" {
+		s.PinGraph = byName
+		return nil
+	}
+	if u.Graph != s.Pack.Name || u.GraphVersion != s.Pack.Version {
+		return fmt.Errorf("the project is built with the graph %s %s, not %s %s: a run uses the graph its project pins (%s)",
+			u.Graph, u.GraphVersion, s.Pack.Name, s.Pack.Version, filepath.Join(s.Project.Dir, schema.UmbrellaFile))
+	}
+	return nil
 }
 
 // loadRealm finds a realm by name: one the run has already loaded, the folder a resumed run recorded,
@@ -806,7 +826,7 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		os.RemoveAll(dir) // the run's own new directory: nothing ran
 		return nil, err
 	}
-	if err := r.pinLead(ctx); err != nil {
+	if err := r.pinGraph(ctx); err != nil {
 		r.Close()
 		os.RemoveAll(dir)
 		return nil, err
@@ -831,27 +851,28 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 	return r, r.Save()
 }
 
-// pinLead records the lead realm and its version in the project's umbrella.yaml, in a commit of its own,
+// pinGraph records the graph pack and its version in the project's umbrella.yaml, in a commit of its own,
 // when the project pins none: from then on every run of the project must agree with it. The operator's
 // own uncommitted edit of umbrella.yaml is not Odin's to commit.
-func (r *Run) pinLead(ctx context.Context) error {
+func (r *Run) pinGraph(ctx context.Context) error {
 	s := r.Setup
-	if !s.PinLead {
+	if !s.PinGraph {
 		return nil
 	}
 	p := s.Project
+	name, version := s.Pack.Name, s.Pack.Version
 	if st, err := git.Run(ctx, p.Dir, "status", "--porcelain", "--", schema.UmbrellaFile); err != nil || st != "" {
-		return fmt.Errorf("%s has changes that are not committed, so the run can't pin the realm %s %s in it: commit or discard them first (%v)",
-			filepath.Join(p.Dir, schema.UmbrellaFile), s.Lead.Name, s.Lead.Version, err)
+		return fmt.Errorf("%s has changes that are not committed, so the run can't pin the graph %s %s in it: commit or discard them first (%v)",
+			filepath.Join(p.Dir, schema.UmbrellaFile), name, version, err)
 	}
-	p.Umbrella.Realm, p.Umbrella.RealmVersion = s.Lead.Name, s.Lead.Version
+	p.Umbrella.Graph, p.Umbrella.GraphVersion = name, version
 	if err := p.Umbrella.Save(p.Dir); err != nil {
 		return err
 	}
 	if _, err := git.Run(ctx, p.Dir, "add", "--", schema.UmbrellaFile); err != nil {
 		return err
 	}
-	_, err := git.Run(ctx, p.Dir, "commit", "-q", "-m", fmt.Sprintf("Pin the lead realm %s %s", s.Lead.Name, s.Lead.Version), "--", schema.UmbrellaFile)
+	_, err := git.Run(ctx, p.Dir, "commit", "-q", "-m", fmt.Sprintf("Pin the graph %s %s", name, version), "--", schema.UmbrellaFile)
 	return err
 }
 

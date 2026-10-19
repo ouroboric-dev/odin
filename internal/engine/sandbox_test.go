@@ -45,7 +45,7 @@ func startSandboxedPack(t *testing.T, pack, nodes, script string, h run.Hooks) (
 	files := map[string]string{
 		filepath.Join(tmpl, "LICENSE"):     "MIT\n",
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + pack,
-		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nnodes:\n" + nodes,
+		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 1\nnodes:\n" + nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
 		filepath.Join(cfg, "script.yaml"):  script,
 		filepath.Join(cfg, "factory.yaml"): "mode: unattended\ngates: { design: auto }\nroles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n" +

@@ -45,7 +45,7 @@ func gallery(t *testing.T, webServices string) (*Run, *sandboxfake.Sandbox) {
 	sandboxRealm(t, store, "midgard-react", "0.1.0", "docker.io/library/golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514",
 		"registry.npmjs.org", webServices)
 	sandboxRealm(t, store, "helheim-go", "0.2.0", nodeStack, "proxy.golang.org, sum.golang.org", apiServices)
-	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", Pin: treetest.Pin{Realm: "midgard-react", Version: "0.1.0"}, Children: map[string]treetest.Node{
+	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", GraphPin: treetest.Pin{Realm: "midgard-react", Version: "0.1.0"}, Children: map[string]treetest.Node{
 		"repos/app": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: treetest.Pin{Realm: "midgard-react", Version: "0.1.0"}, Consumes: []string{"repos/api"}},
 		"repos/api": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: treetest.Pin{Realm: "helheim-go", Version: "0.2.0"}},
 	}}
@@ -125,7 +125,7 @@ func TestTwoRealmsOfferingDifferentServicesOfOneNameStopTheRunBeforeASandboxStar
 	clash := "services:\n  postgres:\n    image: " + pgImage + "\n    env: { POSTGRES_DB: other }\n    ports: [5432]\n"
 	sandboxRealm(t, store, "midgard-react", "0.1.0", nodeStack, "registry.npmjs.org", clash)
 	sandboxRealm(t, store, "helheim-go", "0.2.0", nodeStack, "proxy.golang.org", apiServices)
-	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", Pin: treetest.Pin{Realm: "midgard-react", Version: "0.1.0"}, Children: map[string]treetest.Node{
+	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", GraphPin: treetest.Pin{Realm: "midgard-react", Version: "0.1.0"}, Children: map[string]treetest.Node{
 		"repos/app": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Consumes: []string{"repos/api"}},
 		"repos/api": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: treetest.Pin{Realm: "helheim-go", Version: "0.2.0"}},
 	}}
@@ -144,7 +144,7 @@ func TestARealmThatNamesNoStackCannotProvideALeafWhenASandboxIsOn(t *testing.T) 
 	pack := filepath.Join(store, "helheim-go", "pack.yaml")
 	b, _ := os.ReadFile(pack)
 	os.WriteFile(pack, []byte(strings.SplitN(string(b), "sandbox:", 2)[0]), 0o644)
-	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", Pin: treetest.Pin{Realm: "midgard-react", Version: "0.1.0"}, Children: map[string]treetest.Node{
+	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", GraphPin: treetest.Pin{Realm: "midgard-react", Version: "0.1.0"}, Children: map[string]treetest.Node{
 		"repos/app": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true},
 		"repos/api": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: treetest.Pin{Realm: "helheim-go", Version: "0.2.0"}},
 	}}

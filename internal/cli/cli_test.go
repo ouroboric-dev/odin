@@ -170,3 +170,24 @@ func TestAFailedStartExitsOne(t *testing.T) {
 		t.Errorf("run with a dirty leaf: exit %d, want %d with the resume hint:\n%s", code, ExitFailed, errOut)
 	}
 }
+
+// A project made before the graph pin pins a lead realm at the top of umbrella.yaml. It is refused with the
+// way to pin a graph, before anything starts (review focus 1).
+func TestARunOnAProjectThatPinsALeadRealmStopsBeforeAnythingStarts(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	f := filepath.Join(dir, "umbrella.yaml")
+	b, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f, append([]byte("realm: toy\nrealm_version: 0.3.0\n"), b...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--realm", toyRealm(t))
+	if code != ExitRefused || !strings.Contains(errOut, "graph and graph_version") {
+		t.Errorf("exit %d, stderr %q; want %d and the way to pin a graph", code, errOut, ExitRefused)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".factory", "runs")); err == nil {
+		t.Error("a refused run left .factory/runs")
+	}
+}

@@ -225,8 +225,8 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Realm != "midgard-react" || u.Children["repos/api"].Realm != "helheim-go" || u.Children["repos/web"].Realm != "midgard-react" {
-		t.Errorf("the project's pins: lead %s; api %+v; web %+v", u.Realm, u.Children["repos/api"], u.Children["repos/web"])
+	if u.Graph != "midgard-react" || u.Children["repos/api"].Realm != "helheim-go" || u.Children["repos/web"].Realm != "midgard-react" {
+		t.Errorf("the project's pins: graph %s; api %+v; web %+v", u.Graph, u.Children["repos/api"], u.Children["repos/web"])
 	}
 	for leaf, f := range map[string]string{"repos/api": "api.txt", "repos/web": "gallery.txt"} {
 		if body, err := git.Run(ctx, filepath.Join(dir, leaf), "show", "main:"+f); err != nil || body != "done" {

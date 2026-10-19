@@ -2,6 +2,7 @@
 # merge. Its sessions work in one leaf, repos/app, which the realm creates when a project lacks it.
 name: toy-loop
 version: 1.0.0
+schema: 1
 nodes:
   - id: build
     kind: loop

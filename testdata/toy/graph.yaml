@@ -3,6 +3,7 @@
 # on the leaf's main through the merge gate, and the project's pointer moves to it.
 name: toy
 version: 3.0.0
+schema: 1
 nodes:
   - { id: design, kind: agent, role: planner, prompt: prompts/design.md, repo: repos/app }
   - { id: design-gate, kind: gate, gate: design }

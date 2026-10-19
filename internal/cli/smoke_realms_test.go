@@ -72,7 +72,7 @@ func TestTheSmokeRealmsRunWithScriptedAgentsThatWriteWhatThePromptsAsk(t *testin
 		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
 	}
 	u, err := schema.LoadUmbrella(dir)
-	if err != nil || u.Realm != "smoke-lead" || u.Children["repos/api"].Realm != "smoke-api" || u.Children["repos/web"].Realm != "smoke-lead" || u.Children["repos/web"].Consumes[0] != "repos/api" {
+	if err != nil || u.Graph != "smoke-lead" || u.Children["repos/api"].Realm != "smoke-api" || u.Children["repos/web"].Realm != "smoke-lead" || u.Children["repos/web"].Consumes[0] != "repos/api" {
 		t.Errorf("umbrella.yaml = %+v, %v", u, err)
 	}
 	feats, err := schema.LoadFeatures(filepath.Join(dir, ".factory", "features.json"))

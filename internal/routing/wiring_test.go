@@ -183,3 +183,46 @@ func TestTheFixtureBlockMatchesItsGoldenFile(t *testing.T) {
 }
 
 var update = flag.Bool("update", false, "write the golden files again")
+
+// A leaf's realm is its own pin and nothing else: the top of the umbrella pins a graph, which is no realm.
+func TestTheWiringIndexTakesALeafsRealmFromItsOwnPinOnly(t *testing.T) {
+	u, err := schema.LoadUmbrella(fixture)
+	if err != nil || u.Graph != "software" || u.GraphVersion != "0.1.0" {
+		t.Fatalf("the fixture's umbrella = %+v, %v; want it pinned to graph software 0.1.0", u, err)
+	}
+	if c := u.Children["web"]; c.Realm != "midgard-react" || c.RealmVersion != "0.1.0" {
+		t.Fatalf("web pins %q %q; the fixture pins it to midgard-react 0.1.0", c.Realm, c.RealmVersion)
+	}
+	res, err := Wiring(fixture, packs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if find(res.Edges, "web", "uses-realm", "realm:midgard-react@0.1.0") == nil {
+		t.Error("web has no uses-realm edge from its own pin")
+	}
+	// The golden files hold the same bytes as before the graph pin: TestTheFixtureBlockMatchesItsGoldenFile
+	// and TestTheImpactIndexIsTheSameBytesEveryTimeAndRoundTrips.
+	dir := filepath.Join(t.TempDir(), "p")
+	if err := os.CopyFS(dir, os.DirFS(fixture)); err != nil {
+		t.Fatal(err)
+	}
+	v, err := schema.LoadUmbrella(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := v.Children["web"]
+	c.Realm, c.RealmVersion = "", ""
+	v.Children["web"] = c
+	if err := v.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	res, err = Wiring(dir, packs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range res.Edges {
+		if e.From == "web" && (e.Kind == "uses-realm" || e.Kind == "needs") {
+			t.Errorf("web pins no realm, and has the edge %+v", e)
+		}
+	}
+}

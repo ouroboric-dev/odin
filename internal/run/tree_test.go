@@ -83,7 +83,7 @@ func TestPrepareRefusesAGraphTheProjectCantRun(t *testing.T) {
 		realm := t.TempDir()
 		files := map[string]string{
 			"pack.yaml":                     "name: t\nversion: 0.1.0\ngraph: graph.yaml\nchecks:\n  unit: [echo]\nleaves:\n  repos/app: { description: d, template: tpl, first_commit: [LICENSE] }\n",
-			"graph.yaml":                    "name: t\nversion: 1.0.0\nnodes:\n" + c.nodes,
+			"graph.yaml":                    "name: t\nversion: 1.0.0\nschema: 1\nnodes:\n" + c.nodes,
 			"p.md":                          "Do it.\n",
 			filepath.Join("tpl", "LICENSE"): "AGPL-3.0-only\n",
 		}

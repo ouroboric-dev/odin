@@ -40,7 +40,7 @@ func startRealms(t *testing.T, o realmsSetup) *run.Run {
 		files := map[string]string{"pack.yaml": "name: " + r.name + "\nversion: " + r.version + "\n" + r.pack}
 		if i == 0 {
 			files["pack.yaml"] += "graph: graph.yaml\n"
-			files["graph.yaml"] = "name: " + r.name + "\nversion: 1.0.0\nnodes:\n" + o.nodes
+			files["graph.yaml"] = "name: " + r.name + "\nversion: 1.0.0\nschema: 1\nnodes:\n" + o.nodes
 		}
 		for f, body := range r.files {
 			files[f] = body
@@ -58,7 +58,7 @@ func startRealms(t *testing.T, o realmsSetup) *run.Run {
 	for _, r := range o.realms {
 		version[r.name] = r.version
 	}
-	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", Pin: treetest.Pin{Realm: lead.name, Version: lead.version}, Children: map[string]treetest.Node{}}
+	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", GraphPin: treetest.Pin{Realm: lead.name, Version: lead.version}, Children: map[string]treetest.Node{}}
 	for path, name := range o.leaves {
 		var pin treetest.Pin
 		if name != "" {

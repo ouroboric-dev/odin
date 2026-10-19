@@ -133,10 +133,10 @@ func TestInitCreatesWhatALeafConsumesFirst(t *testing.T) {
 
 func TestInitRefusesBeforeItCreatesAnything(t *testing.T) {
 	cases := map[string]struct{ leaves, want string }{
-		"a pin of the lead realm at another version": {strings.Replace(galleryLeaves, "realm_version: 0.1.0", "realm_version: 0.3.0", 1), "midgard-react is pinned at 0.1.0 by . and at 0.3.0 by repos/web"},
-		"a realm the store lacks":                    {strings.Replace(galleryLeaves, "helheim-go", "asgard", 1), "asgard"},
-		"a leaf that consumes a leaf nobody has":     {strings.Replace(galleryLeaves, "consumes: [repos/api]", "consumes: [repos/db]", 1), "it consumes repos/db"},
-		"no leaves file":                             {"", "is not there as a regular file"},
+		"a pin at another version than the store holds": {strings.Replace(galleryLeaves, "realm_version: 0.1.0", "realm_version: 0.3.0", 1), "the realm store holds midgard-react 0.1.0, but repos/web pins 0.3.0"},
+		"a realm the store lacks":                       {strings.Replace(galleryLeaves, "helheim-go", "asgard", 1), "asgard"},
+		"a leaf that consumes a leaf nobody has":        {strings.Replace(galleryLeaves, "consumes: [repos/api]", "consumes: [repos/db]", 1), "it consumes repos/db"},
+		"no leaves file":                                {"", "is not there as a regular file"},
 	}
 	for name, c := range cases {
 		r := initRun(t, c.leaves)

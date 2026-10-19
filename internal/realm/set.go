@@ -19,20 +19,16 @@ type Set struct {
 // Names returns the realms' names, sorted.
 func (s *Set) Names() []string { return slices.Sorted(maps.Keys(s.Realms)) }
 
-// Collect builds the set for a run whose lead realm is loaded. pins are the pins of the project: the lead
-// pin (where ".") and each leaf's. One version of a realm leaf serves the whole run (change
-// realm-leaf-naming), so Collect refuses, before anything starts: two pins of one realm at different
-// versions; a pin of the lead realm that names another realm than --realm did; and a realm store that
-// holds another version of a realm than the one pinned. Every problem is listed. load finds a realm by
+// Collect builds the set for a run whose lead realm is loaded. pins are the pins of the project's leaves;
+// the project's graph pin is no realm pin, and run.Setup checks it. One version of a realm leaf serves the
+// whole run (change realm-leaf-naming), so Collect refuses, before anything starts: two pins of one realm
+// at different versions; and a realm store that holds another version of a realm than the one pinned. Every problem is listed. load finds a realm by
 // name, and is called once for each realm but the lead.
 func Collect(lead *Realm, pins []schema.Pin, load func(name string) (*Realm, error)) (*Set, error) {
 	var problems []string
 	byRealm := map[string][]schema.Pin{}
 	for _, p := range pins {
 		byRealm[p.Realm] = append(byRealm[p.Realm], p)
-		if p.Where == "." && p.Realm != lead.Name {
-			problems = append(problems, fmt.Sprintf("the project is built with %s, not %s", p.Realm, lead.Name))
-		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(byRealm)) {
 		ps := byRealm[name]

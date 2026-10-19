@@ -73,14 +73,14 @@ func TestARunOfTheToyRealmsBuildsAProductFromTwoRealms(t *testing.T) {
 	if st.Returns["ready"] != 1 || st.Attempts["plan"] != 2 || st.Status != run.StatusDone {
 		t.Errorf("returns %v, plan attempts %d, status %s", st.Returns, st.Attempts["plan"], st.Status)
 	}
-	// The project pins the lead realm and each leaf's realm, and the leaves were made from their templates.
+	// The project pins the graph and each leaf's realm, and the leaves were made from their templates.
 	u, err := schema.LoadUmbrella(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	api, web := u.Children["repos/api"], u.Children["repos/web"]
-	if u.Realm != "midgard-toy" || api.Realm != "helheim-toy" || web.Realm != "midgard-toy" || web.Consumes[0] != "repos/api" {
-		t.Errorf("the project's pins: lead %s; api %+v; web %+v", u.Realm, api, web)
+	if u.Graph != "midgard-toy" || api.Realm != "helheim-toy" || web.Realm != "midgard-toy" || web.Consumes[0] != "repos/api" {
+		t.Errorf("the project's pins: graph %s; api %+v; web %+v", u.Graph, api, web)
 	}
 	for leaf, want := range map[string]string{"repos/api": "# AGENTS.md: the toy API leaf\n", "repos/web": "# AGENTS.md: the toy web leaf\n"} {
 		if b, err := os.ReadFile(filepath.Join(dir, leaf, "AGENTS.md")); err != nil || string(b) != want {
@@ -168,7 +168,7 @@ func TestAnUnattendedRunOfTheToyRealmsGivesUpATaskAndExitsFive(t *testing.T) {
 }
 
 func TestARunWhoseRealmPinsDisagreeIsRefusedAndCreatesNothing(t *testing.T) {
-	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", Pin: treetest.Pin{Realm: "midgard-toy", Version: "0.1.0"}, Children: map[string]treetest.Node{
+	root := treetest.Node{Owner: "ouroboric-dev", Visibility: "private", GraphPin: treetest.Pin{Realm: "midgard-toy", Version: "0.1.0"}, Children: map[string]treetest.Node{
 		"repos/api": {Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: treetest.Pin{Realm: "helheim-toy", Version: "0.9.0"}}}}
 	dir := treetest.Build(t, root)
 	cfg := galleryConfig(t, "key-points", "", "../../testdata/realms-scripts/gallery.yaml")

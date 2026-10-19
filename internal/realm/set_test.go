@@ -34,7 +34,7 @@ func TestEachRealmLoadsOnceAtThePinnedVersion(t *testing.T) {
 	loads := 0
 	counting := func(name string) (*Realm, error) { loads++; return load(name) }
 	set, err := Collect(lead, []schema.Pin{
-		{Realm: "midgard-react", Version: "0.1.0", Where: "."},
+		{Realm: "midgard-react", Version: "0.1.0", Where: "repos/app"},
 		{Realm: "helheim-go", Version: "0.1.0", Where: "repos/api"},
 		{Realm: "midgard-react", Version: "0.1.0", Where: "repos/web"},
 		{Realm: "midgard-react", Version: "0.1.0", Where: "repos/admin"},
@@ -58,7 +58,7 @@ func TestTwoPinsOfOneRealmThatDisagreeStopTheRun(t *testing.T) {
 	load := store(t, map[string]string{"midgard-react": "0.1.0", "helheim-go": "0.1.0"})
 	lead, _ := load("midgard-react")
 	_, err := Collect(lead, []schema.Pin{
-		{Realm: "midgard-react", Version: "0.1.0", Where: "."},
+		{Realm: "midgard-react", Version: "0.1.0", Where: "repos/app"},
 		{Realm: "midgard-react", Version: "0.2.0", Where: "repos/web"},
 		{Realm: "helheim-go", Version: "0.1.0", Where: "repos/api"},
 		{Realm: "helheim-go", Version: "0.1.1", Where: "repos/db"},
@@ -66,7 +66,7 @@ func TestTwoPinsOfOneRealmThatDisagreeStopTheRun(t *testing.T) {
 	if err == nil {
 		t.Fatal("Collect() = nil with two pins of one realm at different versions")
 	}
-	for _, want := range []string{"midgard-react is pinned at 0.1.0 by . and at 0.2.0 by repos/web", "helheim-go is pinned at 0.1.0 by repos/api and at 0.1.1 by repos/db"} {
+	for _, want := range []string{"midgard-react is pinned at 0.1.0 by repos/app and at 0.2.0 by repos/web", "helheim-go is pinned at 0.1.0 by repos/api and at 0.1.1 by repos/db"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error lacks %q:\n%v", want, err)
 		}
@@ -76,8 +76,8 @@ func TestTwoPinsOfOneRealmThatDisagreeStopTheRun(t *testing.T) {
 func TestTheRealmStoreMustHoldTheVersionThePinNames(t *testing.T) {
 	load := store(t, map[string]string{"midgard-react": "0.2.0", "helheim-go": "0.1.0"})
 	lead, _ := load("midgard-react")
-	_, err := Collect(lead, []schema.Pin{{Realm: "midgard-react", Version: "0.1.0", Where: "."}, {Realm: "helheim-go", Version: "0.2.0", Where: "repos/api"}}, load)
-	if err == nil || !strings.Contains(err.Error(), "the realm store holds midgard-react 0.2.0, but . pins 0.1.0") || !strings.Contains(err.Error(), "helheim-go 0.1.0, but repos/api pins 0.2.0") {
+	_, err := Collect(lead, []schema.Pin{{Realm: "midgard-react", Version: "0.1.0", Where: "repos/app"}, {Realm: "helheim-go", Version: "0.2.0", Where: "repos/api"}}, load)
+	if err == nil || !strings.Contains(err.Error(), "the realm store holds midgard-react 0.2.0, but repos/app pins 0.1.0") || !strings.Contains(err.Error(), "helheim-go 0.1.0, but repos/api pins 0.2.0") {
 		t.Errorf("Collect() = %v", err)
 	}
 	_, err = Collect(lead, []schema.Pin{{Realm: "asgard", Version: "0.1.0", Where: "repos/x"}}, load)
@@ -86,12 +86,13 @@ func TestTheRealmStoreMustHoldTheVersionThePinNames(t *testing.T) {
 	}
 }
 
-func TestThePinOfTheLeadRealmNamesTheLeadRealm(t *testing.T) {
+// The project's pin names a graph, not a lead realm: a leaf that pins another realm than the lead is a
+// leaf like any other.
+func TestALeafMayPinAnotherRealmThanTheLeadAndNoPinsLeaveTheLeadAlone(t *testing.T) {
 	load := store(t, map[string]string{"midgard-react": "0.1.0", "midgard-vue": "0.1.0"})
 	lead, _ := load("midgard-vue")
-	_, err := Collect(lead, []schema.Pin{{Realm: "midgard-react", Version: "0.1.0", Where: "."}}, load)
-	if err == nil || !strings.Contains(err.Error(), "the project is built with midgard-react, not midgard-vue") {
-		t.Errorf("Collect() = %v", err)
+	if set, err := Collect(lead, []schema.Pin{{Realm: "midgard-react", Version: "0.1.0", Where: "repos/app"}}, load); err != nil || len(set.Realms) != 2 {
+		t.Errorf("Collect() = %+v, %v", set, err)
 	}
 	set, err := Collect(lead, nil, load)
 	if err != nil {

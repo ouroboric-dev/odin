@@ -78,7 +78,7 @@ func Wiring(dir string, packs map[string]*schema.Pack) (*Result, error) {
 		for _, q := range c.Consumes {
 			w.add(l, "consumes", q, Extracted, schema.UmbrellaFile)
 		}
-		realm, ver := cmpOr(c.Realm, u.Realm), cmpOr(c.RealmVersion, u.RealmVersion)
+		realm, ver := c.Realm, c.RealmVersion
 		if realm != "" {
 			w.add(l, "uses-realm", "realm:"+realm+"@"+ver, Extracted, schema.UmbrellaFile)
 			if p := packs[realm]; p != nil {
@@ -106,13 +106,6 @@ func Wiring(dir string, packs map[string]*schema.Pack) (*Result, error) {
 	}
 	slices.SortFunc(res.Contracts, func(a, b Contract) int { return strings.Compare(a.Path, b.Path) })
 	return res, nil
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func mapKeys[V any](m map[string]V) func(func(string) bool) {

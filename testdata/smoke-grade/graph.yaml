@@ -5,6 +5,7 @@
 # it costs a few dollars (see ouroboric/scripts/ygg-smoke-real.sh).
 name: smoke-grade
 version: 0.1.0
+schema: 1
 nodes:
   - id: build
     kind: loop

@@ -56,7 +56,7 @@ func startWith(t *testing.T, o setup) *run.Run {
 	o.budget = strings.TrimRight(o.budget, "\n") + "\n  journal: " + o.journal + "\n"
 	files := map[string]string{
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + o.pack,
-		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nnodes:\n" + o.nodes,
+		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 1\nnodes:\n" + o.nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
 		filepath.Join(cfg, "script.yaml"):  o.script,
 		filepath.Join(cfg, "factory.yaml"): "mode: " + o.mode + "\n" + o.gates + o.roles + o.budget,
