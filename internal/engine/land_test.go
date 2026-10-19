@@ -157,3 +157,19 @@ func TestALeafCheckThatRewritesGitStopsTheRun(t *testing.T) {
 		t.Error("the pointer moved although a check rewrote the leaf's .git")
 	}
 }
+
+func TestAJudgedCommitThatMainMovedAwayFromSaysWhatTheOperatorCanDo(t *testing.T) {
+	nodes := build + "  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +
+		"  - { id: move, kind: pointer, repo: repos/app, checks: [unit], acceptance: [e2e] }\n"
+	r := startPack(t, "key-points", "", packChecks, nodes, okScript)
+	r.State.Judged = map[string]string{"move": strings.Repeat("a", 40)}
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusFailed || out.Err == nil {
+		t.Fatalf("Advance() = %+v, %v; want a failed run", out, err)
+	}
+	msg := out.Err.Error()
+	if strings.Contains(msg, "run the gate again") || !strings.Contains(msg, "judged the move to "+strings.Repeat("a", 12)) ||
+		!strings.Contains(msg, "move main of repos/app back to that commit") || !strings.Contains(msg, "start a new run") {
+		t.Errorf("the refusal reads: %s", msg)
+	}
+}
