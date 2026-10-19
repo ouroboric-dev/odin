@@ -1,0 +1,12 @@
+name: smoke-grade
+version: 0.1.0
+graph: graph.yaml
+checks:
+  unit: [test, -f, README.md] # in the leaf's sandbox
+leaves:
+  repos/notes: { description: the notes product, template: templates/notes, first_commit: [LICENSE] }
+sandbox:
+  # The machine the task gives (mimir smoke-notes/environment/Dockerfile): Playwright 1.63.0 on Ubuntu 24.04
+  # with Node 24 and Python 3.12. The digest is the one in that Dockerfile.
+  stack: mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
+  egress: []

@@ -1,0 +1,6 @@
+{
+  "name": "web",
+  "private": true,
+  "dependencies": { "react": "19.3.0", "openapi-fetch": "0.17.0" },
+  "devDependencies": { "vite": "7.2.0" }
+}

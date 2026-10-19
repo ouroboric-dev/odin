@@ -55,6 +55,12 @@ func (l *Leaf) Git(ctx context.Context, args ...string) (string, error) {
 	return l.repo.Run(ctx, args...)
 }
 
+// Output is Git with the standard output as git wrote it, for output a trim would change: a -z list whose
+// first name starts with a space, or the bytes of a file.
+func (l *Leaf) Output(ctx context.Context, args ...string) ([]byte, error) {
+	return l.repo.Output(ctx, args...)
+}
+
 // StartBranch creates branch at from and checks it out. It refuses a leaf with uncommitted
 // changes, so a run never discards work it didn't make.
 func (l *Leaf) StartBranch(ctx context.Context, branch, from string) (string, error) {

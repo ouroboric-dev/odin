@@ -1,0 +1,12 @@
+# The routing bench of the fixture project: fixed questions, with the answers a person checked by hand
+# against the files under project/. Add a question for every miss the ledger records (spec §8.3).
+schema: ygg.routing-bench/v1
+questions:
+  - { id: who-consumes-api, kind: consumers, about: api, answer: [web, worker] }
+  - { id: who-consumes-web, kind: consumers, about: web, answer: [] }
+  - { id: who-holds-the-api-contract, kind: contract-owner, about: api/internal/api.openapi.yaml, answer: [api] }
+  - { id: a-change-to-the-api-reaches, kind: reached-by, about: api, answer: [web, worker] }
+  - { id: a-chi-bump-reaches, kind: reached-by, about: "go:github.com/go-chi/chi/v5", answer: [api, web, worker] }
+  - { id: the-contract-reaches-leaves, kind: contract-readers, about: api/internal/api.openapi.yaml, answer: [web, worker] }
+  - { id: which-react-does-web-pin, kind: pin, about: web, arg: "npm:react", answer: ["19.3.0"] }
+  - { id: what-does-the-api-need, kind: services, about: api, answer: [postgres, seaweedfs] }

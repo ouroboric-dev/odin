@@ -101,6 +101,13 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err != nil {
 		return err
 	}
+	if judged, ok := r.State.Judged[n.ID]; ok && judged != to {
+		// A pointer-contract gate judged the move to another commit; main moved on since (spec §3.4).
+		return &nodeFailure{fmt.Errorf("main of %s is at %.12s, but the pointer-contract gate judged the move to %.12s; no command runs the gate again: move main of %s back to that commit and resume, or start a new run", n.Repo, to, judged, n.Repo)}
+	}
+	if err := shipRouting(r, n, attempt, parent); err != nil {
+		return err
+	}
 	s := r.State
 	began := time.Now()
 	res, moveErr := pointer.Move(ctx, pointer.Spec{Parent: parent, Child: child, Leaf: l, To: to,

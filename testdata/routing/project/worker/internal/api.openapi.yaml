@@ -1,0 +1,12 @@
+openapi: 3.0.3
+info:
+  title: Gallery API
+  version: 0.9.0
+paths:
+  /galleries/{id}:
+    get:
+      operationId: getGallery
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: the gallery }

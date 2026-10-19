@@ -88,7 +88,7 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		case schema.KindExec:
 			err = runExec(ctx, r, n)
 		case schema.KindGate:
-			stop, err = reachGate(r, n)
+			stop, err = reachGate(ctx, r, n)
 		case schema.KindMerge:
 			err = runMerge(ctx, r, n)
 		case schema.KindPointer:
@@ -101,6 +101,8 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			err = runPublish(ctx, r, n)
 		case schema.KindInit:
 			err = runInit(ctx, r, n)
+		case schema.KindGrade:
+			err = runGrade(ctx, r, n)
 		}
 		var sb *sentBack
 		var ex *expanded

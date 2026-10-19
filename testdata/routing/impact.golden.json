@@ -1,0 +1,196 @@
+{
+  "schema": "ygg.impact/v1",
+  "bound": "lower",
+  "edges": 24,
+  "extracted": 22,
+  "inferred": 2,
+  "contracts": [
+    {
+      "id": "contract:api/internal/api.openapi.yaml",
+      "path": "api/internal/api.openapi.yaml",
+      "owner": "api",
+      "sha256": "60a636c6c161e3f03b352c7b5568ec29ba82caf4149d06186d6163840c57ed22",
+      "readers": {
+        "extracted": [
+          "web",
+          "worker"
+        ],
+        "inferred": []
+      }
+    },
+    {
+      "id": "contract:web/contracts/api.openapi.yaml",
+      "path": "web/contracts/api.openapi.yaml",
+      "owner": "web",
+      "sha256": "60a636c6c161e3f03b352c7b5568ec29ba82caf4149d06186d6163840c57ed22",
+      "readers": {
+        "extracted": [],
+        "inferred": [
+          "worker"
+        ]
+      }
+    },
+    {
+      "id": "contract:worker/internal/api.openapi.yaml",
+      "path": "worker/internal/api.openapi.yaml",
+      "owner": "worker",
+      "sha256": "5c8b62031dc0e2194f270218d08258098c8206e2ab41b7d428413263fd662e03",
+      "readers": {
+        "extracted": [],
+        "inferred": []
+      }
+    }
+  ],
+  "reach": {
+    "api": {
+      "extracted": [
+        "web",
+        "worker"
+      ],
+      "inferred": []
+    },
+    "contract:api/internal/api.openapi.yaml": {
+      "extracted": [
+        "api",
+        "contract:web/contracts/api.openapi.yaml",
+        "web",
+        "worker"
+      ],
+      "inferred": [
+        "contract:worker/internal/api.openapi.yaml"
+      ]
+    },
+    "contract:web/contracts/api.openapi.yaml": {
+      "extracted": [
+        "web"
+      ],
+      "inferred": [
+        "worker"
+      ]
+    },
+    "contract:worker/internal/api.openapi.yaml": {
+      "extracted": [
+        "worker"
+      ],
+      "inferred": []
+    },
+    "go:github.com/go-chi/chi/v5": {
+      "extracted": [
+        "api",
+        "web",
+        "worker"
+      ],
+      "inferred": []
+    },
+    "go:github.com/go-chi/chi/v5@v5.2.3": {
+      "extracted": [
+        "api",
+        "web",
+        "worker"
+      ],
+      "inferred": []
+    },
+    "npm:openapi-fetch": {
+      "extracted": [
+        "web"
+      ],
+      "inferred": [
+        "worker"
+      ]
+    },
+    "npm:openapi-fetch@0.17.0": {
+      "extracted": [
+        "web"
+      ],
+      "inferred": [
+        "worker"
+      ]
+    },
+    "npm:react": {
+      "extracted": [
+        "web"
+      ],
+      "inferred": [
+        "worker"
+      ]
+    },
+    "npm:react@19.3.0": {
+      "extracted": [
+        "web"
+      ],
+      "inferred": [
+        "worker"
+      ]
+    },
+    "npm:vite": {
+      "extracted": [
+        "web"
+      ],
+      "inferred": [
+        "worker"
+      ]
+    },
+    "npm:vite@7.2.0": {
+      "extracted": [
+        "web"
+      ],
+      "inferred": [
+        "worker"
+      ]
+    },
+    "realm:helheim-go@0.1.0": {
+      "extracted": [
+        "api",
+        "web",
+        "worker"
+      ],
+      "inferred": []
+    },
+    "realm:midgard-react@0.1.0": {
+      "extracted": [
+        "web"
+      ],
+      "inferred": [
+        "worker"
+      ]
+    },
+    "service:postgres": {
+      "extracted": [
+        "api",
+        "web",
+        "worker"
+      ],
+      "inferred": []
+    },
+    "service:seaweedfs": {
+      "extracted": [
+        "api",
+        "web",
+        "worker"
+      ],
+      "inferred": []
+    },
+    "web": {
+      "extracted": [],
+      "inferred": [
+        "worker"
+      ]
+    }
+  },
+  "inferred_edges": [
+    {
+      "from": "contract:worker/internal/api.openapi.yaml",
+      "to": "contract:api/internal/api.openapi.yaml",
+      "kind": "copies",
+      "tag": "inferred",
+      "source": "worker/internal/api.openapi.yaml"
+    },
+    {
+      "from": "worker",
+      "to": "web",
+      "kind": "mentions",
+      "tag": "inferred",
+      "source": "worker/README.md"
+    }
+  ]
+}

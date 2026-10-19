@@ -71,3 +71,31 @@ func TestDecideFactsAndOverrides(t *testing.T) {
 		}
 	}
 }
+
+// Review focus: only a contract change that an extracted edge or oasdiff shows needs a person at
+// pointer-contract; a guess alone always does, in every mode but step-by-step the gate is open when no
+// contract changed.
+func TestPointerContractFollowsTheJudgement(t *testing.T) {
+	g := gungnir.GatePointerContract
+	cases := []struct {
+		name string
+		mode gungnir.Mode
+		f    Facts
+		want Action
+	}{
+		{"no contract change, key-points", gungnir.ModeKeyPoints, Facts{NoContractChange: true}, Auto},
+		{"no contract change, unattended", gungnir.ModeUnattended, Facts{NoContractChange: true}, Auto},
+		{"no contract change, step-by-step", gungnir.ModeStepByStep, Facts{NoContractChange: true}, Stop},
+		{"a contract change, key-points", gungnir.ModeKeyPoints, Facts{}, Stop},
+		{"a contract change, unattended", gungnir.ModeUnattended, Facts{}, Block},
+		{"a contract change the spec holds", gungnir.ModeUnattended, Facts{ContractInSpec: true}, Auto},
+		{"a guess alone, key-points", gungnir.ModeKeyPoints, Facts{Escalate: true}, Stop},
+		{"a guess alone stops even when the spec holds the change", gungnir.ModeUnattended, Facts{Escalate: true, ContractInSpec: true}, Stop},
+		{"a guess alone is not a no-change", gungnir.ModeKeyPoints, Facts{Escalate: true, NoContractChange: true}, Stop},
+	}
+	for _, c := range cases {
+		if got := Decide(c.mode, g, nil, c.f); got != c.want {
+			t.Errorf("%s: Decide() = %s, want %s", c.name, got, c.want)
+		}
+	}
+}
