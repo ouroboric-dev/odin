@@ -62,8 +62,8 @@ func TestARealmWhoseStackIsBuiltFromItsContextGivesItsLeavesTheTagOfTheBuild(t *
 	}}
 	fake := &sandboxfake.Sandbox{}
 	h := Hooks{NewSandbox: func(s *SandboxSetup, _ string) (gungnir.Sandbox, error) {
-		if want := sandbox.ImagesFor(webRef); s.Config.Images != want {
-			t.Errorf("the default images are %+v, want those of the lead realm's built stack %+v", s.Config.Images, want)
+		if want := sandbox.FactoryImages(); s.Config.Images != want {
+			t.Errorf("the default images are %+v, want those of the factory layer %+v", s.Config.Images, want)
 		}
 		return fake, nil
 	}}

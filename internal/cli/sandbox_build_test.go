@@ -49,7 +49,7 @@ func TestSandboxBuildBuildsARealmsStackFromItsContextThenTheLayersOnIt(t *testin
 	if got := builds(log); len(got) != 2 || !strings.Contains(strings.Join(got, "\n"), "STACK_IMAGE=localhost/ygg-stack-midgard-react:") {
 		t.Errorf("the layers were built on:\n%s", strings.Join(got, "\n"))
 	}
-	if strings.Index(calls, "-t localhost/ygg-stack-") > strings.Index(calls, "--target work") {
+	if layers := builds(log); strings.Index(calls, "-t localhost/ygg-stack-") > strings.Index(calls, layers[0]) {
 		t.Errorf("the factory layers were built before the stack:\n%s", calls)
 	}
 	if strings.Contains(calls, "podman pull -q --authfile") && !strings.Contains(calls, goStack) {

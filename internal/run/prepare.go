@@ -20,11 +20,12 @@ import (
 // SandboxSetup is what Prepare works out for a run whose leaves run in sandboxes (spec §6): where
 // the engine is and how it sees the host's files, and the hosts the firewall opens. It is nil when
 // the config has no sandbox section: only scripted roles then, and leaf commands run on the host.
+// Config.Images are the factory layer's: a sandbox that names no stack, such as a scratch session's,
+// starts on them.
 type SandboxSetup struct {
 	Engine string
 	Config sandbox.Config
-	Egress []string // the lead realm's registries and the model APIs of the roles the graph uses
-	Hosts  []string // the model APIs of the roles the graph uses: every leaf's sandbox opens them
+	Hosts  []string // the model APIs of the roles the graph uses: every sandbox of the run opens them, and a scratch session opens nothing else
 }
 
 // prepareSandbox sets up the sandbox of a run, and refuses a graph that would run outside it.
@@ -32,14 +33,11 @@ func (s *Setup) prepareSandbox() error {
 	if s.Config.Sandbox == nil {
 		return nil
 	}
-	if s.GraphPack.Pack.Sandbox == nil {
-		return fmt.Errorf("%s has a sandbox section, but the realm %s names no sandbox stack in its pack.yaml", s.ConfigPath, s.GraphPack.Pack.Name)
-	}
 	uid, gid := os.Getuid(), os.Getgid()
 	if uid == 0 {
 		return fmt.Errorf("ygg must not run as root: the sandbox's user is the operator's own")
 	}
-	cfg := sandbox.Config{Images: sandbox.ImagesFor(s.GraphPack.Stack), UID: uid, GID: gid}
+	cfg := sandbox.Config{Images: sandbox.FactoryImages(), UID: uid, GID: gid}
 	for _, m := range s.Config.Sandbox.Mounts {
 		cfg.Mounts = append(cfg.Mounts, sandbox.PathMap{Host: m.Host, Engine: m.Engine})
 	}
@@ -50,7 +48,7 @@ func (s *Setup) prepareSandbox() error {
 		}
 	}
 	hosts = sortedUnique(hosts)
-	s.Sandbox = &SandboxSetup{Engine: s.Config.Sandbox.Engine, Config: cfg, Hosts: hosts, Egress: sortedUnique(slices.Concat(s.GraphPack.Pack.Sandbox.Egress, hosts))}
+	s.Sandbox = &SandboxSetup{Engine: s.Config.Sandbox.Engine, Config: cfg, Hosts: hosts}
 	// A leaf of another realm starts on that realm's stack, so every leaf of the run must have one
 	// before anything starts, not when its sandbox comes up.
 	for _, p := range s.Leaves() {

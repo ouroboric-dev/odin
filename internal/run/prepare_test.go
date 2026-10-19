@@ -44,13 +44,16 @@ func TestPrepareSetsUpTheSandboxFromTheConfigAndThePack(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.Sandbox == nil || s.Sandbox.Engine != "unix:///mnt/wsl/podman-sockets/podman-machine-default/podman-user.sock" ||
-		s.Sandbox.Config.Images != sandbox.ImagesFor(s.GraphPack.Pack.Sandbox.Stack) || s.Sandbox.Config.Mounts[0].Engine != "/mnt/wsl/ygg-bind" {
+		s.Sandbox.Config.Images != sandbox.FactoryImages() || s.Sandbox.Config.Mounts[0].Engine != "/mnt/wsl/ygg-bind" {
 		t.Errorf("Sandbox = %+v", s.Sandbox)
 	}
-	// The scripted planner needs no host; the claude-code implementer needs api.anthropic.com. The
-	// realm's registries come with them, once each, sorted.
-	if got := strings.Join(s.Sandbox.Egress, ","); got != "api.anthropic.com,proxy.golang.org,sum.golang.org" {
-		t.Errorf("egress = %s", got)
+	// The scripted planner needs no host; the claude-code implementer needs api.anthropic.com. That is all a
+	// scratch session opens; a leaf's sandbox adds its realm's registries, once each, sorted.
+	if got := strings.Join(s.Sandbox.Hosts, ","); got != "api.anthropic.com" {
+		t.Errorf("hosts = %s", got)
+	}
+	if _, egress, _, err := s.SandboxFor("repos/app"); err != nil || strings.Join(egress, ",") != "api.anthropic.com,proxy.golang.org,sum.golang.org" {
+		t.Errorf("the leaf's egress = %v, %v", egress, err)
 	}
 	if s.Agents["implementer"].Name() != "claude-code" {
 		t.Errorf("the implementer is %s", s.Agents["implementer"].Name())
@@ -183,7 +186,7 @@ func TestTheSmokeRealmPreparesWithBothRealAdapters(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.Agents["implementer"].Name() != "claude-code" || s.Agents["reviewer"].Name() != "opencode" ||
-		strings.Join(s.Sandbox.Egress, ",") != "api.anthropic.com,openrouter.ai" {
-		t.Errorf("agents %v, egress %v", s.Agents, s.Sandbox.Egress)
+		strings.Join(s.Sandbox.Hosts, ",") != "api.anthropic.com,openrouter.ai" {
+		t.Errorf("agents %v, egress %v", s.Agents, s.Sandbox.Hosts)
 	}
 }

@@ -58,6 +58,14 @@ func (c *command) sandbox(args []string) int {
 	if err != nil {
 		return c.refuse(err)
 	}
+	// The factory layer comes first: a scratch session starts on it, whatever realms the project has.
+	fmt.Fprintf(c.out, "Building the factory layer on %s.\n", sandbox.FactoryStack)
+	fimgs, err := d.BuildFactory(c.ctx)
+	if err != nil {
+		fmt.Fprintf(c.err, "ygg: building the factory layer failed: %v\n", err)
+		return ExitFailed
+	}
+	fmt.Fprintf(c.out, "Built:\n  %s\n  %s\n", fimgs.Work, fimgs.Firewall)
 	for _, st := range stacks {
 		if st.dir != "" {
 			fmt.Fprintf(c.out, "Building the stack %s from the realm's context.\n", st.ref)

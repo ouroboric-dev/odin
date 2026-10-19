@@ -84,8 +84,9 @@ func (r *Run) ScratchDir(node string) string { return filepath.Join(r.Dir, "scra
 
 // ScratchRunner returns what runs commands in the sandbox of node's scratch workspace, starting it the
 // first time. It returns nil when the run has no sandbox: a scripted-only run works on the host. The
-// sandbox holds the workspace and nothing else, on the lead realm's stack, and is recorded under the
-// node's scratch name so that Advance, a resume and doctor stop it like a leaf's.
+// sandbox holds the workspace and nothing else. It has no stack, so it starts on the factory layer, and its
+// only egress is the model APIs of the run's roles. It is recorded under the node's scratch name so that
+// Advance, a resume and doctor stop it like a leaf's.
 func (r *Run) ScratchRunner(ctx context.Context, node string) (gungnir.Runner, error) {
 	if r.Sandbox == nil {
 		return nil, nil
@@ -95,7 +96,7 @@ func (r *Run) ScratchRunner(ctx context.Context, node string) (gungnir.Runner, e
 		return gungnir.Bind(r.Sandbox, env), nil
 	}
 	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: key, Parent: r.Dir, Leaf: r.ScratchDir(node), Scratch: true,
-		Egress: r.Setup.Sandbox.Egress, Stack: r.Setup.GraphPack.Stack})
+		Egress: r.Setup.Sandbox.Hosts})
 	if err != nil {
 		return nil, err
 	}

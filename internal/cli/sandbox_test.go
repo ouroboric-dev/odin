@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -166,5 +167,39 @@ func TestSandboxBuildPullsAndBuilds(t *testing.T) {
 		if code, _, _ := ygg(t, args...); code != ExitRefused {
 			t.Errorf("%s: exit %d, want %d", name, code, ExitRefused)
 		}
+	}
+}
+
+func TestSandboxBuildAlsoBuildsTheFactoryLayer(t *testing.T) {
+	log := stubEngine(t)
+	_, plain := project(t, "script.yaml", "")
+	config := withSandbox(t, plain)
+	realm, _ := filepath.Abs("../../testdata/toy-sandbox")
+	if code, out, errOut := ygg(t, "sandbox", "build", "--config", config, "--realm", realm); code != ExitDone {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	b, _ := os.ReadFile(log)
+	factory := sandbox.FactoryImages()
+	at := func(substr string) (found []int) {
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(line, "podman build") && strings.Contains(line, substr) {
+				found = append(found, i)
+			}
+		}
+		return found
+	}
+	// The factory stack is built from the pinned Node image, then the layer on it, once; both before the realm's stack.
+	stack, layer := at("-t "+sandbox.FactoryStack+" "), at("-t "+factory.Work+" ")
+	if len(stack) != 1 || len(layer) != 1 || stack[0] > layer[0] {
+		t.Fatalf("the factory stack was built at %v and its layer at %v; want once each, stack first:\n%s", stack, layer, b)
+	}
+	var realmLayers []int
+	for _, i := range at("--target work") {
+		if i != layer[0] {
+			realmLayers = append(realmLayers, i)
+		}
+	}
+	if len(realmLayers) != 1 || realmLayers[0] < layer[0] {
+		t.Errorf("the realm's layer was built at %v, the factory layer at %v; the factory layer comes first:\n%s", realmLayers, layer, b)
 	}
 }
