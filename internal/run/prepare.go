@@ -35,13 +35,6 @@ func (s *Setup) prepareSandbox() error {
 	if s.GraphPack.Pack.Sandbox == nil {
 		return fmt.Errorf("%s has a sandbox section, but the realm %s names no sandbox stack in its pack.yaml", s.ConfigPath, s.GraphPack.Pack.Name)
 	}
-	for _, n := range s.Graph.All() {
-		// Acceptance checks run over several leaves, so no leaf's sandbox holds them. With a sandbox on,
-		// they run in one that holds a snapshot of the project, on the stack the lead realm names for it.
-		if len(n.Acceptance) > 0 && s.GraphPack.Acceptance == "" {
-			return fmt.Errorf("node %s runs acceptance checks, which need a sandbox that holds a snapshot of the project; the realm %s names none (sandbox.acceptance in its pack.yaml)", n.ID, s.GraphPack.Name)
-		}
-	}
 	uid, gid := os.Getuid(), os.Getgid()
 	if uid == 0 {
 		return fmt.Errorf("ygg must not run as root: the sandbox's user is the operator's own")
@@ -144,25 +137,76 @@ func (s *Setup) projectLeaves() []string {
 	return sortedUnique(paths)
 }
 
-// SnapshotSandbox says what the sandbox that holds a snapshot of the project starts, for acceptance checks
-// (change realm-content): the lead realm's acceptance stack, the services of the realm of every leaf of
-// the project, since the checks run the whole product, and the registries of those realms.
-func (s *Setup) SnapshotSandbox() (stack string, egress []string, services []gungnir.Service, err error) {
-	if s.GraphPack.Acceptance == "" {
-		return "", nil, nil, fmt.Errorf("the realm %s names no acceptance stack, so there is no sandbox for a snapshot of the project (sandbox.acceptance in its pack.yaml)", s.GraphPack.Name)
+// leafRealms are the distinct realms of the project's leaves, sorted by name: the realm each leaf of the
+// project provides, and the graph pack when Start creates a leaf from it. extra are realms of leaves that
+// init is about to create.
+func (s *Setup) leafRealms(extra []*realm.Realm) []*realm.Realm {
+	var out []*realm.Realm
+	add := func(r *realm.Realm) {
+		if r != nil && !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	for _, p := range s.projectLeaves() {
+		if r, err := s.RealmOf(p); err == nil { // Prepare has refused a leaf with no realm
+			add(r)
+		}
+	}
+	if len(s.Create) > 0 {
+		add(s.GraphPack)
+	}
+	for _, r := range extra {
+		add(r)
+	}
+	slices.SortFunc(out, func(a, b *realm.Realm) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
+// AcceptanceRealms are the realms of the project's leaves, and of the leaves Start creates, that define the
+// acceptance check, sorted by name: a pointer move runs the check of each, in this order (change voluspa).
+func (s *Setup) AcceptanceRealms(check string) []*realm.Realm { return s.acceptanceRealms(check, nil) }
+
+func (s *Setup) acceptanceRealms(check string, extra []*realm.Realm) []*realm.Realm {
+	return slices.DeleteFunc(s.leafRealms(extra), func(r *realm.Realm) bool { return len(r.Pack.Checks[check]) == 0 })
+}
+
+// CheckAcceptance refuses, before any leaf exists or any sandbox starts, a graph whose nodes ask for an
+// acceptance check that no leaf's realm defines, and, with a sandbox, a realm that defines one and names no
+// acceptance stack to run it on. extra are the realms of the leaves init is about to create. A project with
+// no leaf yet is not refused here: init calls this again once the leaves file names the leaves.
+func (s *Setup) CheckAcceptance(extra []*realm.Realm) error {
+	if len(s.projectLeaves()) == 0 && len(s.Create) == 0 && len(extra) == 0 {
+		return nil
+	}
+	for _, n := range s.Graph.All() {
+		for _, c := range n.Acceptance {
+			realms := s.acceptanceRealms(c, extra)
+			if len(realms) == 0 {
+				return fmt.Errorf("node %s runs the acceptance check %s, and no realm of this project has an acceptance check %s: a move would check less than it does today", n.ID, c, c)
+			}
+			if s.Config.Sandbox == nil {
+				continue
+			}
+			for _, r := range realms {
+				if r.Acceptance == "" {
+					return fmt.Errorf("node %s runs acceptance checks, which need a sandbox that holds a snapshot of the project; the realm %s defines the check %s and names no acceptance stack (sandbox.acceptance in its pack.yaml)", n.ID, r.Name, c)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// SnapshotSandbox says what the sandbox that holds a snapshot of the project starts, for the acceptance
+// checks of realm rl (change voluspa): rl's acceptance stack, the services of the realm of every leaf of
+// the project, since the checks run the whole product, and the registries of those realms. Never wider
+// than the leaves' own realms give.
+func (s *Setup) SnapshotSandbox(rl *realm.Realm) (stack string, egress []string, services []gungnir.Service, err error) {
+	if rl.Acceptance == "" {
+		return "", nil, nil, fmt.Errorf("the realm %s names no acceptance stack, so there is no sandbox for a snapshot of the project (sandbox.acceptance in its pack.yaml)", rl.Name)
 	}
 	var set serviceSet
-	realms := []*realm.Realm{s.GraphPack}
-	for _, p := range s.projectLeaves() {
-		r, err := s.RealmOf(p)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		if !slices.Contains(realms, r) {
-			realms = append(realms, r)
-		}
-	}
-	for _, r := range realms {
+	for _, r := range s.leafRealms(nil) {
 		if err := set.add("the snapshot", r); err != nil {
 			return "", nil, nil, err
 		}
@@ -171,7 +215,7 @@ func (s *Setup) SnapshotSandbox() (stack string, egress []string, services []gun
 		}
 	}
 	slices.SortFunc(set.list, func(a, b gungnir.Service) int { return strings.Compare(a.Name, b.Name) })
-	return s.GraphPack.Acceptance, sortedUnique(egress), set.list, nil
+	return rl.Acceptance, sortedUnique(egress), set.list, nil
 }
 
 func sameService(a, b gungnir.Service) bool {

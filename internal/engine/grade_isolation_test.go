@@ -20,7 +20,7 @@ import (
 
 func TestGradingStartsOnlyAfterEverySandboxHasStopped(t *testing.T) {
 	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
-	if _, err := g.r.SnapshotRunner(context.Background(), "move", nil); err != nil { // a snapshot sandbox, as an acceptance check starts
+	if _, err := g.r.SnapshotRunner(context.Background(), "move", g.r.Setup.GraphPack, nil); err != nil { // a snapshot sandbox, as an acceptance check starts
 		t.Fatal(err)
 	}
 	var ups, downs, recorded int
@@ -158,7 +158,7 @@ func TestTheWalkerThatGuardsTheSuiteFolderFindsItWhereItIs(t *testing.T) {
 
 func TestNoAgentSandboxOrCommandEverHoldsTheSuiteFolder(t *testing.T) {
 	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
-	if _, err := g.r.SnapshotRunner(context.Background(), "move", nil); err != nil {
+	if _, err := g.r.SnapshotRunner(context.Background(), "move", g.r.Setup.GraphPack, nil); err != nil {
 		t.Fatal(err)
 	}
 	if out := g.advance(t); out.Status != run.StatusDone {

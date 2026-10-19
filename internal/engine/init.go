@@ -48,6 +48,15 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := checkLeaves(r, set, spec); err != nil {
 		return &nodeFailure{err}
 	}
+	// Acceptance checks run over the leaves' realms, so a move that asks for one needs a realm of the leaves
+	// to define it, and a stack to run it on, before any leaf is created (change voluspa).
+	var leafRealms []*realm.Realm
+	for _, p := range spec.Paths() {
+		leafRealms = append(leafRealms, set.Realms[spec.Leaves[p].Realm])
+	}
+	if err := r.Setup.CheckAcceptance(leafRealms); err != nil {
+		return &nodeFailure{err}
+	}
 	if err := r.AddRealms(spec.Pins()); err != nil {
 		return &nodeFailure{err}
 	}

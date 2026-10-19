@@ -12,6 +12,7 @@ import (
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/git"
+	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/snapshot"
 	"github.com/ouroboric-dev/odin/internal/tree"
 )
@@ -112,16 +113,16 @@ func (r *Run) ScratchRunner(ctx context.Context, node string) (gungnir.Runner, e
 }
 
 // SnapshotRunner returns what runs commands in the sandbox that holds a snapshot of the project, for the
-// acceptance checks of node: the committed files of the project umbrella and of each leaf, at the commits
+// acceptance checks of realm rl for node: the committed files of the project umbrella and of each leaf, at the commits
 // they are on, or at the commits revs names for a leaf (by its path), in a plain folder of the run. The
 // snapshot is made again every time, since the work it holds changes between attempts; the sandbox
-// is started the first time, with the services of every leaf's realm, and is recorded under its own name
+// is started the first time, on rl's acceptance stack with the services of every leaf's realm, and is recorded under its own name (snapshot/<node>/<realm>)
 // so that Advance, a resume and doctor stop it like a leaf's (change realm-content).
-func (r *Run) SnapshotRunner(ctx context.Context, node string, revs map[string]string) (gungnir.Runner, error) {
+func (r *Run) SnapshotRunner(ctx context.Context, node string, rl *realm.Realm, revs map[string]string) (gungnir.Runner, error) {
 	if r.Sandbox == nil {
 		return nil, nil
 	}
-	key, dir := "snapshot/"+node, filepath.Join(r.Dir, "snapshot", node)
+	key, dir := "snapshot/"+node+"/"+rl.Name, filepath.Join(r.Dir, "snapshot", node, rl.Name)
 	sources, err := r.snapshotSources(ctx, revs)
 	if err != nil {
 		return nil, &SnapshotError{err}
@@ -132,7 +133,7 @@ func (r *Run) SnapshotRunner(ctx context.Context, node string, revs map[string]s
 	if env, ok := r.State.Sandboxes[key]; ok {
 		return gungnir.Bind(r.Sandbox, env), nil
 	}
-	stack, egress, services, err := r.Setup.SnapshotSandbox()
+	stack, egress, services, err := r.Setup.SnapshotSandbox(rl)
 	if err != nil {
 		return nil, err
 	}

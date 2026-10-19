@@ -347,34 +347,34 @@ func runOn(ctx context.Context, runner gungnir.Runner, spec checks.Spec, logPath
 	return checks.Result{}, &nodeFailure{fmt.Errorf("the sandbox or its log failed while %s ran: %w", spec.Argv[0], err)}
 }
 
-// runChecks runs the pack checks names in order, for the given attempt of node n, and logs each
-// result. The first failing check is the error, a *checkFailed; any other error is Odin's own. repo is the leaf they check, whose sandbox runs them
-// when the run has one; the pointer node's acceptance checks pass "" and the umbrella's dir, and run
-// on the host.
+// runChecks runs the checks names of the realm of node n in order, for the given attempt, and logs each
+// result. The first failing check is the error, a *checkFailed; any other error is Odin's own. repo is the leaf
+// they check, whose sandbox runs them when the run has one. The acceptance checks of a pointer node are not
+// run here: they belong to every leaf's realm (runAcceptance).
 func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, repo, dir string) error {
-	// A pointer node's acceptance checks, which pass no repo, are the graph pack's until every leaf realm's
-	// runs (voluspa-T009), run in the project; the checks of a leaf are its realm's.
-	rl := r.Setup.GraphPack
-	if repo != "" {
-		var err error
-		if rl, err = r.Setup.NodeRealm(n); err != nil {
-			return &nodeFailure{err}
-		}
+	rl, err := r.Setup.NodeRealm(n)
+	if err != nil {
+		return &nodeFailure{err}
 	}
-	return runChecksWith(ctx, r, n, attempt, names, rl, func(argv []string, logPath string) (error, error) {
+	return runChecksWith(ctx, r, n, attempt, names, rl, false, func(argv []string, logPath string) (error, error) {
 		return command(ctx, r, n.ID, repo, dir, argv, time.Duration(n.Timeout), logPath)
 	})
 }
 
 // runChecksWith is runChecks with the checks of realm rl, each run by exec, which returns the command's
-// failure and, apart from it, Odin's own.
-func runChecksWith(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, rl *realm.Realm, exec func(argv []string, logPath string) (cmdErr, err error)) error {
+// failure and, apart from it, Odin's own. An acceptance check (acceptance) is one of several realms': its log
+// and its check_result line name the realm.
+func runChecksWith(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, rl *realm.Realm, acceptance bool, exec func(argv []string, logPath string) (cmdErr, err error)) error {
 	for _, c := range names {
 		argv := rl.Pack.Checks[c]
 		if len(argv) == 0 {
 			return &nodeFailure{fmt.Errorf("the realm %s defines no check %s", rl.Name, c)}
 		}
-		logPath := filepath.Join(r.Dir, "logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, c))
+		logName, realmName := fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, c), ""
+		if acceptance {
+			logName, realmName = fmt.Sprintf("%s-%d-%s-%s.log", n.ID, attempt, c, rl.Name), rl.Name
+		}
+		logPath := filepath.Join(r.Dir, "logs", logName)
 		cmdErr, err := exec(argv, logPath)
 		if err != nil {
 			return err
@@ -383,7 +383,7 @@ func runChecksWith(ctx context.Context, r *run.Run, n schema.Node, attempt int, 
 		if cmdErr != nil {
 			result = c + ": " + cmdErr.Error()
 		}
-		if err := r.Log(gungnir.Event{Name: gungnir.EventCheckResult, Node: n.ID, Attempt: attempt, Result: result}); err != nil {
+		if err := r.Log(gungnir.Event{Name: gungnir.EventCheckResult, Node: n.ID, Attempt: attempt, Result: result, Realm: realmName}); err != nil {
 			return err
 		}
 		if cmdErr != nil {

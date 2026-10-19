@@ -161,6 +161,9 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
+	if err := s.CheckAcceptance(nil); err != nil {
+		return nil, err
+	}
 	if err := s.prepareBudget(o.Hooks); err != nil {
 		return nil, err
 	}
@@ -275,11 +278,6 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 			}
 		}
 	}
-	for _, c := range n.Acceptance { // until the acceptance of every leaf's realm runs, the graph pack's
-		if _, ok := s.GraphPack.Pack.Checks[c]; !ok {
-			return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
-		}
-	}
 	if n.Kind != schema.KindAgent && n.Kind != schema.KindLoop {
 		return nil
 	}
@@ -319,11 +317,6 @@ func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 				if err := s.checkSession(graphPath, fe.ID+"-"+n.ID+"-"+rv.ID, rv.Role, rv.Prompt); err != nil {
 					return err
 				}
-			}
-		}
-		for _, c := range n.Acceptance {
-			if _, ok := s.GraphPack.Pack.Checks[c]; !ok {
-				return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
@@ -49,12 +50,22 @@ func snapshotRun(t *testing.T, webServices string, acceptance bool) (*Run, *sand
 	return r, fake, err
 }
 
+// webRealm is the realm of repos/app, whose acceptance stack the snapshot sandbox starts on.
+func webRealm(t *testing.T, r *Run) *realm.Realm {
+	t.Helper()
+	rl, err := r.Setup.RealmOf("repos/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rl
+}
+
 func TestTheSnapshotSandboxGetsTheServicesAndRegistriesOfEveryLeafsRealm(t *testing.T) {
 	r, fake, err := snapshotRun(t, "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.SnapshotRunner(ctx, "move", nil); err != nil {
+	if _, err := r.SnapshotRunner(ctx, "move", webRealm(t, r), nil); err != nil {
 		t.Fatalf("SnapshotRunner() = %v", err)
 	}
 	if len(fake.Ups) != 1 {
@@ -65,7 +76,7 @@ func TestTheSnapshotSandboxGetsTheServicesAndRegistriesOfEveryLeafsRealm(t *test
 	for _, v := range up.Services {
 		names = append(names, v.Name)
 	}
-	if up.Name != "snapshot/move" || !up.Scratch || up.Stack != nodeStack || strings.Join(names, ",") != "postgres,seaweedfs" ||
+	if up.Name != "snapshot/move/midgard-react" || !up.Scratch || up.Stack != nodeStack || strings.Join(names, ",") != "postgres,seaweedfs" ||
 		strings.Join(up.Egress, ",") != "proxy.golang.org,registry.npmjs.org,sum.golang.org" {
 		t.Errorf("spec = %+v", up)
 	}
@@ -81,15 +92,15 @@ func TestTheSnapshotIsMadeAgainEveryTimeAndTheSandboxStartsOnce(t *testing.T) {
 	}
 	var revs map[string]string
 	for i := 0; i < 2; i++ {
-		if _, err := r.SnapshotRunner(ctx, "move", revs); err != nil {
+		if _, err := r.SnapshotRunner(ctx, "move", webRealm(t, r), revs); err != nil {
 			t.Fatal(err)
 		}
 		if i == 0 {
-			b, err := os.ReadFile(filepath.Join(r.Dir, "snapshot", "move", "repos", "app", "README.md"))
+			b, err := os.ReadFile(filepath.Join(r.Dir, "snapshot", "move", "midgard-react", "repos", "app", "README.md"))
 			if err != nil || len(b) == 0 {
 				t.Fatalf("the snapshot lacks repos/app/README.md: %v", err)
 			}
-			if _, err := os.Stat(filepath.Join(r.Dir, "snapshot", "move", "repos", "api", "README.md")); err != nil {
+			if _, err := os.Stat(filepath.Join(r.Dir, "snapshot", "move", "midgard-react", "repos", "api", "README.md")); err != nil {
 				t.Errorf("the snapshot holds only the leaves the run works in: %v", err)
 			}
 			// A commit made in the leaf between the two snapshots is in the second one when the node moves the
@@ -110,7 +121,7 @@ func TestTheSnapshotIsMadeAgainEveryTimeAndTheSandboxStartsOnce(t *testing.T) {
 			revs = map[string]string{"repos/app": strings.TrimSpace(head)}
 		}
 	}
-	if _, err := os.Stat(filepath.Join(r.Dir, "snapshot", "move", "repos", "app", "later.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(r.Dir, "snapshot", "move", "midgard-react", "repos", "app", "later.txt")); err != nil {
 		t.Errorf("the second snapshot lacks the commit made after the first: %v", err)
 	}
 	if len(fake.Ups) != 1 {
@@ -124,17 +135,19 @@ func TestRealmsThatDisagreeOnAServiceCannotShareASnapshotSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.SnapshotRunner(ctx, "move", nil); err == nil || !strings.Contains(err.Error(), "two different services named postgres") || !strings.Contains(err.Error(), "the snapshot") {
+	if _, err := r.SnapshotRunner(ctx, "move", webRealm(t, r), nil); err == nil || !strings.Contains(err.Error(), "two different services named postgres") || !strings.Contains(err.Error(), "the snapshot") {
 		t.Errorf("SnapshotRunner() = %v", err)
 	}
 }
 
-func TestARealmWithNoAcceptanceStackHasNoSnapshotSandbox(t *testing.T) {
+// Prepare and init refuse such a realm before the run starts (TestARealmWithAnAcceptanceCheckAndNoAcceptanceStack...);
+// this is the second line: a sandbox is never started for it.
+func TestASnapshotSandboxIsNeverStartedForARealmWithNoAcceptanceStack(t *testing.T) {
 	r, fake, err := snapshotRun(t, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.SnapshotRunner(ctx, "move", nil); err == nil || !strings.Contains(err.Error(), "names no acceptance stack") {
+	if _, err := r.SnapshotRunner(ctx, "move", webRealm(t, r), nil); err == nil || !strings.Contains(err.Error(), "names no acceptance stack") {
 		t.Errorf("SnapshotRunner() = %v", err)
 	}
 	if len(fake.Ups) != 0 {
@@ -161,10 +174,10 @@ func TestTheSnapshotTakesAnotherLeafAtTheCommitTheUmbrellaRecords(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	if _, err := r.SnapshotRunner(ctx, "move", nil); err != nil {
+	if _, err := r.SnapshotRunner(ctx, "move", webRealm(t, r), nil); err != nil {
 		t.Fatalf("SnapshotRunner() = %v", err)
 	}
-	snap := filepath.Join(r.Dir, "snapshot", "move", "repos", "api")
+	snap := filepath.Join(r.Dir, "snapshot", "move", "midgard-react", "repos", "api")
 	if _, err := os.Stat(filepath.Join(snap, "README.md")); err != nil {
 		t.Errorf("the snapshot lacks the recorded commit's files: %v", err)
 	}
@@ -181,7 +194,7 @@ func TestTheSnapshotRefusesALeafThatIsNotCheckedOut(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(r.Setup.Root, ".git", "modules", "repos", "api")); err != nil {
 		t.Fatal(err)
 	}
-	_, err = r.SnapshotRunner(ctx, "move", nil)
+	_, err = r.SnapshotRunner(ctx, "move", webRealm(t, r), nil)
 	var se *SnapshotError
 	if !errors.As(err, &se) || !strings.Contains(err.Error(), "repos/api") || !strings.Contains(err.Error(), "not checked out") {
 		t.Errorf("SnapshotRunner() = %v; want a *SnapshotError naming repos/api as not checked out", err)
@@ -204,7 +217,7 @@ func TestTheSnapshotRefusesALeafThatLacksTheRecordedCommit(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(gitDir, "objects"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err = r.SnapshotRunner(ctx, "move", nil)
+	_, err = r.SnapshotRunner(ctx, "move", webRealm(t, r), nil)
 	var se *SnapshotError
 	if !errors.As(err, &se) || !strings.Contains(err.Error(), "repos/api") {
 		t.Errorf("SnapshotRunner() = %v; want a *SnapshotError naming repos/api", err)

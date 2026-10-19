@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/run"
+	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
@@ -26,12 +28,23 @@ type realmsSetup struct {
 	realms                             []realmFiles
 	leaves                             map[string]string
 	hooks                              run.Hooks
+	sandbox                            *sandboxfake.Sandbox // when set, the config has a sandbox section and the fake runs the leaves' commands
 }
 
 const defaultRoles = "roles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n  implementer: { agent: scripted, model: none, script: script.yaml }\n  reviewer: { agent: scripted, model: none, script: script.yaml }\n"
 
 // startRealms writes a realm store, a project pinned to those realms and a factory.yaml, and starts a run.
 func startRealms(t *testing.T, o realmsSetup) *run.Run {
+	t.Helper()
+	r, err := tryRealms(t, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// tryRealms is startRealms that returns the error Start refused with.
+func tryRealms(t *testing.T, o realmsSetup) (*run.Run, error) {
 	t.Helper()
 	store, cfg := t.TempDir(), t.TempDir()
 	lead := o.realms[0]
@@ -77,9 +90,14 @@ func startRealms(t *testing.T, o realmsSetup) *run.Run {
 		o.budget = "budget:\n  per_run: { tokens: 1000000, turns: 1000 }\n  per_day: { tokens: 2000000, turns: 2000 }\n"
 	}
 	o.budget = strings.TrimRight(o.budget, "\n") + "\n  journal: " + filepath.Join(cfg, "spend") + "\n"
+	factory := "mode: " + o.mode + "\n" + o.roles + o.budget + "realms:\n  dir: " + store + "\ngraphs:\n  dir: " + store + "\n"
+	if o.sandbox != nil {
+		factory += "sandbox:\n  engine: unix:///run/ygg-test.sock\n"
+		o.hooks.NewSandbox = func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return o.sandbox, nil }
+	}
 	for f, body := range map[string]string{
 		"script.yaml":  o.script,
-		"factory.yaml": "mode: " + o.mode + "\n" + o.roles + o.budget + "realms:\n  dir: " + store + "\ngraphs:\n  dir: " + store + "\n",
+		"factory.yaml": factory,
 	} {
 		if err := os.WriteFile(filepath.Join(cfg, f), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -87,10 +105,10 @@ func startRealms(t *testing.T, o realmsSetup) *run.Run {
 	}
 	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: lead.name, Hooks: o.hooks})
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	t.Cleanup(func() { r.Close() })
-	return r
+	return r, nil
 }
 
 // transcriptPrompt returns the prompt a scripted session of node got in attempt 1.
@@ -139,18 +157,26 @@ func TestANodeReadsItsPromptAndRunsItsChecksFromItsOwnRealm(t *testing.T) {
 	}
 }
 
-func TestAPointersAcceptanceChecksAreTheLeadRealmsEvenInALeafOfAnotherRealm(t *testing.T) {
+// Replaces TestAPointersAcceptanceChecksAreTheLeadRealmsEvenInALeafOfAnotherRealm: the move of a leaf whose
+// realm has no acceptance check still runs the check of the realm that has it. The realm is now the leaf realm
+// that defines the check, not the lead; the lead realm no longer exists.
+func TestAPointersAcceptanceChecksAreTheRealmsThatDefineThemEvenInALeafOfAnotherRealm(t *testing.T) {
 	realms := twoRealms()
-	realms[0].pack += "  accept: [sh, -c, \"echo lead > accepted-by.txt\"]\n"
-	r := startRealms(t, realmsSetup{realms: realms, leaves: map[string]string{"repos/api": "helheim-go"},
-		nodes: "  - { id: api-touch, kind: exec, run: [echo, api], repo: repos/api }\n", script: "steps: {}\n"})
+	realms[0].pack += "  accept: [sh, -c, \"echo midgard > accepted-by.txt\"]\n"
+	r := startRealms(t, realmsSetup{realms: realms, leaves: map[string]string{"repos/api": "helheim-go", "repos/web": "midgard-react"},
+		nodes: "  - { id: api-touch, kind: exec, run: [echo, api], repo: repos/api }\n  - { id: web-touch, kind: exec, run: [echo, web], repo: repos/web }\n", script: "steps: {}\n"})
 	api := schema.Node{ID: "move", Kind: schema.KindPointer, Repo: "repos/api", Realm: "helheim-go", Acceptance: []string{"accept"}}
-	// The acceptance check runs in the project, with no repo: helheim-go defines no accept, and the lead does.
-	if err := runChecks(context.Background(), r, api, 1, api.Acceptance, "", r.Project); err != nil {
-		t.Fatalf("runChecks() = %v", err)
+	// The acceptance check runs in the project, on the host: helheim-go defines no accept, and midgard-react does.
+	if err := runAcceptance(context.Background(), r, api, 1, ".", r.Project, "repos/api", ""); err != nil {
+		t.Fatalf("runAcceptance() = %v", err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(r.Project, "accepted-by.txt")); strings.TrimSpace(string(b)) != "lead" {
+	if b, _ := os.ReadFile(filepath.Join(r.Project, "accepted-by.txt")); strings.TrimSpace(string(b)) != "midgard" {
 		t.Errorf("the acceptance check was run by %q", b)
+	}
+	// A leaf's own checks are its realm's alone: helheim-go's leaf has no accept to run.
+	var nf *nodeFailure
+	if err := runChecks(context.Background(), r, api, 1, api.Acceptance, "repos/api", r.RepoDir("repos/api")); !errors.As(err, &nf) {
+		t.Errorf("runChecks() = %v; a leaf's checks come from its own realm only", err)
 	}
 }
 
