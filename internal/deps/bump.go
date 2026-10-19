@@ -270,10 +270,8 @@ func (b *Bumper) apply(ctx context.Context, runner gungnir.Runner, snap *Snapsho
 	} else if len(extra) > 0 {
 		return "fail", "the checks changed files that are not the manifest or its lock file: " + strings.Join(extra, ", "), nil
 	}
-	if reason := wrongManifest(pkg, to, pl); reason != "" {
-		return "fail", reason, nil
-	}
-	// The deps rung judged the lock before the unit rung ran: after the tool, the lock must not move.
+	// The deps rung judged the lock before the unit rung ran: after the tool, the lock must not move. This
+	// comes before any read of the manifest: freeze uses Lstat and Readlink, and the manifest may be a device.
 	now, err := freeze(pl)
 	if err != nil {
 		return "", "", err
@@ -282,6 +280,9 @@ func (b *Bumper) apply(ctx context.Context, runner gungnir.Runner, snap *Snapsho
 		if now[f] != frozen[f] {
 			return "fail", "the checks changed " + f + " after the tool ran; the deps rung judged the old one", nil
 		}
+	}
+	if reason := wrongManifest(pkg, to, pl); reason != "" {
+		return "fail", reason, nil
 	}
 	return "pass", "", nil
 }
@@ -340,7 +341,7 @@ func freeze(pl plan) (map[string]string, error) {
 			}
 			out[f] = "\x00link:" + l
 		default:
-			b, err := os.ReadFile(p)
+			b, err := readBounded(p, maxLock)
 			if err != nil {
 				return nil, err
 			}

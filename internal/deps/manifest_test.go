@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, dir, name, text string) {
@@ -86,4 +88,50 @@ func TestFindRefusesWhatItWouldHaveToGuess(t *testing.T) {
 			t.Errorf("Find(%s) = %v, want %q", pkg, err, want)
 		}
 	}
+}
+
+// within fails the test if f does not return in time: a read that waits on a pipe or reads a device forever.
+func within(t *testing.T, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { f(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("it did not return: it reads a file that is not a regular file")
+	}
+}
+
+func TestFindRefusesAManifestThatIsNotARegularFileWithoutReadingIt(t *testing.T) {
+	for name, make := range map[string]func(p string) error{
+		"a symlink to /dev/zero": func(p string) error { return os.Symlink("/dev/zero", p) },
+		"a named pipe":           func(p string) error { return syscall.Mkfifo(p, 0o644) },
+	} {
+		for _, file := range []string{"go.mod", "package.json"} {
+			dir := t.TempDir()
+			if err := make(filepath.Join(dir, file)); err != nil {
+				t.Fatal(err)
+			}
+			within(t, func() {
+				if _, err := Find(dir, "x"); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+					t.Errorf("%s as %s: %v", name, file, err)
+				}
+			})
+		}
+	}
+}
+
+func TestFindRefusesAManifestOverTheSizeCap(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Truncate(1 << 30) // sparse
+	f.Close()
+	within(t, func() {
+		if _, err := Find(dir, "x"); err == nil || !strings.Contains(err.Error(), "bytes") {
+			t.Errorf("error %v", err)
+		}
+	})
 }

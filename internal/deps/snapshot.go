@@ -31,6 +31,7 @@ type Snapshot struct {
 	root  string
 	files map[string]entry
 	dirs  map[string]bool
+	limit int64
 	git   gitState // the top-level .git, which the walks skip but the bump still watches
 }
 
@@ -156,7 +157,7 @@ func skip(d fs.DirEntry) error {
 func Take(root string) (*Snapshot, error) { return takeLimited(root, MaxSnapshot) }
 
 func takeLimited(root string, limit int64) (*Snapshot, error) {
-	s := &Snapshot{root: root, files: map[string]entry{}, dirs: map[string]bool{}}
+	s := &Snapshot{root: root, files: map[string]entry{}, dirs: map[string]bool{}, limit: limit}
 	var size int64
 	var err error
 	if s.git, err = readGit(root); err != nil {
@@ -174,12 +175,12 @@ func takeLimited(root string, limit int64) (*Snapshot, error) {
 			s.dirs[rel] = true
 			return nil
 		}
-		e, n, err := read(p, d)
+		e, n, err := read(p, d, limit-size)
 		if err != nil {
 			return err
 		}
 		if size += n; size > limit {
-			return fmt.Errorf("%s holds too many bytes of files: too big to snapshot, so a failed bump could not be undone", root)
+			return errTooBig(root)
 		}
 		s.files[rel] = e
 		return nil
@@ -187,7 +188,13 @@ func takeLimited(root string, limit int64) (*Snapshot, error) {
 	return s, err
 }
 
-func read(p string, d fs.DirEntry) (entry, int64, error) {
+func errTooBig(root string) error {
+	return fmt.Errorf("%s holds too many bytes of files: too big to snapshot, so a failed bump could not be undone", root)
+}
+
+// read reads a file for the snapshot or a comparison with it. A file bigger than limit is refused from its
+// size, before a byte is read (a sparse file is a terabyte of memory), and the read stops at the limit.
+func read(p string, d fs.DirEntry, limit int64) (entry, int64, error) {
 	info, err := d.Info()
 	if err != nil {
 		return entry{}, 0, err
@@ -197,7 +204,18 @@ func read(p string, d fs.DirEntry) (entry, int64, error) {
 		l, err := os.Readlink(p)
 		return entry{mode: info.Mode(), link: l}, 0, err
 	case info.Mode().IsRegular():
-		b, err := os.ReadFile(p)
+		if info.Size() > limit {
+			return entry{}, 0, errTooBig(filepath.Dir(p))
+		}
+		f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return entry{}, 0, err
+		}
+		defer f.Close()
+		b, err := io.ReadAll(io.LimitReader(f, limit+1))
+		if err == nil && int64(len(b)) > limit {
+			err = errTooBig(filepath.Dir(p))
+		}
 		return entry{mode: info.Mode().Perm(), data: b}, int64(len(b)), err
 	}
 	return entry{}, 0, fmt.Errorf("%s is neither a file, a folder nor a symlink", p)
@@ -220,7 +238,7 @@ func (s *Snapshot) Changes() ([]string, error) {
 			return nil
 		}
 		seen[rel] = true
-		cur, _, err := read(p, d)
+		cur, _, err := read(p, d, s.limit)
 		if err != nil {
 			return err
 		}
@@ -281,7 +299,7 @@ func (s *Snapshot) Restore() error {
 	for rel, want := range s.files {
 		p := filepath.Join(s.root, rel)
 		if info, err := os.Lstat(p); err == nil {
-			if cur, _, err := read(p, fs.FileInfoToDirEntry(info)); err == nil && same(want, cur) {
+			if cur, _, err := read(p, fs.FileInfoToDirEntry(info), s.limit); err == nil && same(want, cur) {
 				continue
 			}
 			if err := os.RemoveAll(p); err != nil {
@@ -307,7 +325,21 @@ func (s *Snapshot) Restore() error {
 	}
 	slices.SortFunc(extraDirs, func(a, b string) int { return strings.Compare(b, a) }) // the deepest first
 	for _, rel := range extraDirs {
-		os.Remove(filepath.Join(s.root, rel)) // a folder that still holds something is not ours to remove
+		p := filepath.Join(s.root, rel)
+		// Only what is still a folder, and is not a file of the snapshot: the files loop may have put a file where
+		// the check made a folder, and removing that name would delete the file just restored.
+		if info, err := os.Lstat(p); err != nil || !info.IsDir() {
+			if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) { // gone, or its parent is a file now
+				return err
+			}
+			continue
+		}
+		if _, isFile := s.files[rel]; isFile {
+			continue
+		}
+		if err := os.Remove(p); err != nil && !errors.Is(err, syscall.ENOTEMPTY) { // a folder that still holds something is not ours to remove
+			return err
+		}
 	}
 	return nil
 }

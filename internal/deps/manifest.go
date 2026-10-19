@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Kind is the ecosystem of a manifest.
@@ -70,9 +72,43 @@ func Find(dir, pkg string) (Manifest, error) {
 	return Manifest{}, fmt.Errorf("%s requires %s in both go.mod and package.json; the bump will not guess", dir, pkg)
 }
 
+// maxManifest is the most bytes a manifest may hold: a leaf's code can swap the file for anything.
+const maxManifest = 4 << 20
+
+// readManifest reads a manifest of a leaf, whose files are data: a file that is not a regular file (a
+// symlink, a named pipe, a device) is refused before it is opened, the open follows no link and waits on
+// no pipe, and the read stops at maxManifest.
+func readManifest(path string) ([]byte, error) { return readBounded(path, maxManifest) }
+
+// maxLock is the most bytes freeze reads of a manifest or lock file.
+const maxLock = 64 << 20
+
+func readBounded(path string, max int64) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	if info.Size() > max {
+		return nil, fmt.Errorf("%s holds %d bytes, over the %d bytes allowed", path, info.Size(), max)
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err == nil && int64(len(b)) > max {
+		err = fmt.Errorf("%s holds over %d bytes", path, max)
+	}
+	return b, err
+}
+
 func readGoMod(dir, pkg string) (Manifest, bool, error) {
 	path := filepath.Join(dir, "go.mod")
-	b, err := os.ReadFile(path)
+	b, err := readManifest(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Manifest{}, false, nil
 	} else if err != nil {
@@ -110,7 +146,7 @@ func readGoMod(dir, pkg string) (Manifest, bool, error) {
 
 func readPackageJSON(dir, pkg string) (Manifest, bool, error) {
 	path := filepath.Join(dir, "package.json")
-	b, err := os.ReadFile(path)
+	b, err := readManifest(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Manifest{}, false, nil
 	} else if err != nil {

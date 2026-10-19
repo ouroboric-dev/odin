@@ -332,3 +332,25 @@ func nestedGit(p Product) error {
 		return err
 	})
 }
+
+func TestAUnitRungThatReplacesGoModWithASymlinkToADeviceFailsBoundedAndIsPutBack(t *testing.T) {
+	w := newWorld(t, map[string]string{"api": "0.41.0"})
+	mod := filepath.Join(w.root, "api", "go.mod")
+	w.onRun = func(_, check string) error {
+		if check == "unit" {
+			os.Remove(mod)
+			return os.Symlink("/dev/zero", mod)
+		}
+		return nil
+	}
+	before := w.bytes("api")
+	within(t, func() {
+		rep, err := w.bumper().Bump(context.Background(), "golang.org/x/text", "0.42.0", w.product("api"), nil)
+		if err != nil || !rep.Failed() || !strings.Contains(rep.Steps[0].Reason, "go.mod") {
+			t.Errorf("report %+v, error %v", rep, err)
+		}
+	})
+	if !same2(before, w.bytes("api")) {
+		t.Error("not put back")
+	}
+}

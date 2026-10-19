@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -87,5 +88,49 @@ func TestSnapshotRefusesAProductTooBigToUndo(t *testing.T) {
 	write(t, dir, "f", "x")
 	if _, err := takeLimited(dir, 0); err == nil { // one byte is over a limit of none
 		t.Error("a snapshot over the limit was taken")
+	}
+}
+
+func TestSnapshotDoesNotReadASparseFileOverTheCap(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a", "x")
+	snap, err := takeLimited(dir, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(filepath.Join(dir, "huge"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Truncate(1 << 30) // sparse: a read in full is a gigabyte of memory
+	f.Close()
+	within(t, func() {
+		if _, err := snap.Changes(); err == nil || !strings.Contains(err.Error(), "too many bytes") {
+			t.Errorf("Changes: %v", err)
+		}
+		if _, err := takeLimited(dir, 1<<20); err == nil || !strings.Contains(err.Error(), "too many bytes") {
+			t.Errorf("takeLimited: %v", err)
+		}
+	})
+}
+
+func TestRestoreDoesNotDeleteAFileItJustRestoredWhereTheCheckMadeAFolder(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a", "the file")
+	write(t, dir, "keep/b", "b")
+	snap, err := Take(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, "a"))
+	write(t, dir, "a/inner/x", "x") // the file a is now a folder
+	if err := snap.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "a")); err != nil || string(b) != "the file" {
+		t.Errorf("a = %q, %v", b, err)
+	}
+	if ch, _ := snap.Changes(); len(ch) != 0 {
+		t.Errorf("still changed: %v", ch)
 	}
 }
