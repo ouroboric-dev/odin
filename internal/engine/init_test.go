@@ -93,7 +93,9 @@ func TestInitCreatesEachLeafFromTheTemplateOfItsRealmAndRecordsThePin(t *testing
 			t.Errorf("%s: record %+v; the checkpoint is the template's commit, after the base", leaf, rec)
 		}
 	}
-	if r.Setup.RealmOf("repos/api").Name != "helheim-go" || r.Setup.RealmOf("repos/web").Name != "midgard-react" {
+	apiRealm, _ := r.Setup.RealmOf("repos/api")
+	webRealm, _ := r.Setup.RealmOf("repos/web")
+	if apiRealm == nil || webRealm == nil || apiRealm.Name != "helheim-go" || webRealm.Name != "midgard-react" {
 		t.Error("the run does not use each new leaf's realm")
 	}
 	if rec := r.State.Realms["helheim-go"]; rec.Version != "0.2.0" || len(rec.SHA256) != 64 {
@@ -523,5 +525,27 @@ func TestAnInitWhoseRecordFailedRecordsTheTemplateWhenRunAgain(t *testing.T) {
 		if main, _ := l.Rev(ctx, "main"); recordedAt(t, r, p) != main || main != r.State.Leaves[p].Checkpoint {
 			t.Errorf("%s: the umbrella records %s, want the template at %s", p, recordedAt(t, r, p), main)
 		}
+	}
+}
+
+// A leaf the project has with no pin is no leaf of any realm, unless the graph pack holds a recipe: init
+// refuses it before it creates anything.
+func TestInitRefusesAnExistingLeafThatPinsNoRealmUnderAGraphPackWithNoRecipe(t *testing.T) {
+	graph := realmFiles{name: "graph-toy", version: "0.1.0"}
+	r := startRealms(t, realmsSetup{nodes: initNode, script: "steps: {}\n",
+		realms: []realmFiles{graph, recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")}, leaves: map[string]string{"repos/api": ""}})
+	if err := os.MkdirAll(filepath.Join(r.Project, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leaves := "leaves:\n  repos/api:\n    realm: helheim-go\n    realm_version: 0.2.0\n    description: The API.\n  repos/web:\n    realm: helheim-go\n    realm_version: 0.2.0\n    description: The web app.\n"
+	if err := os.WriteFile(filepath.Join(r.Project, "docs", "leaves.yaml"), []byte(leaves), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "the leaf repos/api pins no realm") {
+		t.Fatalf("Advance() = %+v, %v; want a refusal naming the leaf", out, err)
+	}
+	if u, _ := schema.LoadUmbrella(r.Project); len(u.Children) != 1 {
+		t.Errorf("init created %v before it refused", u.Paths())
 	}
 }

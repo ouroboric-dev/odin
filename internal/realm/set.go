@@ -9,22 +9,22 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 )
 
-// Set is the realm leaves of one run: the lead realm, and every realm a leaf of the project names, each
-// loaded once.
+// Set is the realms of one run: every realm a leaf of the project pins, each loaded once, and the graph
+// pack when it holds a recipe.
 type Set struct {
-	Lead   *Realm
-	Realms map[string]*Realm // by name; the lead is among them
+	Realms map[string]*Realm // by name
 }
 
 // Names returns the realms' names, sorted.
 func (s *Set) Names() []string { return slices.Sorted(maps.Keys(s.Realms)) }
 
-// Collect builds the set for a run whose lead realm is loaded. pins are the pins of the project's leaves;
-// the project's graph pin is no realm pin, and run.Setup checks it. One version of a realm leaf serves the
+// Collect builds the set for a run. have are the realms already loaded: the graph pack when it holds a
+// recipe, else none. pins are the pins of the project's leaves, and the only reason to load a realm; the
+// project's graph pin is no realm pin, and run.Setup checks it. One version of a realm leaf serves the
 // whole run (change realm-leaf-naming), so Collect refuses, before anything starts: two pins of one realm
 // at different versions; and a realm store that holds another version of a realm than the one pinned.
-// Every problem is listed. load finds a realm by name, and is called once for each realm but the lead.
-func Collect(lead *Realm, pins []schema.Pin, load func(name string) (*Realm, error)) (*Set, error) {
+// Every problem is listed. load finds a realm by name, and is called once for each pinned realm that is not in have.
+func Collect(have []*Realm, pins []schema.Pin, load func(name string) (*Realm, error)) (*Set, error) {
 	var problems []string
 	byRealm := map[string][]schema.Pin{}
 	for _, p := range pins {
@@ -38,7 +38,10 @@ func Collect(lead *Realm, pins []schema.Pin, load func(name string) (*Realm, err
 			}
 		}
 	}
-	set := &Set{Lead: lead, Realms: map[string]*Realm{lead.Name: lead}}
+	set := &Set{Realms: map[string]*Realm{}}
+	for _, r := range have {
+		set.Realms[r.Name] = r
+	}
 	for _, name := range slices.Sorted(maps.Keys(byRealm)) {
 		r := set.Realms[name]
 		if r == nil {

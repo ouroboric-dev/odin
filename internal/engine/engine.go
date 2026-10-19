@@ -186,7 +186,7 @@ func startAttempt(r *run.Run, n schema.Node) (int, error) {
 
 func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
-	prompt, err := os.ReadFile(filepath.Join(r.Setup.Realm(n.Realm).Dir, n.Prompt))
+	prompt, err := os.ReadFile(r.Setup.PromptFile(n.Realm, n.Prompt))
 	if err != nil {
 		return err
 	}
@@ -343,11 +343,14 @@ func runOn(ctx context.Context, runner gungnir.Runner, spec checks.Spec, logPath
 // when the run has one; the pointer node's acceptance checks pass "" and the umbrella's dir, and run
 // on the host.
 func runChecks(ctx context.Context, r *run.Run, n schema.Node, attempt int, names []string, repo, dir string) error {
-	// A pointer node's acceptance checks, which pass no repo, are the lead realm's, run in the project; the
-	// checks of a leaf are its realm's.
-	rl := r.Setup.Realm(n.Realm)
-	if repo == "" {
-		rl = r.Setup.Realm("")
+	// A pointer node's acceptance checks, which pass no repo, are the graph pack's until every leaf realm's
+	// runs (voluspa-T009), run in the project; the checks of a leaf are its realm's.
+	rl := r.Setup.GraphPack
+	if repo != "" {
+		var err error
+		if rl, err = r.Setup.NodeRealm(n); err != nil {
+			return &nodeFailure{err}
+		}
 	}
 	return runChecksWith(ctx, r, n, attempt, names, rl, func(argv []string, logPath string) (error, error) {
 		return command(ctx, r, n.ID, repo, dir, argv, time.Duration(n.Timeout), logPath)

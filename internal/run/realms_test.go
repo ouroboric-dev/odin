@@ -51,8 +51,8 @@ func TestARealmIsNamedAndFoundInTheStore(t *testing.T) {
 	if s.GraphPack.Name != "midgard-react" || s.Graph == nil || len(s.Realms.Realms) != 1 {
 		t.Errorf("lead = %+v, realms = %v", s.GraphPack, s.Realms.Names())
 	}
-	if s.RealmOf("repos/app") != s.GraphPack || s.Realm("") != s.GraphPack {
-		t.Error("a leaf with no pin uses the lead realm")
+	if rl, err := s.RealmOf("repos/app"); err != nil || rl != s.GraphPack {
+		t.Errorf("RealmOf(repos/app) = %v, %v; a leaf with no pin is served by a graph pack that holds a recipe", rl, err)
 	}
 }
 
@@ -64,13 +64,20 @@ func TestAGraphNameWithNoStoreIsRefusedWithAHint(t *testing.T) {
 	}
 }
 
-func TestAPackWithoutAGraphCannotLead(t *testing.T) {
+// A realm pack is a leaf's flavor: --graph refuses it, by name and by path, however much it holds.
+func TestARealmPackIsRefusedAsAGraph(t *testing.T) {
 	store, cfg := realmStore(t, map[string]string{"helheim-go": "0.1.0"})
 	pack := filepath.Join(store, "helheim-go", "pack.yaml")
 	b, _ := os.ReadFile(pack)
 	os.WriteFile(pack, []byte(strings.Replace(string(b), "graph: graph.yaml\n", "", 1)), 0o644)
-	if _, err := Prepare(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: cfg, Graph: "helheim-go"}); err == nil || !strings.Contains(err.Error(), "holds no graph") {
-		t.Errorf("Prepare() = %v", err)
+	realmPath, err := filepath.Abs("../../testdata/realms/helheim-toy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, graph := range map[string]string{"by name": "helheim-go", "by path (helheim-toy)": realmPath} {
+		if _, err := Prepare(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: cfg, Graph: graph}); err == nil || !strings.Contains(err.Error(), "holds no graph") {
+			t.Errorf("%s: Prepare() = %v", name, err)
+		}
 	}
 }
 
@@ -85,8 +92,11 @@ func TestEachLeafUsesTheRealmTheProjectPinsForIt(t *testing.T) {
 	if got := strings.Join(s.Realms.Names(), ","); got != "helheim-go,midgard-react" {
 		t.Errorf("realms = %s", got)
 	}
-	if s.RealmOf("repos/api").Name != "helheim-go" || s.RealmOf("repos/app") != s.GraphPack || s.RealmOf("repos/old") != s.GraphPack {
-		t.Errorf("RealmOf: api %s, app %s, old %s", s.RealmOf("repos/api").Name, s.RealmOf("repos/app").Name, s.RealmOf("repos/old").Name)
+	api, _ := s.RealmOf("repos/api")
+	app, _ := s.RealmOf("repos/app")
+	old, _ := s.RealmOf("repos/old")
+	if api.Name != "helheim-go" || app != s.GraphPack || old != s.GraphPack {
+		t.Errorf("RealmOf: api %s, app %s, old %s", api.Name, app.Name, old.Name)
 	}
 }
 

@@ -193,7 +193,7 @@ func runAcceptance(ctx context.Context, r *run.Run, n schema.Node, attempt int, 
 	} else if err != nil {
 		return sandboxStart(err)
 	}
-	return runChecksWith(ctx, r, n, attempt, n.Acceptance, r.Setup.Realm(""), func(argv []string, logPath string) (error, error) {
+	return runChecksWith(ctx, r, n, attempt, n.Acceptance, r.Setup.GraphPack, func(argv []string, logPath string) (error, error) {
 		return commandOn(ctx, runner, n.ID, argv, time.Duration(n.Timeout), logPath)
 	})
 }

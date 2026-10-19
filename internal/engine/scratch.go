@@ -34,7 +34,7 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err != nil {
 		return &nodeFailure{err}
 	}
-	prompt, err := os.ReadFile(filepath.Join(r.Setup.Realm(n.Realm).Dir, n.Prompt))
+	prompt, err := os.ReadFile(r.Setup.PromptFile(n.Realm, n.Prompt))
 	if err != nil {
 		return err
 	}

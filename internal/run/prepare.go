@@ -78,7 +78,10 @@ func sortedUnique(in []string) []string {
 // realm that provides the leaf, and the services of that realm and of each leaf it consumes (spec §6.1,
 // §9.2, change realm-leaf-naming). The model APIs of the run's roles are open in every sandbox.
 func (s *Setup) SandboxFor(repo string) (stack string, egress []string, services []gungnir.Service, err error) {
-	r := s.RealmOf(repo)
+	r, err := s.RealmOf(repo)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	if r.Pack.Sandbox == nil {
 		return "", nil, nil, fmt.Errorf("the leaf %s is provided by the realm %s, which names no sandbox stack in its pack.yaml, and %s has a sandbox section", repo, r.Name, s.ConfigPath)
 	}
@@ -88,7 +91,11 @@ func (s *Setup) SandboxFor(repo string) (stack string, egress []string, services
 	}
 	if u := s.Project.Umbrella; u != nil {
 		for _, c := range u.Children[repo].Consumes {
-			if err := set.add(repo, s.RealmOf(c)); err != nil {
+			cr, err := s.RealmOf(c)
+			if err != nil {
+				return "", nil, nil, err
+			}
+			if err := set.add(repo, cr); err != nil {
 				return "", nil, nil, err
 			}
 		}
@@ -147,7 +154,11 @@ func (s *Setup) SnapshotSandbox() (stack string, egress []string, services []gun
 	var set serviceSet
 	realms := []*realm.Realm{s.GraphPack}
 	for _, p := range s.projectLeaves() {
-		if r := s.RealmOf(p); !slices.Contains(realms, r) {
+		r, err := s.RealmOf(p)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		if !slices.Contains(realms, r) {
 			realms = append(realms, r)
 		}
 	}

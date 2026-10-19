@@ -1,4 +1,4 @@
-// Package plan turns a lead realm's task shape into the nodes of a run (spec §4.2: "for each ready
+// Package plan turns a graph's task shape into the nodes of a run (spec §4.2: "for each ready
 // task"). A foreach node in the graph is written once; Expand makes its nodes for each task, in the leaf
 // the task names, with the prompt and checks of the realm that provides that leaf.
 package plan

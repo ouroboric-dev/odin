@@ -150,7 +150,7 @@ func TestACheckTheRealmDoesNotDefineFailsTheGateAndIsNotSentBack(t *testing.T) {
 	r := startPack(t, "key-points", "", gateChecks, nodes, fixScript)
 	// The graph is checked against the pack when the run starts; a realm that lost the check since is the
 	// case left, which a node meets when it runs.
-	delete(r.Setup.Realm("").Pack.Checks, "late")
+	delete(r.Setup.GraphPack.Pack.Checks, "late")
 	out, err := Advance(bg, r)
 	checkNotSentBack(t, r, out, err, "defines no check late")
 }

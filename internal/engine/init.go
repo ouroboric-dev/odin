@@ -120,8 +120,13 @@ func checkLeaves(r *run.Run, set *realm.Set, spec *schema.Leaves) error {
 		}
 		if c, ok := have[p]; ok {
 			realmName, version := c.Realm, c.RealmVersion
-			if realmName == "" { // a leaf with no pin is the lead realm's
-				realmName, version = r.Setup.GraphPack.Name, r.Setup.GraphPack.Version
+			if realmName == "" { // a leaf with no pin is the graph pack's when it holds a recipe, else refused
+				g, err := r.Setup.RealmOf(p)
+				if err != nil {
+					problems = append(problems, fmt.Sprintf("%s: %v", p, err))
+					continue
+				}
+				realmName, version = g.Name, g.Version
 			}
 			switch {
 			case c.Kind != schema.ChildLeaf:

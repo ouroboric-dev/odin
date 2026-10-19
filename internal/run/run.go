@@ -58,8 +58,8 @@ type Setup struct {
 	Config       *schema.Factory
 	ConfigPath   string // absolute
 	ConfigSHA256 string
-	GraphPack    *realm.Realm // the graph pack: --graph, loaded. Until the leaves' realms come from their pins, it also serves a leaf that pins none
-	Realms       *realm.Set   // every realm of the run: the graph pack's and one for each realm a leaf of the project names, each loaded once
+	GraphPack    *realm.Realm // the graph pack: --graph, loaded. It is also the realm of the leaves that pin none, when it holds a recipe
+	Realms       *realm.Set   // the realms of the run: one for each realm a leaf of the project pins, each loaded once, and the graph pack when it holds a recipe
 	Graph        *schema.Graph
 	GraphSHA256  string
 	Brief        string // absolute, or ""
@@ -153,6 +153,11 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	}
 	for _, n := range s.Graph.Nodes {
 		if err := s.checkNode(ctx, graphPath, n); err != nil {
+			return nil, err
+		}
+	}
+	for _, p := range s.Leaves() {
+		if _, err := s.RealmOf(p); err != nil {
 			return nil, err
 		}
 	}
@@ -259,7 +264,18 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 	if n.Kind != schema.KindExec && !s.isLeaf(n.Repo) {
 		return fmt.Errorf("%s: node %s works in %s, which is an umbrella; agents, merges and pointer moves work in a leaf (spec §3.3)", graphPath, n.ID, n.Repo)
 	}
-	for _, c := range slices.Concat(n.Checks, n.Acceptance) {
+	if len(n.Checks) > 0 {
+		rl, err := s.NodeRealm(n)
+		if err != nil {
+			return fmt.Errorf("%s: node %s: %w", graphPath, n.ID, err)
+		}
+		for _, c := range n.Checks {
+			if _, ok := rl.Pack.Checks[c]; !ok {
+				return fmt.Errorf("%s: node %s runs check %s, which the realm %s doesn't define", graphPath, n.ID, c, rl.Name)
+			}
+		}
+	}
+	for _, c := range n.Acceptance { // until the acceptance of every leaf's realm runs, the graph pack's
 		if _, ok := s.GraphPack.Pack.Checks[c]; !ok {
 			return fmt.Errorf("%s: node %s runs check %s, which the pack doesn't define", graphPath, n.ID, c)
 		}
@@ -279,7 +295,7 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 }
 
 // checkBody checks the roles and prompts of a foreach node's body, which run in leaves the project
-// decides later: a role must be in factory.yaml, a reviewer's prompt must be in the lead realm, and the
+// decides later: a role must be in factory.yaml, a reviewer's prompt must be in the graph pack, and the
 // prompt and checks of a leaf's loop come from the realm of the leaf, where Expand finds them.
 func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 	for _, n := range fe.Body {
@@ -315,9 +331,9 @@ func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 }
 
 // checkSession checks that a session of node (a node, or a loop's reviewer) can run: its prompt file
-// is in the realm and its role is in factory.yaml, whose adapter is built once per role.
+// is in the graph pack and its role is in factory.yaml, whose adapter is built once per role.
 func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
-	if _, err := os.Stat(filepath.Join(s.GraphPack.Dir, prompt)); err != nil {
+	if _, err := os.Stat(s.PromptFile("", prompt)); err != nil {
 		return fmt.Errorf("%s: node %s: %w", graphPath, node, err)
 	}
 	if s.Agents[role] != nil {
@@ -388,11 +404,15 @@ func (s *Setup) loadRealm(name string) (*realm.Realm, error) {
 	return realm.Load(dir)
 }
 
-// collectRealms loads the realms of the run: the lead's, and one for each realm the project's pins and
-// extra name. The pins must agree with each other and with what the realm store holds (change
+// collectRealms loads the realms of the run: one for each realm the project's pins and extra name, and
+// the graph pack when it holds a recipe. The pins must agree with each other and with what the realm store holds (change
 // realm-leaf-naming), so a mismatch stops the run before anything is created or started.
 func (s *Setup) collectRealms(extra []schema.Pin) (*realm.Set, error) {
-	set, err := realm.Collect(s.GraphPack, append(s.projectPins(), extra...), s.loadRealm)
+	var have []*realm.Realm
+	if s.GraphPack.Pack.HoldsRecipe() {
+		have = append(have, s.GraphPack)
+	}
+	set, err := realm.Collect(have, append(s.projectPins(), extra...), s.loadRealm)
 	if err != nil {
 		return nil, err
 	}
@@ -440,25 +460,47 @@ func (r *Run) AddRealms(extra []schema.Pin) error {
 	return r.Save()
 }
 
-// Realm returns the realm called name, or the graph pack for "".
-func (s *Setup) Realm(name string) *realm.Realm {
-	if name == "" {
-		return s.GraphPack
-	}
-	return s.Realms.Realms[name]
-}
-
-// RealmOf returns the realm that provides the leaf at repo: the one the project pins for it, or, until a
-// leaf's realm comes from its pin alone, the graph pack when the leaf has none.
-func (s *Setup) RealmOf(repo string) *realm.Realm {
+// RealmOf returns the realm that provides the leaf at repo: the one the leaf pins, or the graph pack when
+// the leaf pins none and the pack holds a recipe. Any other leaf with no pin is an error: every leaf of a
+// project pins its realm.
+func (s *Setup) RealmOf(repo string) (*realm.Realm, error) {
 	if u := s.Project.Umbrella; u != nil {
 		if c, ok := u.Children[repo]; ok && c.Realm != "" {
 			if r := s.Realms.Realms[c.Realm]; r != nil {
-				return r
+				return r, nil
 			}
+			return nil, fmt.Errorf("the realm %s, which the leaf %s pins, is not loaded", c.Realm, repo)
 		}
 	}
-	return s.GraphPack
+	if s.GraphPack.Pack.HoldsRecipe() {
+		return s.GraphPack, nil
+	}
+	return nil, fmt.Errorf("the leaf %s pins no realm; every leaf of a project pins its realm (realm and realm_version in %s)", repo, schema.UmbrellaFile)
+}
+
+// NodeRealm returns the realm of node n: the one it names (a task's loop names the realm of its leaf),
+// else the realm of its repo.
+func (s *Setup) NodeRealm(n schema.Node) (*realm.Realm, error) {
+	if n.Realm == "" {
+		return s.RealmOf(n.Repo)
+	}
+	if r := s.Realms.Realms[n.Realm]; r != nil {
+		return r, nil
+	}
+	return nil, fmt.Errorf("node %s names the realm %s, which is not loaded", n.ID, n.Realm)
+}
+
+// PromptFile is the path of a prompt file: in the realm called realmName, or in the graph pack for "". The
+// prompts of agent nodes and reviewers are the graph pack's; a task's implementer prompt is its leaf's
+// realm's. A realm that is not loaded gives "", which no file read accepts.
+func (s *Setup) PromptFile(realmName, file string) string {
+	if realmName == "" {
+		return filepath.Join(s.GraphPack.Dir, file)
+	}
+	if r := s.Realms.Realms[realmName]; r != nil {
+		return filepath.Join(r.Dir, file)
+	}
+	return ""
 }
 
 // isLeaf reports whether repo is a leaf: one the tree records as a leaf, or one Start creates.
@@ -512,14 +554,21 @@ func (r *Run) AddLeaf(ctx context.Context, repo string) error {
 	if err != nil {
 		return err
 	}
-	r.State.Leaves[repo] = r.leafRecord(repo, head)
+	rec, err := r.leafRecord(repo, head)
+	if err != nil {
+		return err
+	}
+	r.State.Leaves[repo] = rec
 	return r.Save()
 }
 
 // leafRecord is the record of a leaf that joins the run at head: its branch, and the realm that provides it.
-func (r *Run) leafRecord(repo, head string) LeafRecord {
-	rl := r.Setup.RealmOf(repo)
-	return LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head, Realm: rl.Name, RealmVersion: rl.Version}
+func (r *Run) leafRecord(repo, head string) (LeafRecord, error) {
+	rl, err := r.Setup.RealmOf(repo)
+	if err != nil {
+		return LeafRecord{}, err
+	}
+	return LeafRecord{Branch: Branch(r.State.ID), Base: head, Checkpoint: head, Realm: rl.Name, RealmVersion: rl.Version}, nil
 }
 
 // Leaves returns the paths of the leaves the graph works in, sorted.
@@ -633,7 +682,10 @@ func (s *Setup) recipeOf(layer string) (plan.Recipe, error) {
 	if u := s.Project.Umbrella; u == nil || u.Children[layer].Kind != schema.ChildLeaf {
 		return plan.Recipe{}, fmt.Errorf("the project has no leaf %s", layer)
 	}
-	r := s.RealmOf(layer)
+	r, err := s.RealmOf(layer)
+	if err != nil {
+		return plan.Recipe{}, err
+	}
 	rec := plan.Recipe{Realm: r.Name}
 	if r.Pack.Leaf != nil {
 		rec.Implementer, rec.Checks = r.Pack.Leaf.Implementer, r.Pack.Leaf.Checks
@@ -968,12 +1020,16 @@ func (r *Run) begin(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		r.State.Leaves[p] = r.leafRecord(p, head)
+		rec, err := r.leafRecord(p, head)
+		if err != nil {
+			return err
+		}
+		r.State.Leaves[p] = rec
 	}
 	return nil
 }
 
-// createLeaf creates leaf p in the project through the remote, from the realm's template (spec
+// createLeaf creates leaf p in the project through the remote, from the template of the graph pack's recipe (spec
 // §4.1; change remote-creates-repos).
 func (r *Run) createLeaf(ctx context.Context, p string) error {
 	s := r.Setup
