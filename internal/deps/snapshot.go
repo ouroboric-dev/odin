@@ -123,23 +123,6 @@ func (s *Snapshot) restoreGit() error {
 	return fmt.Errorf("%s: the .git (%s) cannot be put back", s.root, s.git.kind)
 }
 
-// purgeNestedGit removes a .git below a node_modules folder that the bump's code left there: git would
-// read it as a repository of its own.
-func purgeNestedGit(dir string) error {
-	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.Name() == ".git" && p != dir {
-			if err := os.RemoveAll(p); err != nil {
-				return err
-			}
-			return skip(d)
-		}
-		return nil
-	})
-}
-
 func skipped(rel string, d fs.DirEntry) bool {
 	n := d.Name()
 	return rel != "." && ((rel == ".git" && n == ".git") || (n == "node_modules" && d.IsDir()))
@@ -263,19 +246,24 @@ func same(a, b entry) bool {
 // Restore puts the product back as the snapshot was: it rewrites changed files and the ones removed, and
 // removes the files and the empty folders that were created. File times are not restored.
 func (s *Snapshot) Restore() error {
+	// The .git file first, and on its own: it is the one thing that makes the operator's own git run code of
+	// the bump, so nothing below may stand in its way. Every step after it goes on past an error and the
+	// errors are joined.
+	errs := []error{s.restoreGit()}
+	// Folders the code made unreadable are opened up, and a repository planted below node_modules is removed.
+	errs = append(errs, openUp(s.root, "."))
 	var extra, extraDirs []string
-	err := filepath.WalkDir(s.root, func(p string, d fs.DirEntry, err error) error {
+	errs = append(errs, filepath.WalkDir(s.root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if d != nil && d.IsDir() {
+				errs = append(errs, err)
+				return skip(d) // a folder that can't be read is reported, and the rest is still put back
+			}
 			return err
 		}
 		rel, _ := filepath.Rel(s.root, p)
 		switch {
 		case skipped(rel, d):
-			if d.IsDir() && d.Name() == "node_modules" {
-				if err := purgeNestedGit(p); err != nil {
-					return err
-				}
-			}
 			return skip(d)
 		case d.IsDir():
 			if !s.dirs[rel] {
@@ -287,41 +275,16 @@ func (s *Snapshot) Restore() error {
 			extra = append(extra, rel)
 		}
 		return nil
-	})
-	if err != nil {
-		return err
-	}
+	}))
 	for _, rel := range extra {
 		if err := os.Remove(filepath.Join(s.root, rel)); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 	for rel, want := range s.files {
-		p := filepath.Join(s.root, rel)
-		if info, err := os.Lstat(p); err == nil {
-			if cur, _, err := read(p, fs.FileInfoToDirEntry(info), s.limit); err == nil && same(want, cur) {
-				continue
-			}
-			if err := os.RemoveAll(p); err != nil {
-				return err
-			}
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return err
+		if err := s.putBack(rel, want); err != nil {
+			errs = append(errs, err)
 		}
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return err
-		}
-		if want.link != "" {
-			err = os.Symlink(want.link, p)
-		} else if err = os.WriteFile(p, want.data, want.mode); err == nil {
-			err = os.Chmod(p, want.mode)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	if err := s.restoreGit(); err != nil {
-		return err
 	}
 	slices.SortFunc(extraDirs, func(a, b string) int { return strings.Compare(b, a) }) // the deepest first
 	for _, rel := range extraDirs {
@@ -330,7 +293,7 @@ func (s *Snapshot) Restore() error {
 		// the check made a folder, and removing that name would delete the file just restored.
 		if info, err := os.Lstat(p); err != nil || !info.IsDir() {
 			if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) { // gone, or its parent is a file now
-				return err
+				errs = append(errs, err)
 			}
 			continue
 		}
@@ -338,8 +301,66 @@ func (s *Snapshot) Restore() error {
 			continue
 		}
 		if err := os.Remove(p); err != nil && !errors.Is(err, syscall.ENOTEMPTY) { // a folder that still holds something is not ours to remove
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// putBack writes one file of the snapshot back if it differs.
+func (s *Snapshot) putBack(rel string, want entry) error {
+	p := filepath.Join(s.root, rel)
+	if info, err := os.Lstat(p); err == nil {
+		if cur, _, err := read(p, fs.FileInfoToDirEntry(info), s.limit); err == nil && same(want, cur) {
+			return nil
+		}
+		if err := os.RemoveAll(p); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	var err error
+	if want.link != "" {
+		err = os.Symlink(want.link, p)
+	} else if err = os.WriteFile(p, want.data, want.mode); err == nil {
+		err = os.Chmod(p, want.mode)
+	}
+	return err
+}
+
+// openUp walks the folders of the product (not the top-level .git, not through a symlink), gives the owner
+// access to each one the code made unreadable, and removes a .git below a node_modules folder. It goes on
+// past an error and returns them all.
+func openUp(root, rel string) error {
+	dir := filepath.Join(root, rel)
+	var errs []error
+	if info, err := os.Lstat(dir); err == nil && info.IsDir() && info.Mode().Perm()&0o700 != 0o700 {
+		if err := os.Chmod(dir, info.Mode().Perm()|0o700); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		child := filepath.Join(rel, e.Name())
+		switch {
+		case child == ".git":
+			continue
+		case e.Name() == ".git" && rel != ".":
+			if strings.Contains(filepath.ToSlash(rel)+"/", "/node_modules/") || strings.HasPrefix(filepath.ToSlash(rel)+"/", "node_modules/") {
+				errs = append(errs, os.RemoveAll(filepath.Join(root, child)))
+				continue
+			}
+		}
+		if e.IsDir() {
+			errs = append(errs, openUp(root, child))
+		}
+	}
+	return errors.Join(errs...)
 }

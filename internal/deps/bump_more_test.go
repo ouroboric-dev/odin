@@ -190,24 +190,22 @@ func TestACheckThatChangesAPolicyFileFailsTheProductAndTheFileIsPutBack(t *testi
 }
 
 func TestAProductThatCouldNotBePutBackIsInTheLedger(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("root can remove a file of a read-only folder")
-	}
 	w := newWorld(t, map[string]string{"api": "0.41.0"})
-	ro := filepath.Join(w.root, "api", "ro")
+	dir := filepath.Join(w.root, "api")
+	write(t, dir, ".git/HEAD", "ref: refs/heads/main\n") // a .git folder, which the bump can't make again
 	w.onRun = func(_, check string) error {
-		if check == "bump" { // the tool leaves a file in a folder that it makes read-only
-			write(t, ro, "x", "x")
-			return os.Chmod(ro, 0o555)
+		if check == "bump" {
+			os.RemoveAll(filepath.Join(dir, ".git"))
+			write(t, dir, ".git", "gitdir: node_modules/.c\n")
 		}
 		return nil
 	}
-	t.Cleanup(func() { os.Chmod(ro, 0o755) })
 	rep, err := w.bumper().Bump(context.Background(), "golang.org/x/text", "0.42.0", w.product("api"), nil)
 	if err == nil || !strings.Contains(err.Error(), "could not put api back") {
 		t.Fatalf("error %v", err)
 	}
-	if len(rep.Steps) != 1 || rep.Steps[0].Verdict != "fail" || !strings.Contains(rep.Steps[0].Reason, "could not be put back") {
+	if len(rep.Steps) != 1 || rep.Steps[0].Verdict != "fail" || !strings.Contains(rep.Steps[0].Reason, "could not be put back") ||
+		!strings.Contains(rep.Steps[0].Reason, "do not run git in "+dir) {
 		t.Fatalf("report %+v", rep)
 	}
 	last := w.events[len(w.events)-1]

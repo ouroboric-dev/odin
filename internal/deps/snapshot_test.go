@@ -134,3 +134,37 @@ func TestRestoreDoesNotDeleteAFileItJustRestoredWhereTheCheckMadeAFolder(t *test
 		t.Errorf("still changed: %v", ch)
 	}
 }
+
+func TestRestorePutsTheGitFileBackFirstAndGoesOnPastAFolderItCannotRead(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads every folder")
+	}
+	dir := t.TempDir()
+	write(t, dir, ".git", "gitdir: ../.git/modules/api\n")
+	write(t, dir, "go.mod", "module m\n")
+	snap, err := Take(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, ".git", "gitdir: node_modules/.c\n")
+	write(t, dir, "node_modules/.c/.git/config", "[core]\nfsmonitor = evil\n")
+	write(t, dir, "go.mod", "changed")
+	write(t, dir, "created/file", "x")
+	locked := filepath.Join(dir, "node_modules", "zz")
+	os.MkdirAll(locked, 0o755)
+	os.Chmod(locked, 0)
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	snap.Restore() // may report the folder it could not open; the rest is put back
+	if b, _ := os.ReadFile(filepath.Join(dir, ".git")); string(b) != "gitdir: ../.git/modules/api\n" {
+		t.Errorf(".git = %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "go.mod")); string(b) != "module m\n" {
+		t.Errorf("go.mod = %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "node_modules/.c/.git")); !os.IsNotExist(err) {
+		t.Errorf("the planted repository is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "created")); !os.IsNotExist(err) {
+		t.Errorf("the created folder is still there: %v", err)
+	}
+}

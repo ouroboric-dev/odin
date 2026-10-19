@@ -203,6 +203,10 @@ func (b *Bumper) stage(ctx context.Context, pkg string, to Version, pl plan) (ve
 			} else {
 				verdict, reason = "fail", "the bump stopped ("+cut(err.Error(), 120)+") and the product could not be put back"
 			}
+			if changed, gerr := snap.GitChanged(); gerr != nil || changed { // the one change that makes git run the bump's code
+				reason += "; the .git of the product is not as it was: do not run git in " + pl.p.Dir
+				err = errors.Join(err, fmt.Errorf("do not run git in %s: its .git could not be put back", pl.p.Dir))
+			}
 		}
 	}
 	return verdict, reason, err
