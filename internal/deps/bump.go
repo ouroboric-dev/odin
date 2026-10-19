@@ -65,6 +65,7 @@ type Bumper struct {
 	Log     func(gungnir.Event) error // the ledger of the bump
 	LogDir  string                    // where the output of each command is kept
 	Timeout time.Duration             // zero is DefaultTimeout
+	Guard   func(Product) error       // refuses a product that broke a sandbox rule (leaf.Guard); nil in tests
 }
 
 type plan struct {
@@ -172,6 +173,11 @@ func (b *Bumper) plan(pkg, version string, canary Product, rollout []Product) ([
 // stage bumps one product and runs its ladder. A product that fails is put back as it was; the error is
 // for what is not the product's fault: the sandbox, the log, the snapshot or a context that ended.
 func (b *Bumper) stage(ctx context.Context, pkg string, to Version, pl plan) (verdict, reason string, err error) {
+	if b.Guard != nil { // a product that already breaks a rule is not bumped: the bump would hide it
+		if err := b.Guard(pl.p); err != nil {
+			return "", "", fmt.Errorf("%s breaks a sandbox rule before the bump: %w", pl.p.Name, err)
+		}
+	}
 	snap, err := Take(pl.p.Dir)
 	if err != nil {
 		return "", "", err
@@ -218,6 +224,11 @@ func (b *Bumper) apply(ctx context.Context, runner gungnir.Runner, snap *Snapsho
 	if !res.Passed {
 		return "fail", "the tool failed: " + ended(res), nil
 	}
+	if reason, err := b.escaped(snap, pl); err != nil {
+		return "", "", err
+	} else if reason != "" {
+		return "fail", "the tool " + reason, nil
+	}
 	if extra, err := outside(snap, pl); err != nil {
 		return "", "", err
 	} else if len(extra) > 0 {
@@ -243,6 +254,11 @@ func (b *Bumper) apply(ctx context.Context, runner gungnir.Runner, snap *Snapsho
 			if err := b.Log(gungnir.Event{Name: gungnir.EventDepsChecked, Realm: pl.p.Realm, Verdict: v}); err != nil {
 				return "", "", err
 			}
+		}
+		if reason, err := b.escaped(snap, pl); err != nil {
+			return "", "", err
+		} else if reason != "" {
+			return "fail", "the check " + name + " " + reason, nil
 		}
 		if !res.Passed {
 			return "fail", "the check " + name + " failed: " + ended(res), nil
@@ -332,4 +348,22 @@ func freeze(pl plan) (map[string]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// escaped says whether the product broke a sandbox rule: the top-level .git is not as it was, or the guard
+// of the leaf (a rewritten .git file, a git repository below the top level, node_modules included) refuses.
+func (b *Bumper) escaped(snap *Snapshot, pl plan) (string, error) {
+	changed, err := snap.GitChanged()
+	if err != nil {
+		return "", err
+	}
+	if changed {
+		return "changed the .git of the product", nil
+	}
+	if b.Guard != nil {
+		if err := b.Guard(pl.p); err != nil {
+			return "broke a sandbox rule: " + err.Error(), nil
+		}
+	}
+	return "", nil
 }

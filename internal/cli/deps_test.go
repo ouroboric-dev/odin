@@ -24,6 +24,9 @@ v="${2#*@v}"
 printf 'module m\n\ngo 1.26\n\nrequire golang.org/x/text v%s\n' "$v" > go.mod
 `
 
+// depsFakeGoExtra is more shell for the stand-in go to run after it wrote go.mod; a test sets it.
+var depsFakeGoExtra string
+
 func goMod(v string) string {
 	return "module m\n\ngo 1.26\n\nrequire golang.org/x/text v" + v + "\n"
 }
@@ -31,7 +34,7 @@ func goMod(v string) string {
 func depsProject(t *testing.T, stack string) (dir, config string) {
 	t.Helper()
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo+depsFakeGoExtra), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -264,5 +267,21 @@ func TestDepsBumpRefusalsWithASandboxStartNoSandboxAndLeaveNoTrace(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".factory", "deps")); !os.IsNotExist(err) || started != 0 {
 		t.Errorf("a refusal started %d sandbox driver(s) or left the folder of a bump: %v", started, err)
+	}
+}
+
+func TestDepsBumpFailsAToolThatPlantsAGitRepositoryUnderNodeModulesAndRemovesIt(t *testing.T) {
+	depsFakeGoExtra = "mkdir -p node_modules/.c/.git && echo '[core]' > node_modules/.c/.git/config\n"
+	t.Cleanup(func() { depsFakeGoExtra = "" })
+	dir, config := depsProject(t, "")
+	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api", "--rollout", "repos/web")
+	if code != ExitFailed || !strings.Contains(errOut, "repos/api failed") || !strings.Contains(out, "git repository") {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	if mod(t, dir, "api") != goMod("0.41.0") || mod(t, dir, "web") != goMod("0.41.0") {
+		t.Error("a go.mod is not as it was")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "repos/api/node_modules/.c/.git")); !os.IsNotExist(err) {
+		t.Errorf("the planted repository is still there: %v", err)
 	}
 }

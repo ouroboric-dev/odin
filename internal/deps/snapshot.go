@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // MaxSnapshot is the most bytes of files a snapshot keeps. A product bigger than this is refused: the
@@ -29,6 +31,112 @@ type Snapshot struct {
 	root  string
 	files map[string]entry
 	dirs  map[string]bool
+	git   gitState // the top-level .git, which the walks skip but the bump still watches
+}
+
+// maxGitFile bounds what is read of the leaf's .git: git writes one short line.
+const maxGitFile = 4096
+
+// gitState is the top-level .git as it was: absent, a directory, a symlink, or a file and its bytes.
+type gitState struct {
+	kind string // absent, dir, link, file, other
+	data string // the file's bytes, or the link's target
+	mode fs.FileMode
+}
+
+func readGit(root string) (gitState, error) {
+	p := filepath.Join(root, ".git")
+	info, err := os.Lstat(p)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return gitState{kind: "absent"}, nil
+	case err != nil:
+		return gitState{}, err
+	case info.IsDir():
+		return gitState{kind: "dir"}, nil
+	case info.Mode()&fs.ModeSymlink != 0:
+		l, err := os.Readlink(p)
+		return gitState{kind: "link", data: l}, err
+	case !info.Mode().IsRegular():
+		return gitState{kind: "other"}, nil
+	case info.Size() > maxGitFile:
+		return gitState{kind: "file", data: fmt.Sprintf("a file of %d bytes", info.Size()), mode: info.Mode().Perm()}, nil
+	}
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return gitState{}, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxGitFile+1))
+	return gitState{kind: "file", data: string(b), mode: info.Mode().Perm()}, err
+}
+
+// GitChanged reports whether the top-level .git is not as it was: a rewritten .git file is how code in a
+// leaf points the operator's own git at a repository it made.
+func (s *Snapshot) GitChanged() (bool, error) {
+	now, err := readGit(s.root)
+	return now != s.git, err
+}
+
+// restoreGit puts the .git file back: the name is replaced by a new file and never written through.
+func (s *Snapshot) restoreGit() error {
+	now, err := readGit(s.root)
+	if err != nil {
+		return err
+	}
+	if now == s.git {
+		return nil
+	}
+	p := filepath.Join(s.root, ".git")
+	switch s.git.kind {
+	case "absent":
+		return os.RemoveAll(p)
+	case "file":
+		if len(s.git.data) > 0 && strings.HasPrefix(s.git.data, "a file of ") {
+			return fmt.Errorf("%s: the .git file was not a git pointer and cannot be put back", s.root)
+		}
+		f, err := os.CreateTemp(s.root, ".git.ygg-*")
+		if err != nil {
+			return err
+		}
+		_, err = f.WriteString(s.git.data)
+		if err == nil {
+			err = f.Chmod(s.git.mode)
+		}
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err == nil {
+			if info, lerr := os.Lstat(p); lerr == nil && info.IsDir() {
+				err = os.RemoveAll(p) // a repository the bump's code planted where the file was
+			}
+		}
+		if err == nil {
+			err = os.Rename(f.Name(), p)
+		}
+		if err != nil {
+			os.Remove(f.Name())
+		}
+		return err
+	}
+	return fmt.Errorf("%s: the .git (%s) cannot be put back", s.root, s.git.kind)
+}
+
+// purgeNestedGit removes a .git below a node_modules folder that the bump's code left there: git would
+// read it as a repository of its own.
+func purgeNestedGit(dir string) error {
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Name() == ".git" && p != dir {
+			if err := os.RemoveAll(p); err != nil {
+				return err
+			}
+			return skip(d)
+		}
+		return nil
+	})
 }
 
 func skipped(rel string, d fs.DirEntry) bool {
@@ -50,7 +158,11 @@ func Take(root string) (*Snapshot, error) { return takeLimited(root, MaxSnapshot
 func takeLimited(root string, limit int64) (*Snapshot, error) {
 	s := &Snapshot{root: root, files: map[string]entry{}, dirs: map[string]bool{}}
 	var size int64
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	var err error
+	if s.git, err = readGit(root); err != nil {
+		return s, err
+	}
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -141,6 +253,11 @@ func (s *Snapshot) Restore() error {
 		rel, _ := filepath.Rel(s.root, p)
 		switch {
 		case skipped(rel, d):
+			if d.IsDir() && d.Name() == "node_modules" {
+				if err := purgeNestedGit(p); err != nil {
+					return err
+				}
+			}
 			return skip(d)
 		case d.IsDir():
 			if !s.dirs[rel] {
@@ -184,6 +301,9 @@ func (s *Snapshot) Restore() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := s.restoreGit(); err != nil {
+		return err
 	}
 	slices.SortFunc(extraDirs, func(a, b string) int { return strings.Compare(b, a) }) // the deepest first
 	for _, rel := range extraDirs {

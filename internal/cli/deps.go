@@ -16,6 +16,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/deps"
 	"github.com/ouroboric-dev/odin/internal/git"
+	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/realm"
@@ -114,7 +115,15 @@ func (c *command) deps(args []string) int {
 			l.Close()
 		}
 	}()
-	b := &deps.Bumper{Open: opener, LogDir: filepath.Join(work, "logs"), Log: func(e gungnir.Event) error {
+	// The leaf's guard also runs the bump: its .git file is the one git made, and no repository is planted below it.
+	guard := func(p deps.Product) error {
+		l, err := leaf.Open(opener.places[p.Dir].leaf)
+		if err != nil {
+			return err
+		}
+		return l.Guard()
+	}
+	b := &deps.Bumper{Open: opener, Guard: guard, LogDir: filepath.Join(work, "logs"), Log: func(e gungnir.Event) error {
 		if l == nil {
 			if err := os.MkdirAll(work, 0o755); err != nil {
 				return err

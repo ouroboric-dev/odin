@@ -285,3 +285,50 @@ func TestAUnitRungThatRewritesAnNpmLockFailsTheProductAndTheLockIsPutBack(t *tes
 		t.Errorf("package-lock.json = %q", b)
 	}
 }
+
+func TestAUnitRungThatRepointsTheGitFileFailsTheProductAndTheGitFileIsPutBack(t *testing.T) {
+	for _, check := range []string{"bump", "unit"} {
+		w := newWorld(t, map[string]string{"api": "0.41.0"})
+		write(t, filepath.Join(w.root, "api"), ".git", "gitdir: ../.git/modules/api\n")
+		write(t, filepath.Join(w.root, "api"), "node_modules/.c/HEAD", "ref: refs/heads/x\n")
+		repoint := [2]string{".git", "gitdir: node_modules/.c\n"}
+		if check == "bump" {
+			w.also["api"] = repoint
+		} else {
+			w.during["api:unit"] = repoint
+		}
+		before := w.bytes("api")
+		rep, err := w.bumper().Bump(context.Background(), "golang.org/x/text", "0.42.0", w.product("api"), nil)
+		if err != nil || !rep.Failed() || !strings.Contains(rep.Steps[0].Reason, ".git") {
+			t.Fatalf("%s: report %+v, error %v", check, rep, err)
+		}
+		if !same2(before, w.bytes("api")) {
+			t.Errorf("%s: the .git file was not put back: %v", check, w.bytes("api"))
+		}
+	}
+}
+
+func TestAGitRepositoryPlantedUnderNodeModulesFailsTheProductAndIsRemoved(t *testing.T) {
+	w := newWorld(t, map[string]string{"api": "0.41.0"})
+	w.during["api:unit"] = [2]string{"node_modules/.c/.git/config", "[core]\nfsmonitor = evil"}
+	b := w.bumper()
+	b.Guard = nestedGit // what leaf.Guard refuses
+	before := w.bytes("api")
+	rep, err := b.Bump(context.Background(), "golang.org/x/text", "0.42.0", w.product("api"), nil)
+	if err != nil || !rep.Failed() || !strings.Contains(rep.Steps[0].Reason, "git repository") {
+		t.Fatalf("report %+v, error %v", rep, err)
+	}
+	if !same2(before, w.bytes("api")) {
+		t.Errorf("not put back: %v", w.bytes("api"))
+	}
+}
+
+// nestedGit stands for leaf.Guard: a .git below the top level is refused, node_modules included.
+func nestedGit(p Product) error {
+	return filepath.WalkDir(p.Dir, func(q string, d os.DirEntry, err error) error {
+		if err == nil && d.Name() == ".git" && q != filepath.Join(p.Dir, ".git") {
+			return errors.New("the leaf holds a git repository at " + q)
+		}
+		return err
+	})
+}
