@@ -140,17 +140,21 @@ func (s *Setup) projectLeaves() []string {
 // leafRealms are the distinct realms of the project's leaves, sorted by name: the realm each leaf of the
 // project provides, and the graph pack when Start creates a leaf from it. extra are realms of leaves that
 // init is about to create.
-func (s *Setup) leafRealms(extra []*realm.Realm) []*realm.Realm {
+// A leaf whose realm does not resolve is an error, never a leaf that adds nothing. Realms are told apart
+// by name: init's planned realms are not the pointers the run loaded.
+func (s *Setup) leafRealms(extra []*realm.Realm) ([]*realm.Realm, error) {
 	var out []*realm.Realm
 	add := func(r *realm.Realm) {
-		if r != nil && !slices.Contains(out, r) {
+		if r != nil && !slices.ContainsFunc(out, func(x *realm.Realm) bool { return x.Name == r.Name }) {
 			out = append(out, r)
 		}
 	}
 	for _, p := range s.projectLeaves() {
-		if r, err := s.RealmOf(p); err == nil { // Prepare has refused a leaf with no realm
-			add(r)
+		r, err := s.RealmOf(p)
+		if err != nil {
+			return nil, err
 		}
+		add(r)
 	}
 	if len(s.Create) > 0 {
 		add(s.GraphPack)
@@ -159,15 +163,22 @@ func (s *Setup) leafRealms(extra []*realm.Realm) []*realm.Realm {
 		add(r)
 	}
 	slices.SortFunc(out, func(a, b *realm.Realm) int { return strings.Compare(a.Name, b.Name) })
-	return out
+	return out, nil
 }
 
 // AcceptanceRealms are the realms of the project's leaves, and of the leaves Start creates, that define the
 // acceptance check, sorted by name: a pointer move runs the check of each, in this order (change voluspa).
-func (s *Setup) AcceptanceRealms(check string) []*realm.Realm { return s.acceptanceRealms(check, nil) }
+// A leaf whose realm does not resolve is an error.
+func (s *Setup) AcceptanceRealms(check string) ([]*realm.Realm, error) {
+	return s.acceptanceRealms(check, nil)
+}
 
-func (s *Setup) acceptanceRealms(check string, extra []*realm.Realm) []*realm.Realm {
-	return slices.DeleteFunc(s.leafRealms(extra), func(r *realm.Realm) bool { return len(r.Pack.Checks[check]) == 0 })
+func (s *Setup) acceptanceRealms(check string, extra []*realm.Realm) ([]*realm.Realm, error) {
+	all, err := s.leafRealms(extra)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(all, func(r *realm.Realm) bool { return len(r.Pack.Checks[check]) == 0 }), nil
 }
 
 // CheckAcceptance refuses, before any leaf exists or any sandbox starts, a graph whose nodes ask for an
@@ -180,7 +191,10 @@ func (s *Setup) CheckAcceptance(extra []*realm.Realm) error {
 	}
 	for _, n := range s.Graph.All() {
 		for _, c := range n.Acceptance {
-			realms := s.acceptanceRealms(c, extra)
+			realms, err := s.acceptanceRealms(c, extra)
+			if err != nil {
+				return err
+			}
 			if len(realms) == 0 {
 				return fmt.Errorf("node %s runs the acceptance check %s, and no realm of this project has an acceptance check %s: a move would check less than it does today", n.ID, c, c)
 			}
@@ -205,8 +219,12 @@ func (s *Setup) SnapshotSandbox(rl *realm.Realm) (stack string, egress []string,
 	if rl.Acceptance == "" {
 		return "", nil, nil, fmt.Errorf("the realm %s names no acceptance stack, so there is no sandbox for a snapshot of the project (sandbox.acceptance in its pack.yaml)", rl.Name)
 	}
+	leaves, err := s.leafRealms(nil)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	var set serviceSet
-	for _, r := range s.leafRealms(nil) {
+	for _, r := range leaves {
 		if err := set.add("the snapshot", r); err != nil {
 			return "", nil, nil, err
 		}

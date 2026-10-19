@@ -28,6 +28,7 @@ type realmsSetup struct {
 	realms                             []realmFiles
 	leaves                             map[string]string
 	hooks                              run.Hooks
+	project                            *string              // when set, tryRealms stores the project's folder here, so a test can look at it after a refused Start
 	sandbox                            *sandboxfake.Sandbox // when set, the config has a sandbox section and the fake runs the leaves' commands
 }
 
@@ -80,6 +81,9 @@ func tryRealms(t *testing.T, o realmsSetup) (*run.Run, error) {
 		root.Children[path] = treetest.Node{Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: pin}
 	}
 	project := treetest.Build(t, root)
+	if o.project != nil {
+		*o.project = project
+	}
 	if o.mode == "" {
 		o.mode = "key-points"
 	}

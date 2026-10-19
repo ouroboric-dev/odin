@@ -2,12 +2,14 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 )
@@ -224,11 +226,16 @@ func initRefused(t *testing.T, r *run.Run, want string) {
 func TestAProjectWhereNoLeafRealmHasTheAcceptanceCheckIsRefused(t *testing.T) {
 	const want = "no realm of this project has an acceptance check"
 	t.Run("Prepare, when the project has leaves", func(t *testing.T) {
-		r, err := tryRealms(t, realmsSetup{mode: "unattended", nodes: taskShapeWithAcceptance, script: "steps: {}\n",
+		var project string
+		r, err := tryRealms(t, realmsSetup{mode: "unattended", nodes: taskShapeWithAcceptance, script: "steps: {}\n", project: &project,
 			realms: []realmFiles{recipeRealm("api-toy", "0.1.0", "api.txt", "API."), recipeRealm("web-toy", "0.1.0", "web.txt", "Web.")},
 			leaves: map[string]string{"repos/api": "api-toy", "repos/web": "web-toy"}})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("Start() = %v, %v; want a refusal: %s", r, err, want)
+		}
+		// No run folder, so no ledger, transcript or session: nothing ran before the refusal.
+		if _, err := os.Stat(filepath.Join(project, ".factory")); err == nil {
+			t.Error("a refused Start left .factory behind")
 		}
 	})
 	t.Run("init, before any leaf is created", func(t *testing.T) {
@@ -280,4 +287,24 @@ func TestARealmWithAnAcceptanceCheckAndNoAcceptanceStackIsRefusedBeforeTheRunSta
 			t.Error("a sandbox came up before the refusal")
 		}
 	})
+}
+
+func TestALeafWhoseRealmDoesNotResolveAtMoveTimeFailsTheMove(t *testing.T) {
+	realms := twoRealms()
+	realms[0].pack += "  accept: [sh, -c, \"echo midgard > accepted-by.txt\"]\n"
+	r := startRealms(t, realmsSetup{realms: realms, leaves: map[string]string{"repos/api": "helheim-go", "repos/web": "midgard-react"},
+		nodes: "  - { id: api-touch, kind: exec, run: [echo, api], repo: repos/api }\n  - { id: web-touch, kind: exec, run: [echo, web], repo: repos/web }\n", script: "steps: {}\n"})
+	delete(r.Setup.Realms.Realms, "helheim-go") // its check, if it had one, must not be dropped silently
+	move := schema.Node{ID: "move", Kind: schema.KindPointer, Repo: "repos/web", Acceptance: []string{"accept"}}
+	err := runAcceptance(bg, r, move, 1, ".", r.Project, "repos/web", "")
+	var nf *nodeFailure
+	if !errors.As(err, &nf) || !strings.Contains(err.Error(), "helheim-go") || !strings.Contains(err.Error(), "not loaded") {
+		t.Fatalf("runAcceptance() = %v; want a failure of the move naming the realm that is not loaded", err)
+	}
+	if got := acceptanceLines(t, r); len(got) != 0 {
+		t.Errorf("acceptance lines = %v; none may pass", got)
+	}
+	if _, err := os.Stat(filepath.Join(r.Project, "accepted-by.txt")); err == nil {
+		t.Error("an acceptance check ran")
+	}
 }

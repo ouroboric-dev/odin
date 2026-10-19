@@ -223,3 +223,25 @@ func TestTheSnapshotRefusesALeafThatLacksTheRecordedCommit(t *testing.T) {
 		t.Errorf("SnapshotRunner() = %v; want a *SnapshotError naming repos/api", err)
 	}
 }
+
+// Init hands the run realms it planned, which are not the pointers the run loaded; the same realm reached
+// twice is one realm, and its check runs once.
+func TestTheSameRealmReachedThroughTwoPointersIsOneAcceptanceRealm(t *testing.T) {
+	r, _, err := snapshotRun(t, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := webRealm(t, r)
+	planned := *loaded
+	got, err := r.Setup.acceptanceRealms("unit", []*realm.Realm{&planned})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, x := range got {
+		names = append(names, x.Name)
+	}
+	if strings.Join(names, ",") != "helheim-go,midgard-react" {
+		t.Errorf("acceptance realms = %v; want each realm once, by name", names)
+	}
+}

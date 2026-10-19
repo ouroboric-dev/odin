@@ -184,7 +184,10 @@ func runPointer(ctx context.Context, r *run.Run, n schema.Node) error {
 // realm having the check is a failure, never a pass: Prepare refuses such a project, and this is the second line.
 func runAcceptance(ctx context.Context, r *run.Run, n schema.Node, attempt int, parentRepo, parentDir, leafRepo, to string) error {
 	for _, c := range n.Acceptance {
-		realms := r.Setup.AcceptanceRealms(c)
+		realms, err := r.Setup.AcceptanceRealms(c)
+		if err != nil {
+			return &nodeFailure{err}
+		}
 		if len(realms) == 0 {
 			return &nodeFailure{fmt.Errorf("node %s runs the acceptance check %s, and no realm of this project has an acceptance check %s", n.ID, c, c)}
 		}
