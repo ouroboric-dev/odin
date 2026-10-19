@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/ouroboric-dev/gungnir"
 )
@@ -84,5 +86,44 @@ func TestAFailedLastTryIsAFailureWhateverCameBefore(t *testing.T) {
 		if got[title] != want {
 			t.Errorf("%q = %q, want %q", title, got[title], want)
 		}
+	}
+}
+
+// readIn fails the test if ReadResults waits on a pipe: a regression hangs, so it must not hang the test.
+func readIn(t *testing.T, path string) error {
+	t.Helper()
+	errc := make(chan error, 1)
+	go func() { _, err := ReadResults(path); errc <- err }()
+	select {
+	case err := <-errc:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("ReadResults did not return: it opened a file that is not a regular file")
+		return nil
+	}
+}
+
+func TestAResultsFileThatIsANamedPipeIsRefusedWithoutWaiting(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "results.json")
+	if err := syscall.Mkfifo(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := readIn(t, p); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("error %v", err)
+	}
+}
+
+func TestAResultsFileThatIsASymlinkIsRefusedAndNotFollowed(t *testing.T) {
+	dir := t.TempDir()
+	other := filepath.Join(dir, "other.json")
+	if err := os.WriteFile(other, []byte(playwrightReport), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "results.json")
+	if err := os.Symlink(other, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := readIn(t, p); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("error %v", err)
 	}
 }

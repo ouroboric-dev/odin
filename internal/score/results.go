@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/ouroboric-dev/gungnir"
 )
@@ -77,11 +78,22 @@ type reportSpec struct {
 // when one fails, times out or is interrupted, and is skipped when none ran. A report with no spec,
 // or one that names a title twice, is an error.
 func ReadResults(path string) (map[string]gungnir.ScenarioStatus, error) {
-	f, err := os.Open(path)
+	// The folder is the grader's to write: a named pipe would hang Odin, a symlink would make it read another file.
+	st, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("the suite wrote no results: %w", err)
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("the suite's results %s are not a regular file", path)
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("the suite wrote no results: %w", err)
 	}
 	defer f.Close()
+	if now, err := f.Stat(); err != nil || !os.SameFile(st, now) || !now.Mode().IsRegular() {
+		return nil, fmt.Errorf("the suite's results %s changed while they were opened, or are not a regular file", path)
+	}
 	b, err := io.ReadAll(io.LimitReader(f, maxResults+1))
 	if err != nil {
 		return nil, err
