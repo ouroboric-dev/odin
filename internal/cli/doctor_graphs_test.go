@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ouroboric-dev/odin/internal/run"
 )
 
 // graphStore writes a graph store holding the pack software (with a graph) and returns it.
@@ -142,5 +144,130 @@ func TestDoctorRefusesAnExecRecordWithAProcessGroupOfOneOrLess(t *testing.T) {
 		if code != ExitFailed || !strings.Contains(out, "ERROR run "+id+": ") || !strings.Contains(out, "corrupt exec record") || strings.Contains(out, "stopped it") {
 			t.Errorf("pgid %d: doctor exit %d, want an ERROR for a corrupt exec record:\n%s", pgid, code, out)
 		}
+	}
+}
+
+// withStores returns a copy of config with a realms section for realms and a graphs section for graphs.
+func withStores(t *testing.T, config, realms, graphs string) string {
+	t.Helper()
+	b, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "factory.yaml")
+	if err := os.WriteFile(out, append(b, []byte("realms:\n  dir: "+realms+"\ngraphs:\n  dir: "+graphs+"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// Ruling R16: when graphs.dir is realms.dir, a pack with no graph is a realm, not a broken graph pack.
+func TestDoctorTakesAPackWithNoGraphForARealmWhenTheTwoStoresAreOneFolder(t *testing.T) {
+	dir, plain := project(t, "script.yaml", "")
+	store := graphStore(t) // holds the graph pack software
+	realmDir := filepath.Join(store, "api-leaf")
+	if err := os.MkdirAll(realmDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realmDir, "pack.yaml"), []byte("name: api-leaf\nversion: 0.2.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	line := func(out, prefix string) string {
+		for _, l := range strings.Split(out, "\n") {
+			if strings.Contains(l, prefix) {
+				return l
+			}
+		}
+		return ""
+	}
+	_, out, _ := ygg(t, "doctor", "--project", dir, "--config", withStores(t, plain, store, store))
+	if got := line(out, "graphs: "); got != "OK    graphs: "+store+" (software 0.1.0)" {
+		t.Errorf("shared store: graphs line = %q, want the graph pack listed and the realm pack not an error:\n%s", got, out)
+	}
+	if strings.Contains(out, "ERROR graphs") {
+		t.Errorf("an ERROR for graphs in a store that is also the realm store:\n%s", out)
+	}
+	// Separate stores keep T011's rule.
+	realms := t.TempDir()
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", withStores(t, plain, realms, store))
+	if code != ExitFailed || !strings.Contains(out, "ERROR graphs: api-leaf: the pack holds no graph") {
+		t.Errorf("separate stores: exit %d, want an ERROR for the pack with no graph:\n%s", code, out)
+	}
+	// A shared store that holds no graph pack at all, and a pack that doesn't load or is not its folder's, are errors.
+	onlyRealms := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(onlyRealms, "api-leaf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(onlyRealms, "api-leaf", "pack.yaml"), []byte("name: api-leaf\nversion: 0.2.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ = ygg(t, "doctor", "--project", dir, "--config", withStores(t, plain, onlyRealms, onlyRealms))
+	if !strings.Contains(out, "ERROR graphs: "+onlyRealms+" holds no graph pack") {
+		t.Errorf("shared store with no graph pack:\n%s", out)
+	}
+	if err := os.MkdirAll(filepath.Join(store, "wrongname"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "wrongname", "pack.yaml"), []byte("name: other\nversion: 0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(store, "broken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "broken", "pack.yaml"), []byte("name: [oops\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ = ygg(t, "doctor", "--project", dir, "--config", withStores(t, plain, store, store))
+	for _, w := range []string{"ERROR graphs: broken: ", "ERROR graphs: " + filepath.Join(store, "wrongname") + " holds the graph other"} {
+		if !strings.Contains(out, w) {
+			t.Errorf("shared store: output lacks %q:\n%s", w, out)
+		}
+	}
+}
+
+// The layout the smoke-realms example ships: one folder holds the graph pack and the leaf realms.
+func TestDoctorGivesNoErrorForTheSmokeRealmsExampleLayout(t *testing.T) {
+	dir, plain := project(t, "script.yaml", "")
+	store, err := filepath.Abs("../../testdata/smoke-realms")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := ygg(t, "doctor", "--project", dir, "--config", withStores(t, plain, store, store))
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "ERROR graphs") || strings.Contains(l, "ERROR realms") {
+			t.Errorf("doctor on the smoke-realms layout: %s", l)
+		}
+	}
+	if !strings.Contains(out, "OK    graphs: "+store+" (smoke-lead ") {
+		t.Errorf("doctor does not list smoke-lead as the graph pack:\n%s", out)
+	}
+}
+
+// A run from before graphs that a process still holds is being run by an older ygg: doctor says so, and does not
+// tell the operator to remove the folder of a run that is still going.
+func TestDoctorSaysAnOlderYggIsStillRunningARunBeforeGraphsAndKeepsItsFolder(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	id := "20261001-130000-abcdef"
+	runDir := filepath.Join(dir, ".factory", "runs", id)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(fmt.Sprintf(`{"schema":"ygg.run/v2","id":%q,"status":"running"}`, id)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := run.Lock(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	if code != ExitDone || strings.Contains(out, "ERROR") {
+		t.Errorf("doctor: exit %d; a run from before graphs is a warning only:\n%s", code, out)
+	}
+	if want := "WARN  run " + id + ": an older ygg is still running this run (schema ygg.run/v2); this ygg can't resume it"; !strings.Contains(out, want) {
+		t.Errorf("doctor's output lacks %q:\n%s", want, out)
+	}
+	if strings.Contains(out, "remove its folder") {
+		t.Errorf("doctor tells the operator to remove the folder of a run that is still going:\n%s", out)
 	}
 }

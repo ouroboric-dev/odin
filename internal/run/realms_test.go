@@ -198,8 +198,8 @@ func TestTheFirstRunPinsTheGraphItWasGivenByName(t *testing.T) {
 	}
 	ledger, _ := os.ReadFile(filepath.Join(Dir(project, r.State.ID), "ledger.jsonl"))
 	first, _, _ := strings.Cut(string(ledger), "\n")
-	if !strings.Contains(first, `"event":"run_started"`) || !strings.Contains(first, `"ygg.realm.name":"midgard-react"`) || !strings.Contains(first, `"ygg.realm.version":"0.1.0"`) ||
-		!strings.Contains(first, "realms: midgard-react 0.1.0 sha256:") {
+	if !strings.Contains(first, `"event":"run_started"`) || !strings.Contains(first, "graph: midgard-react 0.1.0 sha256:") || !strings.Contains(first, "realms: midgard-react 0.1.0 sha256:") ||
+		strings.Contains(first, "ygg.realm") {
 		t.Errorf("the first ledger line lacks the realms:\n%s", first)
 	}
 	// The next run finds the pin and agrees with it.
@@ -338,5 +338,26 @@ func TestARunTakesTheRealmsNewPinsNameAfterItStarted(t *testing.T) {
 	}
 	if len(r.Setup.Realms.Realms) != 2 || len(r.State.Realms) != 2 {
 		t.Error("a refused AddRealms changed the run")
+	}
+}
+
+// A run that started with no realm records none. A project that names a realm after that is not the project the
+// run began with, and the first resume says so: the check does not skip a state whose realms are empty.
+func TestAResumeRefusesARealmTheProjectNamesAndTheRunDidNotStartWith(t *testing.T) {
+	_, cfg := realmStore(t, map[string]string{"midgard-react": "0.1.0", "helheim-go": "0.2.0"})
+	project := treetest.Build(t, pinned("midgard-react", "0.1.0", map[string]treetest.Pin{"repos/api": {Realm: "helheim-go", Version: "0.2.0"}}))
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := r.State.ID
+	r.State.Realms = nil // as the state of a run that started before the project named helheim-go
+	if err := r.Save(); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	_, err = Open(ctx, project, id, "")
+	if err == nil || !strings.Contains(err.Error(), "the project now names the realm helheim-go") {
+		t.Errorf("Open() = %v, want a refusal that names the realm the run did not start with", err)
 	}
 }

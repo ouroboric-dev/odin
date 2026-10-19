@@ -30,9 +30,11 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   of what it reads, an `out/` folder); `publish` copies its documents into the project and commits them,
   after checking they are documents and hold no secret; `tasks` reads `tasks.md`, applies the Definition
   of Ready and writes `features.json`; `init` creates the leaves the spec stage named from their realms'
-  templates and records the pins. Scratch sessions (the spec, plan and review stages and the reviewers)
-  run in a Gleipnir sandbox on the factory layer, the stack every session shares, never on a realm's
-  stack; the model APIs of their adapters are their only egress.
+  templates and records the pins. Scratch sessions (the nodes marked `scratch: true`: the design, spec,
+  plan and reuse-review stages and the conformance check) run in a Gleipnir sandbox on the factory layer,
+  the stack every session shares, never on a realm's stack; the model APIs of their adapters are their
+  only egress. A loop's implementers and reviewers are no scratch sessions: they run in the leaf's
+  sandbox, on the realm's stack.
 - Repeats a task shape for every ready task (`foreach`), in the leaf and the realm of the task. A
   merge gate or pointer move that refuses the work's checks sends it back into the loop that made it
   (`back_to`, a few times). An unattended run gives up a task whose loop gave up, keeps its work on a
@@ -40,11 +42,11 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Starts each leaf's sandbox on its realm's stack, with the services of its realm and of the leaves it
   consumes (spec §6.1, §9.2). A realm's stack is an image pinned by digest or one that `ygg sandbox build`
   builds from the realm's own build context (change realm-content); the tag is a hash of the context.
-  `ygg sandbox build` builds the factory layer first, then each realm's stack on it.
+  `ygg sandbox build` builds each stack with the factory layer on top of it.
 - Runs a pointer move's acceptance checks, when the run has a sandbox, in a sandbox that holds a snapshot
   of the project: the committed files of the umbrella and of each leaf, at the commits they are on, in a
   plain folder with no git directory. Each leaf realm that defines the check runs it, in realm-name
-  order, on its own stack and with the services of every leaf's realm, in a snapshot of its own at
+  order, on its acceptance stack and with the services of every leaf's realm, in a snapshot of its own at
   `snapshot/<node>/<realm>`; the first failure is the move's, and a project where no realm has the check is
   refused. What a leaf's working copy holds beyond its
   commits never reaches it.
@@ -53,7 +55,8 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   gate in every mode, with the proposed amendment in the gate file; a verdict that cannot be read is asked
   for once more and then stops the run, never a pass (spec §4.2, §4.6).
 - Checks the graphs with `ygg doctor`: each pack in `graphs.dir` must load, hold a graph and have the
-  name of its folder, or `--graph <name>` could not find it. It warns when `factory.yaml` has no `graphs`
+  name of its folder, or `--graph <name>` could not find it. When `graphs.dir` is `realms.dir`, a pack with
+  no graph is a realm and is not an error. It warns when `factory.yaml` has no `graphs`
   section, since a project can then not pin a graph.
 - Counts every session's usage, a failed one's too, in the run and in a daily spend journal outside
   any project, and stops the run at the hard approval point `budget-cap` before a session would start

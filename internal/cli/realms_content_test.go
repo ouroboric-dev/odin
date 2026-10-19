@@ -17,10 +17,11 @@ import (
 
 // The exit criterion of Phase 5b, with scripted agents: the real graph pack software (Voluspa) and the real
 // realms midgard-react and helheim-go build a product from a brief, end to end, through Odin's real code: the
-// graph and prompts of the graph pack, the templates and leaf recipes of the realms. Only two things are not the realms': the agents, which answer from a script, and the
-// check ladder's commands, which are replaced by plain ones because the ladder's tools live in the stack images
-// (the ladder runs on a real engine, v0-H14 and v0-H15). The test needs voluspa and the realms beside odin, as they are in
-// the yggdrasil umbrella; it skips without them.
+// graph and prompts of the graph pack, the templates and leaf recipes of the realms. Only two things are not
+// the realms': the agents, which answer from a script, and the check ladder's commands, which are replaced by
+// plain ones because the ladder's tools live in the stack images (the ladder runs on a real engine, v0-H14
+// and v0-H15). The test needs voluspa and the realms beside odin, as they are in the yggdrasil umbrella; it
+// skips without them.
 
 // realRealm copies the realm repo at src into store/name, leaving out git, packages and build output, and
 // swaps the ladder's scripts for commands any machine runs.

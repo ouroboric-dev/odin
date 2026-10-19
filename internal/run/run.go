@@ -38,6 +38,7 @@ type Options struct {
 	Realms  map[string]string // a resume: the folder of each realm the run recorded, by name; they are loaded from there
 	Leaves  []string          // a resume: the leaves the run added beyond the ones its graph names (AddLeaf)
 	Brief   string            // optional
+	Resume  *State            // a resume: the run's state, which says whether an init node is still ahead
 	Mode    gungnir.Mode      // "" means the config's mode
 	Hooks   Hooks             // tests only
 }
@@ -161,8 +162,12 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
-	if err := s.CheckAcceptance(nil); err != nil {
-		return nil, err
+	// Acceptance is decided here only when no init node is still ahead: otherwise init counts the leaves it is
+	// about to create, and refuses before it makes any (change voluspa).
+	if !s.initAhead(o.Resume) {
+		if err := s.CheckAcceptance(nil); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.prepareBudget(o.Hooks); err != nil {
 		return nil, err
@@ -673,6 +678,27 @@ func (s *Setup) NodesFor(st *State) ([]schema.Node, error) {
 	return out, nil
 }
 
+// initAhead says whether an init node has still to run: any init node of a new run, and, for a resume at
+// st, one at or after its position. A resume whose nodes don't expand has none ahead, so the check is
+// strict and the later check of run.json reports the cause.
+func (s *Setup) initAhead(st *State) bool {
+	nodes := s.Graph.Nodes
+	pos := 0
+	if st != nil {
+		var err error
+		if nodes, err = s.NodesFor(st); err != nil {
+			return false
+		}
+		pos = max(st.Position, 0)
+	}
+	for i := pos; i < len(nodes); i++ {
+		if nodes[i].Kind == schema.KindInit {
+			return true
+		}
+	}
+	return false
+}
+
 // recipeOf says what the realm of the leaf at layer offers its tasks.
 func (s *Setup) recipeOf(layer string) (plan.Recipe, error) {
 	if u := s.Project.Umbrella; u == nil || u.Children[layer].Kind != schema.ChildLeaf {
@@ -963,7 +989,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Waived: map[string]bool{}, Judged: map[string]string{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, NewLeaves: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Created: now, Updated: now,
 	}}
 	started := gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256,
-		Realm: setup.GraphPack.Name, RealmVersion: setup.GraphPack.Version, Note: graphNote(setup.GraphPack) + "; " + realmNote(setup.Realms)}
+		Note: graphNote(setup.GraphPack) + "; " + realmNote(setup.Realms)}
 	if err := r.Log(started); err != nil {
 		r.Close()
 		return nil, err
@@ -1101,7 +1127,7 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 		dirs[name] = r.Dir
 	}
 	setup, err := Prepare(ctx, Options{Project: project, Config: s.ConfigPath, Graph: s.GraphDir, Realms: dirs, Leaves: slices.Sorted(maps.Keys(s.Leaves)),
-		Brief: s.Brief, Mode: mode, Hooks: h})
+		Brief: s.Brief, Mode: mode, Resume: s, Hooks: h})
 	if err != nil {
 		return nil, err
 	}

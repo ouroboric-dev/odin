@@ -83,7 +83,8 @@ func hashLimited(dir string, lim limits) (string, error) {
 	// A folder inside a git work tree, whether it holds the repo's .git or is one folder of the repo (a graph
 	// pack in the voluspa leaf), is its committed files. A folder with a .git that git refuses (an invalid
 	// file, or a repo it finds dubious) is refused too, not hashed from disk. A folder with no .git that is
-	// outside any work tree is a plain folder.
+	// outside any work tree (git says "not a git repository") is a plain folder; any other refusal of git, for a repo
+	// that holds the folder, is final.
 	gitDir, top, prefix, gitErr := workTreeOf(dir)
 	_, statErr := os.Lstat(filepath.Join(dir, ".git"))
 	switch {
@@ -91,6 +92,11 @@ func hashLimited(dir string, lim limits) (string, error) {
 		return hashCommitted(gitDir, top, prefix, dir, lim)
 	case statErr == nil:
 		return "", fmt.Errorf("%s holds a .git that git does not accept, so its files can't be hashed from the commit: %w",
+			dir, gitErr)
+	case !strings.Contains(gitErr.Error(), "not a git repository"):
+		// git refuses a repo that holds dir (for example for its owner: Odin sets GIT_CONFIG_GLOBAL=/dev/null,
+		// so a global safe.directory does not apply). Its files could be the repo's, so fail closed.
+		return "", fmt.Errorf("%s is inside a git repository that git does not accept, so its files can't be hashed from the commit: %w",
 			dir, gitErr)
 	}
 	h := sha256.New()

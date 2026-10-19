@@ -110,3 +110,31 @@ func TestAFolderWithAGitThatGitRejectsIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A pack in a subfolder of a repo that git refuses (for example for its owner, since Odin sets
+// GIT_CONFIG_GLOBAL=/dev/null and so ignores a global safe.directory; the test uses a repo format git does not know) is not a plain folder: hashing it from
+// disk would take uncommitted files for the pack. The hash fails closed and gives git's error.
+func TestASubfolderOfARepoThatGitRefusesIsRefusedNotHashedFromDisk(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "repo")
+	soft := filepath.Join(repo, "software")
+	fixture(t, soft, "software", "0.1.0")
+	gitIn(t, repo, "init", "-q")
+	gitIn(t, repo, "add", "--", "software")
+	gitIn(t, repo, "commit", "-q", "-m", "pack")
+	if _, err := Hash(soft); err != nil {
+		t.Fatalf("Hash() before git refuses the repo = %v", err)
+	}
+	// Odin strips GIT_* from git's environment, so a repo owned by someone else can't be faked; a repo of a
+	// format this git does not know is refused by git in the same way, with its own error.
+	write(t, repo, ".git/config", "[core]\n\trepositoryformatversion = 99\n", 0o644)
+	got, err := Hash(soft)
+	if err == nil || !strings.Contains(err.Error(), "git repository that git does not accept") || !strings.Contains(err.Error(), "repo version") {
+		t.Fatalf("Hash() = %q, %v; want a refusal with git's error", got, err)
+	}
+	// A plain folder outside any work tree still hashes from disk.
+	plain := filepath.Join(t.TempDir(), "plain")
+	fixture(t, plain, "software", "0.1.0")
+	if _, err := Hash(plain); err != nil {
+		t.Errorf("Hash() of a plain folder = %v", err)
+	}
+}

@@ -122,7 +122,7 @@ const leadAndOther = "checks:\n  unit: [sh, -c, \"echo lead > ran-by.txt\"]\n"
 
 func twoRealms() []realmFiles {
 	return []realmFiles{
-		{name: "midgard-react", version: "0.1.0", pack: leadAndOther, files: map[string]string{"p.md": "Lead prompt.\n"}},
+		{name: "midgard-react", version: "0.1.0", pack: leadAndOther, files: map[string]string{"p.md": "Graph prompt.\n"}},
 		{name: "helheim-go", version: "0.2.0", pack: "checks:\n  unit: [sh, -c, \"echo other > ran-by.txt\"]\n", files: map[string]string{"prompts/implementer.md": "Other realm's implementer prompt.\n"}},
 	}
 }
@@ -143,7 +143,7 @@ func TestANodeReadsItsPromptAndRunsItsChecksFromItsOwnRealm(t *testing.T) {
 	if err := runAgent(ctx, r, web); err != nil {
 		t.Fatalf("runAgent() = %v", err)
 	}
-	if got := transcriptPrompt(t, r, "web-build"); !strings.Contains(got, "Lead prompt.") {
+	if got := transcriptPrompt(t, r, "web-build"); !strings.Contains(got, "Graph prompt.") {
 		t.Errorf("a node with no realm got %q; it is the graph pack's", got)
 	}
 	if err := runChecks(ctx, r, api, 1, api.Checks, "repos/api", r.RepoDir("repos/api")); err != nil {

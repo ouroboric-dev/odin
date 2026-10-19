@@ -262,6 +262,38 @@ func TestAProjectWhereNoLeafRealmHasTheAcceptanceCheckIsRefused(t *testing.T) {
 	})
 }
 
+// A project whose current leaves lack the acceptance check may add a leaf whose realm has it: Prepare
+// defers to init when an init node is still ahead, and init counts the leaves it is about to create.
+func TestAnExistingProjectCanAddALeafWithTheAcceptanceCheckThroughInit(t *testing.T) {
+	web := recipeRealm("web-toy", "0.1.0", "web.txt", "Web.")
+	web.pack = strings.Replace(web.pack, "checks:\n", "checks:\n  accept: [\"true\"]\n", 1)
+	r, err := tryRealms(t, realmsSetup{mode: "unattended", nodes: initNode + taskShapeWithAcceptance, script: "steps: {}\n",
+		realms: []realmFiles{recipeRealm("api-toy", "0.1.0", "api.txt", "API."), web},
+		leaves: map[string]string{"repos/api": "api-toy"}})
+	if err != nil {
+		t.Fatalf("Start() = %v; the new leaf's realm has the check, so Prepare must leave the decision to init", err)
+	}
+	defer r.Close()
+	if err := os.MkdirAll(filepath.Join(r.Project, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leaves := "leaves:\n  repos/api:\n    realm: api-toy\n    realm_version: 0.1.0\n    description: The API.\n" +
+		"  repos/web:\n    realm: web-toy\n    realm_version: 0.1.0\n    description: The web app.\n"
+	if err := os.WriteFile(filepath.Join(r.Project, "docs", "leaves.yaml"), []byte(leaves), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(bg, r)
+	if err != nil || out.Err == nil || strings.Contains(out.Err.Error(), "acceptance check") || !strings.Contains(out.Err.Error(), "node ready") {
+		t.Fatalf("Advance() = %+v, %v; want init past its check and the run at the tasks node", out, err)
+	}
+	if n := strings.Count(ledgerText(t, r), `"event":"repo_created"`); n != 1 {
+		t.Errorf("%d repo_created lines, want 1 (repos/web)", n)
+	}
+	if _, err := os.Stat(filepath.Join(r.Project, "repos", "web")); err != nil {
+		t.Errorf("repos/web was not made: %v", err)
+	}
+}
+
 func TestARealmWithAnAcceptanceCheckAndNoAcceptanceStackIsRefusedBeforeTheRunStarts(t *testing.T) {
 	const want = "names no acceptance stack"
 	noStack := func() realmFiles { return acceptanceRealm("api-toy", `["true"]`, false, "proxy.golang.org", "") }

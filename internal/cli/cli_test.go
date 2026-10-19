@@ -171,8 +171,8 @@ func TestAFailedStartExitsOne(t *testing.T) {
 	}
 }
 
-// A project made before the graph pin pins a realm at the top of umbrella.yaml (the realm that led its runs). It is refused with the
-// way to pin a graph, before anything starts (review focus 1).
+// A project made before the graph pin pins a realm at the top of umbrella.yaml (the realm that led its
+// runs). It is refused with the way to pin a graph, before anything starts (review focus 1).
 func TestARunOnAProjectThatPinsARealmAtTheTopStopsBeforeAnythingStarts(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
 	f := filepath.Join(dir, "umbrella.yaml")

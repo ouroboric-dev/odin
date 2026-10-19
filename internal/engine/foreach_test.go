@@ -18,7 +18,7 @@ func recipeRealm(name, version, file, prompt string) realmFiles {
 	return realmFiles{name: name, version: version,
 		pack: "checks:\n  unit: [sh, -c, \"test -f " + file + "\"]\nleaf:\n  description: the " + name + " leaf\n  template: templates/leaf\n  first_commit: [LICENSE]\n  implementer: prompts/implementer.md\n  checks: [unit]\n",
 		files: map[string]string{"templates/leaf/LICENSE": "licence\n", "templates/leaf/AGENTS.md": "rules of " + name + "\n", "templates/leaf/docs/architecture.md": "# " + name + "\n",
-			"prompts/implementer.md": prompt + "\n", "p.md": "Lead prompt.\n"}}
+			"prompts/implementer.md": prompt + "\n", "p.md": "Graph prompt.\n"}}
 }
 
 const taskShape = `  - { id: ready, kind: tasks, from: tasks.md }

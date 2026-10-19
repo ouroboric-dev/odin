@@ -353,9 +353,6 @@ func Locked(dir string) bool { return lock.Held(filepath.Join(dir, "lock")) }
 // checkRealms refuses a resume when a realm changed under the run, or the project now names a realm the run
 // did not load: its graph positions and prompts would no longer mean what they meant.
 func (s *State) checkRealms(setup *Setup) error {
-	if len(s.Realms) == 0 {
-		return nil // a run from before realms were recorded; the graph's hash is all there is
-	}
 	for _, name := range setup.Realms.Names() {
 		got := setup.Realms.Realms[name]
 		want, ok := s.Realms[name]
