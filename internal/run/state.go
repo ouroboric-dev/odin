@@ -221,6 +221,11 @@ func LoadState(dir string) (*State, error) {
 	if s.Schema != StateSchema {
 		return nil, fmt.Errorf("%s/run.json: schema %q, want %q", dir, s.Schema, StateSchema)
 	}
+	if s.Exec != nil {
+		if err := s.Exec.Check(); err != nil {
+			return nil, fmt.Errorf("%s/run.json: %w", dir, err)
+		}
+	}
 	// Empty maps aren't written (omitempty), so make them again: the engine writes to all three.
 	if s.Attempts == nil {
 		s.Attempts = map[string]int{}
@@ -267,6 +272,16 @@ type ExecProcess struct {
 	Node  string `json:"node"`
 	PGID  int    `json:"pgid"`
 	Start uint64 `json:"start"` // the leader's start time, in clock ticks since boot; 0 if unknown
+}
+
+// Check refuses an exec record whose process group could not be an exec node's: a group of 1 or less would
+// make a kill signal every process the user owns (kill(-1)) or ygg's own group (kill(0)), and run.json is
+// data that a person or another program may have written.
+func (p *ExecProcess) Check() error {
+	if p.PGID <= 1 {
+		return fmt.Errorf("corrupt exec record: node %s has process group %d, which no exec node has; ygg will not signal it", p.Node, p.PGID)
+	}
+	return nil
 }
 
 // procStart returns when process pid started, in clock ticks since boot (field 22 of
@@ -378,20 +393,19 @@ func (s *State) check(setup *Setup) error {
 }
 
 // BeforeGraphs says whether the run folder holds a run of schema ygg.run/v2, which a lead realm led and
-// which can't be resumed. It reads only the run's id and its exec node, which a v2 run.json had in the
+// which can't be resumed. It reads only the run's exec node, which a v2 run.json had in the
 // form v3 has, so doctor can stop a leftover process without v2's other fields.
-func BeforeGraphs(dir string) (id string, exec *ExecProcess, ok bool) {
+func BeforeGraphs(dir string) (exec *ExecProcess, ok bool) {
 	data, err := os.ReadFile(filepath.Join(dir, "run.json"))
 	if err != nil {
-		return "", nil, false
+		return nil, false
 	}
 	var head struct {
 		Schema string       `json:"schema"`
-		ID     string       `json:"id"`
 		Exec   *ExecProcess `json:"exec"`
 	}
 	if json.Unmarshal(data, &head) != nil || head.Schema != stateSchemaV2 {
-		return "", nil, false
+		return nil, false
 	}
-	return head.ID, head.Exec, true
+	return head.Exec, true
 }

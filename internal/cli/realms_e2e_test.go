@@ -121,9 +121,14 @@ func TestARunOfTheToyRealmsBuildsAProductFromTwoRealms(t *testing.T) {
 	}
 	// Doctor is content with the finished run. The gallery's realms store holds realm packs with no graph, which a
 	// graphs store may not, so doctor reads a config whose graphs are elsewhere.
-	b, _ := os.ReadFile(cfg)
+	b, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	doctorCfg := filepath.Join(t.TempDir(), "factory.yaml")
-	os.WriteFile(doctorCfg, bytes.Replace(b, []byte("graphs:\n  dir: "+realmsDir(t)), []byte("graphs:\n  dir: "+graphStore(t)), 1), 0o644)
+	if err := os.WriteFile(doctorCfg, bytes.Replace(b, []byte("graphs:\n  dir: "+realmsDir(t)), []byte("graphs:\n  dir: "+graphStore(t)), 1), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if code, out, _ := ygg(t, "doctor", "--project", dir, "--config", doctorCfg); code != ExitDone || !strings.Contains(out, "OK    realms: "+realmsDir(t)) {
 		t.Errorf("doctor: exit %d:\n%s", code, out)
 	}

@@ -25,8 +25,8 @@ type blob struct {
 // clean checkout hashes as it did before. gitDir is the repo's git dir, top its work tree's top, and prefix
 // the folder's path from top with a trailing slash ("" when the folder is the top): only the files under the
 // folder count, named relative to it, and a change to a file elsewhere in the repo does not matter. A folder
-// with no committed file is refused, not hashed as an empty one. A run reads the realm from its folder, so a tracked file that
-// differs from HEAD is refused: it would be read but not hashed. A committed symlink, or any entry that is not
+// with no committed file is refused, not hashed as an empty one. A run reads the realm from its folder, so
+// a tracked file that differs from HEAD is refused: it would be read but not hashed. A committed symlink, or any entry that is not
 // a regular file, is refused as in a plain folder.
 func hashCommitted(gitDir, top, prefix, dir string, lim limits) (string, error) {
 	ctx := context.Background()
@@ -84,7 +84,8 @@ func hashCommitted(gitDir, top, prefix, dir string, lim limits) (string, error) 
 		blobs = append(blobs, b)
 	}
 	if len(blobs) == 0 {
-		return "", fmt.Errorf("%s: none of its files is committed (untracked or git-ignored files are not part of a realm's hash); commit them", dir)
+		return "", fmt.Errorf("%s: none of its files is committed (untracked or git-ignored files are not part of a realm's hash); "+
+			"commit them", dir)
 	}
 	// The folder walk visits a folder's entries in name order, so "a/b" comes before "a.b".
 	slices.SortFunc(blobs, func(a, b blob) int {

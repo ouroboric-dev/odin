@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // graphStore writes a graph store holding the pack software (with a graph) and returns it.
@@ -59,11 +60,15 @@ func TestDoctorListsTheGraphsOfTheStore(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(store, "bare"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(store, "bare", "pack.yaml"), []byte("name: bare\nversion: 0.1.0\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(store, "bare", "pack.yaml"), []byte("name: bare\nversion: 0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(store, "other"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(store, "other", "pack.yaml"), []byte("name: software\nversion: 0.1.0\ngraph: graph.yaml\n"), 0o644)
+	if err := os.WriteFile(filepath.Join(store, "other", "pack.yaml"), []byte("name: software\nversion: 0.1.0\ngraph: graph.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	code, out, _ = ygg(t, "doctor", "--project", dir, "--config", config)
 	for _, w := range []string{"ERROR graphs: bare: ", "holds no graph", "ERROR graphs: " + filepath.Join(store, "other") + " holds the graph software, so --graph other can't find it"} {
 		if !strings.Contains(out, w) {
@@ -107,6 +112,35 @@ func TestDoctorWarnsOfARunFromBeforeGraphsAndStopsItsLeftoverProcess(t *testing.
 		"WARN  run " + id + ": node build left process group " + fmt.Sprint(sleep.Process.Pid) + " running; stopped it"} {
 		if !strings.Contains(out, w) {
 			t.Errorf("doctor's output lacks %q:\n%s", w, out)
+		}
+	}
+	// The process is really gone, not only reported so.
+	gone := make(chan error, 1)
+	go func() { gone <- sleep.Wait() }()
+	select {
+	case <-gone:
+	case <-time.After(10 * time.Second):
+		t.Error("the leftover process is still running after doctor")
+	}
+}
+
+// run.json is data: an exec record with a process group of 1 or less is a corrupt one, never a kill of
+// every process the user owns. The start time is 0 so that a doctor that did not refuse it would not kill either.
+func TestDoctorRefusesAnExecRecordWithAProcessGroupOfOneOrLess(t *testing.T) {
+	for i, pgid := range []int{0, 1} {
+		dir, config := project(t, "script.yaml", "")
+		id := fmt.Sprintf("20261001-12000%d-abcdef", i)
+		runDir := filepath.Join(dir, ".factory", "runs", id)
+		if err := os.MkdirAll(runDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		state := fmt.Sprintf(`{"schema":"ygg.run/v2","id":%q,"status":"running","exec":{"node":"build","pgid":%d,"start":0}}`, id, pgid)
+		if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(state), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+		if code != ExitFailed || !strings.Contains(out, "ERROR run "+id+": ") || !strings.Contains(out, "corrupt exec record") || strings.Contains(out, "stopped it") {
+			t.Errorf("pgid %d: doctor exit %d, want an ERROR for a corrupt exec record:\n%s", pgid, code, out)
 		}
 	}
 }

@@ -81,10 +81,17 @@ func hashLimited(dir string, lim limits) (string, error) {
 		return "", fmt.Errorf("%s is a symlink; a realm holds its own files and folders, and a link could lead out of it", dir)
 	}
 	// A folder inside a git work tree, whether it holds the repo's .git or is one folder of the repo (a graph
-	// pack in the voluspa leaf), is its committed files. A folder git does not place in a work tree (no
-	// .git, or one git does not accept as a repo) is a plain folder.
-	if gitDir, top, prefix, ok := workTreeOf(dir); ok {
+	// pack in the voluspa leaf), is its committed files. A folder with a .git that git refuses (an invalid
+	// file, or a repo it finds dubious) is refused too, not hashed from disk. A folder with no .git that is
+	// outside any work tree is a plain folder.
+	gitDir, top, prefix, gitErr := workTreeOf(dir)
+	_, statErr := os.Lstat(filepath.Join(dir, ".git"))
+	switch {
+	case gitErr == nil:
 		return hashCommitted(gitDir, top, prefix, dir, lim)
+	case statErr == nil:
+		return "", fmt.Errorf("%s holds a .git that git does not accept, so its files can't be hashed from the commit: %w",
+			dir, gitErr)
 	}
 	h := sha256.New()
 	var files, size int64
@@ -185,18 +192,19 @@ func Resolve(ref string, store *Store, kind string) (dir string, byName bool, er
 }
 
 // workTreeOf says where dir stands in a git work tree: the repo's git dir, the work tree's top, and dir's
-// path from the top with a trailing slash ("" at the top). ok is false for a folder outside any work tree.
-func workTreeOf(dir string) (gitDir, top, prefix string, ok bool) {
+// path from the top with a trailing slash ("" at the top). The error is git's, for a folder outside any work
+// tree or in one git refuses.
+func workTreeOf(dir string) (gitDir, top, prefix string, err error) {
 	out, err := git.Run(context.Background(), dir, "rev-parse", "--absolute-git-dir", "--show-toplevel", "--show-prefix")
 	if err != nil {
-		return "", "", "", false
+		return "", "", "", err
 	}
 	lines := strings.Split(out, "\n")
 	if len(lines) < 2 || lines[0] == "" || lines[1] == "" {
-		return "", "", "", false
+		return "", "", "", fmt.Errorf("git rev-parse gave %q, not a git dir and a work tree", out)
 	}
 	if len(lines) > 2 {
 		prefix = lines[2]
 	}
-	return lines[0], lines[1], prefix, true
+	return lines[0], lines[1], prefix, nil
 }

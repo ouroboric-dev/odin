@@ -69,9 +69,6 @@ func TestTheHashFollowsEveryFileTheRunCouldRead(t *testing.T) {
 			t.Errorf("%s, and the hash did not change", name)
 		}
 	}
-	if got := hashOf(func(d string) { write(t, d, ".git/HEAD", "ref: x", 0o644) }); got != plain {
-		t.Error("the hash follows .git, which holds nothing a run reads")
-	}
 }
 
 // A realm's files are its own: a symlink anywhere in it is refused when it is loaded, before anything is

@@ -1302,6 +1302,9 @@ func StopLeftoverProcess(p *ExecProcess) error { return stopLeftover(p) }
 // when the group's leader is the process run.json recorded. A group it can't tell is the run's is
 // left alone, and the run waits for the operator.
 func stopLeftover(p *ExecProcess) error {
+	if err := p.Check(); err != nil {
+		return err
+	}
 	switch {
 	case p.Start != 0 && procStart(p.PGID) == p.Start:
 		if err := syscall.Kill(-p.PGID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {

@@ -2,6 +2,7 @@ package realm
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -64,10 +65,48 @@ func TestASubfolderOfAGitRepoIsHashedFromItsCommittedFiles(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a file that is only staged is refused", func(t *testing.T) {
+		write(t, soft, "prompts/new.md", "staged only\n", 0o644)
+		gitIn(t, repo, "add", "--", "software/prompts/new.md")
+		if got, err := Hash(soft); err == nil || !strings.Contains(err.Error(), "differs from the committed realm") || !strings.Contains(err.Error(), "prompts/new.md") {
+			t.Errorf("Hash(software) = %q, %v; want a refusal naming the staged file", got, err)
+		}
+		gitIn(t, repo, "reset", "-q", "--", "software/prompts/new.md")
+		write(t, soft, "prompts/new.md", "", 0o644)
+		if err := os.Remove(filepath.Join(soft, "prompts/new.md")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("a deleted tracked file is refused", func(t *testing.T) {
+		if err := os.Remove(filepath.Join(soft, "prompts/implementer.md")); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Hash(soft); err == nil || !strings.Contains(err.Error(), "differs from the committed realm") || !strings.Contains(err.Error(), "prompts/implementer.md") {
+			t.Errorf("Hash(software) = %q, %v; want a refusal naming the deleted file", got, err)
+		}
+		gitIn(t, repo, "checkout", "-q", "--", "software/prompts/implementer.md")
+	})
 	t.Run("a changed tracked file in it is refused", func(t *testing.T) {
 		write(t, soft, "prompts/implementer.md", "Changed, not committed.\n", 0o644)
 		if got, err := Hash(soft); err == nil || !strings.Contains(err.Error(), "differs from the committed realm") || !strings.Contains(err.Error(), "prompts/implementer.md") {
 			t.Errorf("Hash(software) = %q, %v; want a refusal naming the changed file", got, err)
 		}
 	})
+}
+
+// A folder that holds a .git git does not accept is not a plain folder: its files could be a repo's, so its
+// hash can't be taken from disk as if git had nothing to say.
+func TestAFolderWithAGitThatGitRejectsIsRefused(t *testing.T) {
+	base := t.TempDir()
+	for name, mutate := range map[string]func(dir string){
+		"a .git file that points nowhere":  func(d string) { write(t, d, ".git", "gitdir: /nonexistent/elsewhere\n", 0o644) },
+		"a .git folder that is not a repo": func(d string) { write(t, d, ".git/HEAD", "ref: x", 0o644) },
+	} {
+		dir := filepath.Join(base, strings.ReplaceAll(name, " ", "-"))
+		fixture(t, dir, "software", "0.1.0")
+		mutate(dir)
+		if got, err := Hash(dir); err == nil || !strings.Contains(err.Error(), ".git") || !strings.Contains(err.Error(), "git rev-parse") {
+			t.Errorf("%s: Hash() = %q, %v; want a refusal that names git's error", name, got, err)
+		}
+	}
 }

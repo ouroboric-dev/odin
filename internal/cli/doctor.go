@@ -71,8 +71,8 @@ func (c *command) doctor(args []string) int {
 			report("WARN", "runs", e.Name()+" is not a run")
 			continue
 		}
-		if id, exec, ok := run.BeforeGraphs(dir); ok {
-			c.checkRunBeforeGraphs(dir, id, exec, report)
+		if exec, ok := run.BeforeGraphs(dir); ok {
+			c.checkRunBeforeGraphs(dir, exec, report)
 			continue
 		}
 		s, err := run.LoadState(dir)
@@ -104,8 +104,14 @@ func (c *command) doctor(args []string) int {
 // it is not an error, and its folder can go. A process group its exec node left is still stopped, from
 // the two fields of run.json that name it; a leftover container is found by its label and stopped by
 // checkSandbox, whatever the run's state.
-func (c *command) checkRunBeforeGraphs(dir, id string, exec *run.ExecProcess, report func(level, what, msg string)) {
+func (c *command) checkRunBeforeGraphs(dir string, exec *run.ExecProcess, report func(level, what, msg string)) {
 	what := "run " + filepath.Base(dir)
+	if exec != nil {
+		if err := exec.Check(); err != nil {
+			report("ERROR", what, err.Error())
+			exec = nil
+		}
+	}
 	if exec != nil && !run.Locked(dir) && run.LeftoverProcess(exec) {
 		if err := run.StopLeftoverProcess(exec); err != nil {
 			report("ERROR", what, err.Error())
