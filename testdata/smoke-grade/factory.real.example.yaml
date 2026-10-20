@@ -17,7 +17,7 @@ mode: unattended
 privacy: strict
 roles:
   implementer: { agent: claude-code, model: sonnet }
-  reviewer: { agent: opencode, model: openrouter/deepseek/deepseek-v4-flash }
+  reviewer: { agent: opencode, model: openrouter/qwen/qwen3.8-27b }
 budget:
   per_run: { tokens: 400000, turns: 100, usd: 3 }
   per_day: { tokens: 1000000, turns: 200, usd: 6 }
