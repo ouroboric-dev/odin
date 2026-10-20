@@ -35,6 +35,22 @@ func TestAResultsFileThatDoesNotMatchTheManifestIsRefusedAsBadManifest(t *testin
 	}
 }
 
+func TestANodeOfAKindTheEngineDoesNotKnowStopsTheRunAsBadManifest(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
+	nodes := g.r.Setup.Graph.Nodes
+	nodes[len(nodes)-1].Kind = "teleport" // the graph loader rejects this kind, so the test sets it after the load
+	out := g.advance(t)
+	if out.Status != run.StatusFailed || out.Err == nil || !strings.Contains(out.Err.Error(), "bad_manifest") || !strings.Contains(out.Err.Error(), "teleport") {
+		t.Fatalf("Advance() = %+v, want a failed run whose error says bad_manifest", out)
+	}
+	if id := nodes[len(nodes)-1].ID; strings.Count(out.Err.Error(), id) != 1 {
+		t.Errorf("the error %q names the node %q %d times; the run's error already names it once", out.Err, id, strings.Count(out.Err.Error(), id))
+	}
+	if len(g.grader.Specs) != 0 {
+		t.Errorf("the grader ran %d time(s) for a node of an unknown kind", len(g.grader.Specs))
+	}
+}
+
 func TestAGradingRunThatFailsFailsTheNodeAndAResumeGradesAgain(t *testing.T) {
 	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
 	g.grader.Err = errors.New("the grader timed out after 5m0s")

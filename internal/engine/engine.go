@@ -103,6 +103,9 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			err = runInit(ctx, r, n)
 		case schema.KindGrade:
 			err = runGrade(ctx, r, n)
+		default:
+			// A kind the engine does not know must never pass as if it had run: stop the run on the manifest.
+			err = unknownKind(r, n)
 		}
 		var sb *sentBack
 		var ex *expanded
@@ -148,6 +151,15 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		return Outcome{}, err
 	}
 	return Outcome{Status: run.StatusDone}, r.Save()
+}
+
+// unknownKind fails the run for a node whose kind the engine has no way to run: the graph is a bad manifest.
+func unknownKind(r *run.Run, n schema.Node) error {
+	cause := fmt.Errorf("%s: the node kind %q is not one this Odin knows", gungnir.GradeBadManifest, n.Kind)
+	if err := r.Log(gungnir.Event{Name: gungnir.EventNodeFailed, Node: n.ID, Result: cause.Error()}); err != nil {
+		return err
+	}
+	return &nodeFailure{cause}
 }
 
 // doneResult is how a finished run is described: "done", or the tasks it gave up, listed first (spec §7.3).
