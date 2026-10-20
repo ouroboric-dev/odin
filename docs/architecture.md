@@ -39,6 +39,15 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   merge gate or pointer move that refuses the work's checks sends it back into the loop that made it
   (`back_to`, a few times). An unattended run gives up a task whose loop gave up, keeps its work on a
   ref, and goes on with the tasks that do not depend on it.
+- Settles a disputed finding with a check (change disputed-findings). `loopSteps.Implement` returns the
+  implementer's whole answer; `loopSteps.Dispute` holds a dispute only when the named check ran and passed
+  in this attempt and its log (`logs/<node>-<attempt>-<check>.log`, read in blocks, at most 9 MiB) contains
+  the test id. `Record` writes `finding_overruled` for a finding that was overruled and, for a dispute that
+  could not be used, a `loop_attempt` line whose result begins `dispute ignored:` (the event list is closed).
+  A dispute no check of the loop can settle stops the run at escalation with the reason `finding-disputed`
+  (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve` accepts the
+  implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
+  implementer's evidence and the check run.
 - Starts each leaf's sandbox on its realm's stack, with the services of its realm and of the leaves it
   consumes (spec §6.1, §9.2). A realm's stack is an image pinned by digest or one that `ygg sandbox build`
   builds from the realm's own build context (change realm-content); the tag is a hash of the context.

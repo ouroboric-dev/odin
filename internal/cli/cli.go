@@ -336,6 +336,11 @@ func (c *command) status(args []string) int {
 			line = fmt.Sprintf("gave up in attempt %d (%s), %d finding(s) open", min(l.State.Attempt, l.State.Limit), l.Escalation.Reason, len(l.State.Book.Open()))
 		}
 		fmt.Fprintf(c.out, "loop:     %s: %s\n", id, line)
+		for _, o := range engine.Overruled(&l.State) {
+			// A person audits these: the reviewer's claim, then the implementer's evidence and the check run.
+			fmt.Fprintf(c.out, "overruled: %s: %s (%s, from %s) at %s\n  reviewer's claim: %s\n  %s\n", id, o.ID, o.Severity, o.Source, o.Location,
+				strings.TrimSpace(o.Claim), strings.ReplaceAll(strings.TrimSpace(o.Proof), "\n", "\n  "))
+		}
 	}
 	if s.Paused != nil {
 		fmt.Fprintf(c.out, "paused:   at %s since %s: %s\n", s.Paused.Node, s.Paused.Since.Format(time.RFC3339), s.Paused.Reason)
