@@ -1,4 +1,5 @@
-Review the work in this repository against the brief below. It should hold an executable `start.sh` that
+Review the work in this repository against the brief below. The brief says `/app`: the root of this repository
+plays that part, so read only inside this repository. It should hold an executable `start.sh` that
 starts a web product on port 3000, and a `README.md`.
 
 Read the files. Start the product if you can, and try one sign-up with `curl`. Report a finding only if
