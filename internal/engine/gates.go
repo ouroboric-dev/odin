@@ -136,7 +136,7 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 	s := r.State
 	n := r.Nodes()[s.Position]
 	if n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation {
-		if rec := s.Loops[n.ID]; rec == nil || rec.Escalation == nil || rec.Escalation.Reason != jormungandr.ReasonExhausted {
+		if rec := s.Loops[n.ID]; rec == nil || rec.Escalation == nil || !approvableReason(rec.Escalation.Reason) {
 			return fmt.Errorf("loop %s stopped because a reviewer's answer can't be read, and an answer nobody can read is not an approval; "+
 				"fix the reviewer or its prompt, and then reject the stop to ask it again", n.ID)
 		}
@@ -185,6 +185,12 @@ func Rejectable(r *run.Run) bool {
 	return n.Kind == schema.KindGate || (n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation)
 }
 
+// approvableReason is true for the reasons a person can rule on: attempts that ran out, and a dispute no
+// check settled. A reviewer whose answer can't be read is not one.
+func approvableReason(reason string) bool {
+	return reason == jormungandr.ReasonExhausted || reason == jormungandr.ReasonDisputed
+}
+
 // Approvable reports whether the pending stop takes an approval. A loop that gave up because a
 // reviewer's answer can't be read does not: that is not a decision a person can take for the reviewer.
 func Approvable(r *run.Run) bool {
@@ -195,7 +201,7 @@ func Approvable(r *run.Run) bool {
 	n := r.Nodes()[s.Position]
 	if n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation {
 		rec := s.Loops[n.ID]
-		return rec != nil && rec.Escalation != nil && rec.Escalation.Reason == jormungandr.ReasonExhausted
+		return rec != nil && rec.Escalation != nil && approvableReason(rec.Escalation.Reason)
 	}
 	return true
 }

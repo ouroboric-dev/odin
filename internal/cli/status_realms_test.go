@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -82,5 +84,35 @@ func TestDoctorSaysWhenThereAreNoRealms(t *testing.T) {
 	os.WriteFile(cfg, append(b, []byte("realms:\n  dir: "+empty+"\n")...), 0o644)
 	if code, out, _ := ygg(t, "doctor", "--project", dir, "--config", cfg); code != ExitFailed || !strings.Contains(out, "ERROR realms: "+empty+" holds no realm leaf") {
 		t.Errorf("an empty store: exit %d:\n%s", code, out)
+	}
+}
+
+func TestStatusListsAnOverruledFindingWithBothSides(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t)); code != ExitStopped {
+		t.Fatalf("run: exit %d: %s", code, errOut)
+	}
+	id := runID(t, dir)
+	st, err := run.LoadState(run.Dir(dir, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &run.LoopRecord{State: *jormungandr.NewState(jormungandr.Config{Attempts: 3})}
+	rec.State.Book.Records = map[string]*jormungandr.Record{"spec-1": {Finding: gungnir.Finding{ID: "spec-1", Source: "spec", Severity: gungnir.SeverityBlocker,
+		Location: "app.js:4", Claim: "findIndex is not a JavaScript method", Status: gungnir.FindingOverruled,
+		Proof: "Implementer's evidence: curl showed it is defined\nCheck unit ran and passed in attempt 2: check unit ran in attempt 2 and passed (logs/build-2-unit.log)"}, Raised: 1, Closed: 2}}
+	st.Loops["audit"] = rec
+	if err := st.Save(run.Dir(dir, id)); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := ygg(t, "status", id, "--project", dir)
+	if code != ExitDone {
+		t.Fatalf("status: exit %d: %s", code, errOut)
+	}
+	for _, want := range []string{"overruled: audit: spec-1 (blocker, from spec) at app.js:4", "reviewer's claim: findIndex is not a JavaScript method",
+		"curl showed it is defined", "check unit ran in attempt 2 and passed (logs/build-2-unit.log)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%s", want, out)
+		}
 	}
 }
