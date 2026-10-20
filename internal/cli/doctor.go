@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
@@ -57,6 +59,7 @@ func (c *command) doctor(args []string) int {
 		checkRealms(factory, report)
 		checkGraphs(factory, report)
 		checkBudget(factory, report)
+		checkPrices(factory, report)
 		checkGrader(factory, report)
 		c.checkSandbox(f.project, factory, report)
 	}
@@ -268,6 +271,18 @@ func checkBudget(f *schema.Factory, report func(level, what, msg string)) {
 		return
 	}
 	report("OK", "budget", describeCaps(f, gungnir.Usage{}, day)+" (journal "+j.Dir+")")
+}
+
+// checkPrices warns of an OpenCode role on a Claude model through OpenRouter that has no price. OpenRouter
+// reports a cost of 0 for those models, so the session adds no dollars to per_run.usd or per_day.usd, and
+// gleipnir refuses it after the tokens are spent. A warning, not an error: the factory may not use the role.
+func checkPrices(f *schema.Factory, report func(level, what, msg string)) {
+	for _, name := range slices.Sorted(maps.Keys(f.Roles)) {
+		r := f.Roles[name]
+		if r.Agent == "opencode" && r.Price == nil && strings.HasPrefix(r.Model, "openrouter/anthropic/") {
+			report("WARN", "price", fmt.Sprintf("role %s uses %s, which OpenRouter reports at cost 0; set roles.%s.price in factory.yaml or its sessions are refused and the dollar caps cannot count them", name, r.Model, name))
+		}
+	}
 }
 
 // checkSandbox checks the engine and the sandboxes of the project's runs (spec §6.2, §12): the

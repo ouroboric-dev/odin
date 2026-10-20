@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
@@ -115,5 +116,21 @@ func TestDoctorOpensTodaysJournalFileForAppending(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(today); len(b) != 0 {
 		t.Errorf("doctor wrote %q to today's journal file; it must write nothing", b)
+	}
+}
+
+// B-107: OpenRouter reports cost 0 for Claude models, so an unpriced role on one would add nothing to the
+// dollar caps. Doctor says so before a run, instead of the session failing after it spent tokens.
+func TestDoctorWarnsOfAClaudeRoleOnOpenRouterWithoutAPrice(t *testing.T) {
+	f := &schema.Factory{Roles: map[string]schema.Role{
+		"reviewer":    {Agent: "opencode", Model: "openrouter/anthropic/claude-sonnet-5.5"},
+		"implementer": {Agent: "opencode", Model: "openrouter/anthropic/claude-haiku-5.5", Price: &schema.Price{Input: 1, Output: 5}},
+		"planner":     {Agent: "opencode", Model: "openrouter/qwen/qwen3.8-27b"},
+		"fixer":       {Agent: "scripted", Model: "none"},
+	}}
+	var got []string
+	checkPrices(f, func(level, what, msg string) { got = append(got, level+" "+what+": "+msg) })
+	if len(got) != 1 || !strings.HasPrefix(got[0], "WARN price: role reviewer") || !strings.Contains(got[0], "price") {
+		t.Errorf("checkPrices: %q; want one warning, for the unpriced Claude role only", got)
 	}
 }
