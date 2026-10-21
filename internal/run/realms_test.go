@@ -152,12 +152,34 @@ func TestRunJSONRecordsEveryRealmAndAResumeRefusesOneThatChanged(t *testing.T) {
 	r.Close()
 	prompt := filepath.Join(store, "helheim-go", "prompts")
 	entries, _ := os.ReadDir(prompt)
-	if err := os.WriteFile(filepath.Join(prompt, entries[0].Name()), []byte("changed under the run\n"), 0o644); err != nil {
+	changed := filepath.Join(prompt, entries[0].Name())
+	original, err := os.ReadFile(changed)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(ctx, project, id, ""); err == nil || !strings.Contains(err.Error(), "the realm helheim-go changed since the run started") {
-		t.Errorf("Open() after a prompt of a leaf's realm changed = %v", err)
+	if err := os.WriteFile(changed, []byte("changed under the run\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	_, err = Open(ctx, project, id, "")
+	if err == nil || !strings.Contains(err.Error(), "the realm helheim-go changed since the run started") {
+		t.Fatalf("Open() after a prompt of a leaf's realm changed = %v", err)
+	}
+	// The refusal says what to do: it names the folder, shows the hash the run began with and the one the
+	// realm has now, and says that putting the realm back lets the run resume or be graded (B-083).
+	was := got["helheim-go"].SHA256[:12]
+	for _, want := range []string{filepath.Join(store, "helheim-go"), "it was " + was, "put the realm back", "grade"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+	if err := os.WriteFile(changed, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err = Open(ctx, project, id, "")
+	if err != nil {
+		t.Fatalf("Open() with the realm put back = %v", err)
+	}
+	r.Close()
 }
 
 func gitOut(t *testing.T, dir string, args ...string) string {
