@@ -23,14 +23,16 @@ import (
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
-// fakeGrader stands in for Gleipnir's driver. It writes Results to the logs folder it is given, as the
-// hidden suite's test.sh would, and lists the exported /app as it is at that moment.
+// fakeGrader stands in for Gleipnir's driver. It prints Results on its stdout as the hidden suite's test.sh
+// would, on a line with the key it is given, and lists the exported /app as it is at that moment.
 type fakeGrader struct {
 	mu      sync.Mutex
 	Specs   []sandbox.GradeSpec
-	Apps    [][]string // the files of /app, for each call
-	Results string     // the report to write; "" writes none
-	Err     error      // what Grade returns
+	Apps    [][]string              // the files of /app, for each call
+	Results string                  // the report to print on a keyed line, among other output; "" prints none
+	Stdout  func(key string) string // what to print instead, whole, when it is set
+	Forged  string                  // a results.json to write to the logs folder, as an app that wrote one would
+	Err     error                   // what Grade returns
 	Before  func(sandbox.GradeSpec)
 }
 
@@ -51,13 +53,23 @@ func (f *fakeGrader) Grade(_ context.Context, g sandbox.GradeSpec) (sandbox.Grad
 	if f.Err != nil {
 		return sandbox.GradeResult{Image: "localhost/ygg-grader-fake"}, f.Err
 	}
-	if f.Results != "" {
-		if err := os.WriteFile(filepath.Join(g.Logs, "results.json"), []byte(f.Results), 0o644); err != nil {
+	if f.Forged != "" {
+		if err := os.WriteFile(filepath.Join(g.Logs, "results.json"), []byte(f.Forged), 0o644); err != nil {
 			return sandbox.GradeResult{}, err
 		}
 	}
-	return sandbox.GradeResult{Image: "localhost/ygg-grader-fake", Log: "suite output\n"}, nil
+	var stdout string
+	switch {
+	case f.Stdout != nil:
+		stdout = f.Stdout(g.ScoreKey)
+	case f.Results != "":
+		stdout = "starting the app\n" + keyedLine(g.ScoreKey, f.Results) + "stopped the app\n"
+	}
+	return sandbox.GradeResult{Image: "localhost/ygg-grader-fake", Log: "suite output\n", Stdout: []byte(stdout)}, nil
 }
+
+// keyedLine is what a suite prints for Odin: the marker, the key and the report on one line.
+func keyedLine(key, report string) string { return "ygg-results/v1 " + key + " " + report + "\n" }
 
 // graded is a run with a sandbox, a grader block and a task: the pieces a test needs to look at.
 type graded struct {
