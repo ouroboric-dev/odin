@@ -362,10 +362,19 @@ func (s *State) checkRealms(setup *Setup) error {
 		case got.Version != want.Version:
 			return fmt.Errorf("the realm %s is at %s, and the run started with %s; start a new run", name, got.Version, want.Version)
 		case got.Hash != want.SHA256:
-			return fmt.Errorf("the realm %s changed since the run started (%s), so the run's prompts and checks are not the ones it began with; start a new run", name, want.Dir)
+			return fmt.Errorf("the realm %s changed since the run started (%s; it was %s and is now %s), so the run's prompts and checks are not the ones it began with; put the realm back as it was and the run resumes and can be graded, or start a new run",
+				name, want.Dir, shortHash(want.SHA256), shortHash(got.Hash))
 		}
 	}
 	return nil
+}
+
+// shortHash is the first 12 characters of a hash, enough to tell two realm states apart in a message.
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
 }
 
 // check refuses a run.json whose position, pending node or leaves don't fit setup's graph and
