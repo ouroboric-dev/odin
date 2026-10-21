@@ -550,3 +550,62 @@ func TestInitRefusesAnExistingLeafThatPinsNoRealmUnderAGraphPackWithNoRecipe(t *
 		t.Errorf("init created %v before it refused", u.Paths())
 	}
 }
+
+func TestInitIgnoresTheFactoryFolderOfTheProject(t *testing.T) {
+	ctx := context.Background()
+	for name, before := range map[string]string{"no .gitignore": "", "an existing one": "node_modules/\n", "one with the line": "node_modules/\n.factory/\n", "one with no final newline": "node_modules/"} {
+		t.Run(name, func(t *testing.T) {
+			r := initRun(t, galleryLeaves)
+			path := filepath.Join(r.Project, ".gitignore")
+			if before != "" {
+				if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				for _, args := range [][]string{{"add", "--", ".gitignore"}, {"commit", "-q", "-m", "a .gitignore", "--", ".gitignore"}} {
+					if _, err := git.Run(ctx, r.Project, args...); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			head, _ := git.Run(ctx, r.Project, "rev-parse", "HEAD")
+			if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+				t.Fatalf("Advance() = %+v, %v", out, err)
+			}
+			if after, _ := git.Run(ctx, r.Project, "log", "--format=%s", head+"..HEAD", "--", ".gitignore"); name == "one with the line" && after != "" {
+				t.Errorf("init committed .gitignore although it had the line: %q", after)
+			}
+			if _, err := git.Run(ctx, r.Project, "check-ignore", "-q", ".factory/runs"); err != nil {
+				t.Errorf("git check-ignore .factory/runs = %v; the project's .gitignore must name .factory/", err)
+			}
+			b, _ := os.ReadFile(path)
+			if n := strings.Count(string(b), ".factory/\n"); n != 1 || !strings.HasPrefix(string(b), strings.TrimSuffix(before, "\n")) {
+				t.Errorf(".gitignore = %q after %q; want the old lines kept and .factory/ once", b, before)
+			}
+			if st, _ := git.Run(ctx, r.Project, "status", "--porcelain", "--", ".gitignore"); st != "" {
+				t.Errorf(".gitignore is left uncommitted: %q", st)
+			}
+		})
+	}
+}
+
+func TestInitRefusesAnUncommittedGitignoreAndCommitsNothing(t *testing.T) {
+	ctx := context.Background()
+	r := initRun(t, galleryLeaves)
+	path := filepath.Join(r.Project, ".gitignore")
+	if err := os.WriteFile(path, []byte("my-own-edit/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	head, _ := git.Run(ctx, r.Project, "rev-parse", "HEAD")
+	if out, err := Advance(ctx, r); err == nil && out.Status == run.StatusDone {
+		t.Fatalf("Advance() = %+v, nil; want init to refuse an uncommitted .gitignore", out)
+	}
+	if after, _ := git.Run(ctx, r.Project, "rev-parse", "HEAD"); after != head {
+		t.Errorf("HEAD moved from %s to %s; init must commit nothing", head, after)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "my-own-edit/\n" {
+		t.Errorf(".gitignore = %q; the operator's edit is left as it was", b)
+	}
+	if _, ok := r.Setup.Project.Umbrella.Children["repos/api"]; ok {
+		t.Error("a leaf was created before the refusal")
+	}
+}

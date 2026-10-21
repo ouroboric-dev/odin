@@ -15,6 +15,10 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 )
 
+// startedNote ends the note of the line that says the tool is about to run in a product; the line has no
+// verdict. FindUnfinished reads the product's name from it.
+const startedNote = ": started"
+
 // Ladder is the checks a bump runs in a product, in this order: the dependency policy, then the unit
 // tests. Both are checks of the product's realm, run by the same check runner as a loop's ladder.
 var Ladder = []string{"deps", "unit"}
@@ -94,7 +98,7 @@ func (b *Bumper) Bump(ctx context.Context, pkg, version string, canary Product, 
 		}
 		// A line with no verdict says the tool is about to run: if the command dies, the ledger shows where.
 		if err := b.Log(gungnir.Event{Name: gungnir.EventDepsBump, Package: pkg, From: step.From, To: step.To,
-			Stage: pl.stage, Note: cut(pl.p.Name+": started", 400)}); err != nil {
+			Stage: pl.stage, Note: cut(pl.p.Name+startedNote, 400)}); err != nil {
 			return rep, err
 		}
 		var serr error
