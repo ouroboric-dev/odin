@@ -40,11 +40,20 @@ func plantBump(t *testing.T, project, id string, verdicts ...string) {
 	}
 }
 
+// withLeaf makes the leaf repos/app, by a run that stops at its first gate.
+func withLeaf(t *testing.T, dir, config string) {
+	t.Helper()
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t)); code != ExitStopped {
+		t.Fatalf("run: exit %d: %s", code, errOut)
+	}
+}
+
 func TestDoctorListsAnUnfinishedBump(t *testing.T) {
 	dir, config := project(t, "script.yaml", "")
+	withLeaf(t, dir, config)
 	plantBump(t, dir, bumpID, "")
 	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
-	want := "WARN  bump " + bumpID + ": the bump of golang.org/x/text stopped in repos/app before it ended; the product may be changed. Run: git -C " + filepath.Join(dir, "repos/app") + " diff"
+	want := "WARN  bump " + bumpID + ": the bump of golang.org/x/text stopped in repos/app before it ended; the product may be changed. Run: git -C " + filepath.Join(dir, "repos/app") + " diff. Once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID) + "."
 	if !strings.Contains(out, want) {
 		t.Errorf("doctor lacks %q:\n%s", want, out)
 	}
@@ -84,10 +93,11 @@ func TestDoctorStopsTheContainersOfABump(t *testing.T) {
 	log := stubEngine(t)
 	dir, plain := project(t, "script.yaml", "")
 	config := withSandbox(t, plain)
+	withLeaf(t, dir, plain)
 	plantBump(t, dir, bumpID, "", "pass")
 	stubSays(t, log, "left", leftoverJSON(bumpID, "repos/app", "ygg-bump"))
 	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
-	want := "WARN  sandboxes: bump " + bumpID + " left the sandbox of repos/app (running); stopped it. Run: git -C " + filepath.Join(dir, "repos/app") + " diff"
+	want := "WARN  sandboxes: bump " + bumpID + " left the sandbox of repos/app (running); stopped it. Run: git -C " + filepath.Join(dir, "repos/app") + " diff. Once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID) + "."
 	if !strings.Contains(out, want) {
 		t.Errorf("doctor lacks %q:\n%s", want, out)
 	}
@@ -139,11 +149,37 @@ func TestStatusListsAnUnfinishedBumpAndItsContainers(t *testing.T) {
 	}
 	_, out, _ = ygg(t, "status", id, "--project", dir)
 	for _, want := range []string{
-		"bump:     " + bumpID + ": the bump of golang.org/x/text stopped in repos/app before it ended; the product may be changed. Run: git -C " + filepath.Join(dir, "repos/app") + " diff",
+		"bump:     " + bumpID + ": the bump of golang.org/x/text stopped in repos/app before it ended; the product may be changed. Run: git -C " + filepath.Join(dir, "repos/app") + " diff. Once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID) + ".",
 		"bump:     " + bumpID + ": a container of the sandbox of repos/app is left (running). Run: ygg doctor --project " + dir,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestDoctorAndStatusDoNotOfferGitInAProductWhoseGitWasChanged(t *testing.T) {
+	log := stubEngine(t)
+	dir, plain := project(t, "script.yaml", "")
+	config := withSandbox(t, plain)
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", plain, "--graph", toyRealm(t)); code != ExitStopped {
+		t.Fatalf("run: %s", errOut)
+	}
+	plantBump(t, dir, bumpID, "")
+	stubSays(t, log, "left", leftoverJSON(bumpID, "repos/app", "ygg-bump"))
+	product := filepath.Join(dir, "repos/app")
+	if err := os.WriteFile(filepath.Join(product, ".git"), []byte("gitdir: /tmp/elsewhere\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := "do not run git in " + product + ". Once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID) + "."
+	_, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	if strings.Count(out, "The .git of the product is not as it was") != 2 || strings.Count(out, want) != 2 || strings.Contains(out, "Run: git -C") {
+		t.Errorf("doctor, ledger and container:\n%s", out)
+	}
+	b, _ := os.ReadFile(plain)
+	os.WriteFile(plain, append(b, sandboxExtra...), 0o644)
+	_, out, _ = ygg(t, "status", runID(t, dir), "--project", dir)
+	if !strings.Contains(out, want) || strings.Contains(out, "Run: git -C") {
+		t.Errorf("status:\n%s", out)
 	}
 }

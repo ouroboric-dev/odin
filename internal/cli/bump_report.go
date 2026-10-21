@@ -8,8 +8,10 @@ import (
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/deps"
+	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/run"
+	"github.com/ouroboric-dev/odin/internal/tree"
 )
 
 // bumpRunning reports whether a ygg holds the project's runs lock, as a bump does from its first line to its last.
@@ -22,14 +24,14 @@ func isBump(project, id string) bool {
 }
 
 // unfinishedBumps lists the bumps that stopped before they ended, one finding each, unless a ygg is running one.
-func unfinishedBumps(project string) (ids []string, msgs []string, err error) {
+func (c *command) unfinishedBumps(project string) (ids []string, msgs []string, err error) {
 	if bumpRunning(project) {
 		return nil, nil, nil
 	}
 	list, err := deps.FindUnfinished(project)
 	for _, u := range list {
 		ids = append(ids, u.ID)
-		msgs = append(msgs, fmt.Sprintf("the bump of %s stopped in %s before it ended; the product may be changed. %s", u.Package, orUnknown(u.Product), nextForProduct(project, u.Product)))
+		msgs = append(msgs, fmt.Sprintf("the bump of %s stopped in %s before it ended; the product may be changed. %s", u.Package, orUnknown(u.Product), c.nextForProduct(project, u.Product, u.ID)))
 	}
 	return ids, msgs, err
 }
@@ -41,12 +43,37 @@ func orUnknown(product string) string {
 	return product
 }
 
-// nextForProduct is the command to run next: look at what the bump left in the product.
-func nextForProduct(project, product string) string {
+// nextForProduct is what to do next: look at what the bump left in the product, and then clear the bump's
+// folder. A killed bump may have rewritten the product's .git file, and git would then run the bump's
+// code on the host, so the leaf guard runs first and git is only offered when it passes.
+func (c *command) nextForProduct(project, product, id string) string {
+	clear := "Once the product is as you want it, remove " + filepath.Join(project, ".factory", "deps", id) + "."
 	if product == "" {
-		return "Run: git -C <the product> diff"
+		return "Look at the products the bump named. " + clear
 	}
-	return "Run: git -C " + filepath.Join(project, product) + " diff"
+	dir := filepath.Join(project, product)
+	if err := c.guardProduct(project, product); err != nil {
+		return fmt.Sprintf("The .git of the product is not as it was (%v): do not run git in %s. %s", err, dir, clear)
+	}
+	return "Run: git -C " + dir + " diff. " + clear
+}
+
+// guardProduct runs the leaf guard on the product, as the bump does before it starts: the .git file is the
+// one git made, and no repository is planted below it.
+func (c *command) guardProduct(project, product string) error {
+	root, projectPath, err := tree.FindRoot(c.ctx, project)
+	if err != nil {
+		return err
+	}
+	ns, err := tree.Resolve(c.ctx, root, filepath.Join(projectPath, filepath.ToSlash(product)))
+	if err != nil {
+		return err
+	}
+	l, err := leaf.Open(ns[len(ns)-1])
+	if err != nil {
+		return err
+	}
+	return l.Guard()
 }
 
 // bumpContainers lists the containers of the project's bumps that the engine still holds. status only lists:

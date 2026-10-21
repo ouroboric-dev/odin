@@ -402,7 +402,7 @@ func describeCaps(cfg *schema.Factory, runUse, dayUse gungnir.Usage) string {
 
 // bumpLines says what a killed bump left in the project: an unfinished ledger, and its containers.
 func (c *command) bumpLines(project, configPath string) {
-	ids, msgs, err := unfinishedBumps(project)
+	ids, msgs, err := c.unfinishedBumps(project)
 	for i := range ids {
 		fmt.Fprintf(c.out, "bump:     %s: %s\n", ids[i], msgs[i])
 	}

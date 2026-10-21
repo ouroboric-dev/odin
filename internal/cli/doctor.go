@@ -100,7 +100,7 @@ func (c *command) doctor(args []string) int {
 		}
 		report("OK", "run "+s.ID, string(s.Status))
 	}
-	ids, msgs, err := unfinishedBumps(f.project)
+	ids, msgs, err := c.unfinishedBumps(f.project)
 	if err != nil {
 		report("ERROR", "bumps", err.Error())
 	}
@@ -351,7 +351,7 @@ func (c *command) checkSandbox(project string, f *schema.Factory, report func(le
 				if err := d.StopLeftover(c.ctx, l); err != nil {
 					report("ERROR", "sandboxes", fmt.Sprintf("couldn't stop %s of bump %s: %v", l.Project, l.Run, err))
 				} else {
-					report("WARN", "sandboxes", fmt.Sprintf("bump %s left the sandbox of %s (%s); stopped it. %s", l.Run, l.Leaf, l.State, nextForProduct(project, l.Leaf)))
+					report("WARN", "sandboxes", fmt.Sprintf("bump %s left the sandbox of %s (%s); stopped it. %s", l.Run, l.Leaf, l.State, c.nextForProduct(project, l.Leaf, l.Run)))
 				}
 			}
 			continue
