@@ -567,8 +567,12 @@ func TestInitIgnoresTheFactoryFolderOfTheProject(t *testing.T) {
 					}
 				}
 			}
+			head, _ := git.Run(ctx, r.Project, "rev-parse", "HEAD")
 			if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
 				t.Fatalf("Advance() = %+v, %v", out, err)
+			}
+			if after, _ := git.Run(ctx, r.Project, "log", "--format=%s", head+"..HEAD", "--", ".gitignore"); name == "one with the line" && after != "" {
+				t.Errorf("init committed .gitignore although it had the line: %q", after)
 			}
 			if _, err := git.Run(ctx, r.Project, "check-ignore", "-q", ".factory/runs"); err != nil {
 				t.Errorf("git check-ignore .factory/runs = %v; the project's .gitignore must name .factory/", err)
@@ -581,5 +585,27 @@ func TestInitIgnoresTheFactoryFolderOfTheProject(t *testing.T) {
 				t.Errorf(".gitignore is left uncommitted: %q", st)
 			}
 		})
+	}
+}
+
+func TestInitRefusesAnUncommittedGitignoreAndCommitsNothing(t *testing.T) {
+	ctx := context.Background()
+	r := initRun(t, galleryLeaves)
+	path := filepath.Join(r.Project, ".gitignore")
+	if err := os.WriteFile(path, []byte("my-own-edit/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	head, _ := git.Run(ctx, r.Project, "rev-parse", "HEAD")
+	if out, err := Advance(ctx, r); err == nil && out.Status == run.StatusDone {
+		t.Fatalf("Advance() = %+v, nil; want init to refuse an uncommitted .gitignore", out)
+	}
+	if after, _ := git.Run(ctx, r.Project, "rev-parse", "HEAD"); after != head {
+		t.Errorf("HEAD moved from %s to %s; init must commit nothing", head, after)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "my-own-edit/\n" {
+		t.Errorf(".gitignore = %q; the operator's edit is left as it was", b)
+	}
+	if _, ok := r.Setup.Project.Umbrella.Children["repos/api"]; ok {
+		t.Error("a leaf was created before the refusal")
 	}
 }

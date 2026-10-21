@@ -86,9 +86,13 @@ const factoryIgnore = ".factory/"
 
 // ignoreFactory makes the project's .gitignore name .factory/ and commits that. It creates the file
 // when the project has none, adds the line to one that lacks it, and leaves one that has it alone, so
-// a resumed init adds nothing twice.
+// a resumed init adds nothing twice. It refuses when the file has changes that are not committed.
 func ignoreFactory(ctx context.Context, project string) error {
 	path := filepath.Join(project, ".gitignore")
+	// The operator's own uncommitted edit of .gitignore is not Odin's to commit.
+	if st, err := git.Run(ctx, project, "status", "--porcelain", "--", ".gitignore"); err != nil || st != "" {
+		return fmt.Errorf("%s has changes that are not committed, so init can't add %s to it: commit or discard them first (%v)", path, factoryIgnore, err)
+	}
 	b, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
