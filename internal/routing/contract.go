@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -32,10 +34,13 @@ const (
 )
 
 // Change is a file a pointer move changes. Path is from the project root. Old is nil for a file the move
-// adds, New is nil for a file it deletes.
+// adds, New is nil for a file it deletes. OldMode and NewMode are the git modes ("100644", "120000" for a
+// symlink, ...) of the file before and after the move; a side the file does not have is "" or "000000".
 type Change struct {
 	Path     string
 	Old, New []byte
+	OldMode  string
+	NewMode  string
 }
 
 // Delta is what oasdiff finds between two versions of a contract.
@@ -57,13 +62,46 @@ type Judgement struct {
 // IsContractName reports whether a file's name says it holds an OpenAPI contract.
 func IsContractName(path string) bool { return isContractName(path) }
 
+// symlinkMode is the git mode of a symlink.
+const symlinkMode = "120000"
+
+// FolderRule reports why a change falls under the folder of a contract that the index lists, or "" when it
+// does not (spec §3.4). The folder is the directory of the contract's path. For a contract at the root of its
+// leaf (the directory is the entry's Owner) only the files directly in the root count; for a contract in a
+// subfolder, the folder and everything below it. A changed YAML or JSON file there selects, as does a file
+// that is a symlink before or after the move, whatever its name. A file named like a contract is a contract:
+// the YAML rule leaves it to Judge's per-contract judgement, and only the symlink rule applies to it.
+func (i *Impact) FolderRule(c Change) string {
+	if i == nil {
+		return ""
+	}
+	dir := path.Dir(c.Path)
+	for _, e := range i.Contracts {
+		root := path.Dir(e.Path)
+		if root == "." {
+			continue // not from the project root: not a path we can match
+		}
+		if dir != root && (root == e.Owner || !strings.HasPrefix(dir, root+"/")) {
+			continue
+		}
+		switch ext := strings.ToLower(path.Ext(c.Path)); {
+		case c.OldMode == symlinkMode || c.NewMode == symlinkMode:
+			return c.Path + ": a symlink under the folder of the listed contract " + e.Path + " changed; a link can hide a contract"
+		case !isContractName(c.Path) && (ext == ".yaml" || ext == ".yml" || ext == ".json"):
+			return c.Path + ": a YAML or JSON file under the folder of the listed contract " + e.Path + " changed; the contract may be split across files"
+		}
+	}
+	return ""
+}
+
 var rank = map[Verdict]int{Pass: 0, Fail: 1, Escalate: 2}
 
 // Judge decides whether a pointer move that makes changes is a pointer-contract move (spec §3.4, §8.2).
 // It goes by extracted edges of the impact index, or by oasdiff, and never by a guess alone: a contract
 // that only an inferred edge reaches, or that the index does not list, gives Escalate unless oasdiff
-// shows the change. d may be nil when no oasdiff is at hand. Only files that are named like a contract
-// matter; every move also runs the umbrella's acceptance tests, which catch the rest (spec §8.2).
+// shows the change. d may be nil when no oasdiff is at hand. Files named like a contract matter, and so do
+// those that Impact.FolderRule selects (an Escalate on inferred evidence); every move also runs the
+// umbrella's acceptance tests, which catch the rest (spec §8.2).
 func Judge(ctx context.Context, imp *Impact, changes []Change, d Differ) Judgement {
 	if imp == nil {
 		imp = &Impact{} // no index: every contract file is unlisted, so a guess at best
@@ -71,10 +109,15 @@ func Judge(ctx context.Context, imp *Impact, changes []Change, d Differ) Judgeme
 	out := Judgement{Verdict: Pass, Evidence: Extracted, Reason: "no contract file changed"}
 	first := true
 	for _, c := range changes {
-		if !isContractName(c.Path) {
+		var j Judgement
+		switch folder := imp.FolderRule(c); {
+		case folder != "":
+			j = Judgement{Escalate, Inferred, folder, nil}
+		case isContractName(c.Path):
+			j = judgeOne(ctx, imp, c, d)
+		default:
 			continue
 		}
-		j := judgeOne(ctx, imp, c, d)
 		if j.Verdict != Pass {
 			out.Contracts = append(out.Contracts, c.Path)
 		}

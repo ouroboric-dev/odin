@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,5 +205,161 @@ func TestThePointerDoesNotMoveToACommitTheGateDidNotJudge(t *testing.T) {
 	}
 	if got, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app"); got == later || got == judged {
 		t.Errorf("the pointer is at %s; it must not have moved", got)
+	}
+}
+
+// shipFolderIndex ships an index that lists a contract in the given path of the leaf, with no readers.
+func shipFolderIndex(t *testing.T, r *run.Run, contract string) {
+	t.Helper()
+	imp := &routing.Impact{Schema: routing.ImpactSchema, Bound: "lower", Contracts: []routing.ContractEntry{
+		{ID: "contract:repos/app/" + contract, Path: "repos/app/" + contract, Owner: "repos/app", Readers: routing.Reached{Extracted: []string{}, Inferred: []string{}}}},
+		Reach: map[string]routing.Reached{}, InferredEdges: []routing.Edge{}}
+	if err := routing.WriteImpact(r.Project, imp); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", routing.ImpactFile}, {"commit", "-q", "-m", "ship the impact index"}} {
+		if _, err := git.Run(bg, r.Project, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// scriptWritingRaw is a scripted agent that writes out.txt and the given files (path to content, escaped for YAML).
+func scriptWritingRaw(files map[string]string) string {
+	s := "steps:\n  a:\n    - actions:\n        - write: { path: out.txt, content: \"done\\n\" }\n"
+	for f, c := range files {
+		s += "        - write: { path: \"" + f + "\", content: \"" + c + "\" }\n"
+	}
+	return s + "      result: { status: ok, summary: wrote files, usage: { in: 1, out: 1, cache: 0, turns: 1, cost_usd: 0.01 } }\n"
+}
+
+func TestAYAMLFileInAContractsFolderStopsTheGateInEveryMode(t *testing.T) {
+	noOasdiff(t)
+	for _, mode := range []string{"step-by-step", "key-points", "unattended"} {
+		{
+			r := startPack(t, mode, "", packChecks, contractNodes, scriptWritingRaw(map[string]string{"sqlc.yaml": "version: 2\\n"}))
+			shipFolderIndex(t, r, "api.openapi.yaml")
+			out, err := Advance(bg, r)
+			if err != nil || out.Status != run.StatusStopped || out.Gate != "contract-gate" {
+				t.Fatalf("%s: Advance() = %+v, %v; want a stop at the gate", mode, out, err)
+			}
+			if got, _ := git.Run(bg, r.Project, "rev-parse", "HEAD:repos/app"); got == mainOf(t, r) {
+				t.Errorf("%s: the pointer moved before the approval", mode)
+			}
+			b, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "contract-gate-1.md"))
+			for _, want := range []string{"repos/app/sqlc.yaml", "YAML or JSON"} {
+				if !strings.Contains(string(b), want) {
+					t.Errorf("%s: the gate file lacks %q:\n%s", mode, want, b)
+				}
+			}
+			if text := ledgerText(t, r); !strings.Contains(text, `"ygg.pointer.evidence":"inferred","ygg.verdict":"escalate"`) {
+				t.Errorf("%s: the ledger lacks the escalation", mode)
+			}
+		}
+	}
+}
+
+func TestTheFolderRuleSelectsByTheFoldersOfTheShippedIndex(t *testing.T) {
+	noOasdiff(t)
+	cases := []struct {
+		name     string
+		contract string
+		files    map[string]string
+		stop     bool
+	}{
+		{"a JSON file in the folder", "api.openapi.yaml", map[string]string{"schema.json": "{}"}, true},
+		{"a name with a space and a non-ASCII byte", "api.openapi.yaml", map[string]string{"my sch\u00e9ma.yaml": "a: 1\\n"}, true},
+		{"a markdown file in the folder", "api.openapi.yaml", map[string]string{"README.md": "text"}, false},
+		{"a YAML file below a contract at the leaf's root", "api.openapi.yaml", map[string]string{"ci/ci.yml": "a: 1\\n"}, false},
+		{"a YAML file below a contract in a subfolder", "contracts/api.openapi.yaml", map[string]string{"contracts/schemas/user.yaml": "a: 1\\n"}, true},
+		{"a YAML file beside a contract in a subfolder", "contracts/api.openapi.yaml", map[string]string{"contracts/user.yaml": "a: 1\\n"}, true},
+		{"a YAML file at the root of a leaf whose contract is in a subfolder", "contracts/api.openapi.yaml", map[string]string{"sqlc.yaml": "a: 1\\n"}, false},
+	}
+	for _, c := range cases {
+		r := startPack(t, "unattended", "", packChecks, contractNodes, scriptWritingRaw(c.files))
+		shipFolderIndex(t, r, c.contract)
+		out, err := Advance(bg, r)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if stopped := out.Status == run.StatusStopped && out.Gate == "contract-gate"; stopped != c.stop {
+			t.Errorf("%s: Advance() = %+v; want stop %t", c.name, out, c.stop)
+		}
+	}
+}
+
+func TestASymlinkInAContractsFolderStopsTheGate(t *testing.T) {
+	noOasdiff(t)
+	for _, mode := range []string{"key-points", "unattended"} {
+		r := startPack(t, mode, "", packChecks, contractNodes, scriptWriting())
+		shipFolderIndex(t, r, "api.openapi.yaml")
+		// A link to a target outside the leaf, committed to the leaf's main.
+		l, err := r.Leaf("repos/app")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("/etc/hostname", filepath.Join(l.Dir(), "notes.txt")); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"add", "notes.txt"}, {"commit", "-q", "-m", "a link"}} {
+			if _, err := l.Git(bg, args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := Advance(bg, r)
+		if err != nil || out.Status != run.StatusStopped || out.Gate != "contract-gate" {
+			t.Fatalf("%s: Advance() = %+v, %v; want a stop at the gate", mode, out, err)
+		}
+		b, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "contract-gate-1.md"))
+		if !strings.Contains(string(b), "repos/app/notes.txt") || !strings.Contains(string(b), "symlink") {
+			t.Errorf("%s: the gate file lacks the link:\n%s", mode, b)
+		}
+	}
+}
+
+// An absent index lists no contract, so no folder is watched; a corrupt one escalates the whole move
+// (TestACorruptShippedIndexEscalatesTheMove).
+func TestNoIndexWatchesNoFolder(t *testing.T) {
+	noOasdiff(t)
+	r := startPack(t, "unattended", "", packChecks, contractNodes, scriptWritingRaw(map[string]string{"sqlc.yaml": "a: 1\\n"}))
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v; want the run done", out, err)
+	}
+}
+
+func TestMoreThanTheCapOfFolderFilesEscalates(t *testing.T) {
+	noOasdiff(t)
+	files := map[string]string{}
+	for i := 0; i <= maxContractChanges; i++ {
+		files[fmt.Sprintf("f%d.yaml", i)] = "a: 1\\n"
+	}
+	r := startPack(t, "unattended", "", packChecks, contractNodes, scriptWritingRaw(files))
+	shipFolderIndex(t, r, "api.openapi.yaml")
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusStopped || out.Gate != "contract-gate" {
+		t.Fatalf("Advance() = %+v, %v; want a stop", out, err)
+	}
+	if text := ledgerText(t, r); !strings.Contains(text, "more than") {
+		t.Error("the ledger lacks the cap reason")
+	}
+}
+
+func TestParseRawDiffKeepsNamesAndModes(t *testing.T) {
+	raw := ":000000 100644 0000000 abc1234 A\x00my schéma.yaml\x00:120000 100644 abc1234 def5678 T\x00a/link\x00:100644 000000 abc1234 0000000 D\x00x.json\x00"
+	got, err := parseRawDiff([]byte(raw))
+	want := []rawChange{{"my schéma.yaml", "000000", "100644"}, {"a/link", "120000", "100644"}, {"x.json", "100644", "000000"}}
+	if err != nil || len(got) != len(want) {
+		t.Fatalf("parseRawDiff = %v, %v; want %v", got, err, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if got, err := parseRawDiff(nil); err != nil || len(got) != 0 {
+		t.Errorf("an empty diff: %v, %v", got, err)
+	}
+	if _, err := parseRawDiff([]byte("garbage\x00file\x00")); err == nil {
+		t.Error("a line that is not a raw header was read")
 	}
 }

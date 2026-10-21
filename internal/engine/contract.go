@@ -88,29 +88,59 @@ func contractJudgement(ctx context.Context, r *run.Run, gateNode schema.Node) (r
 				Reason: fmt.Sprintf("the shipped %s can't be read (%v), so the move can't be judged", routing.ImpactFile, err)}, move, nil
 		}
 	}
-	names, err := l.Output(ctx, "diff", "-z", "--name-only", "--no-renames", from, to)
+	raw, err := l.Output(ctx, "diff", "-z", "--raw", "--no-renames", from, to)
+	if err != nil {
+		return routing.Judgement{}, "", err
+	}
+	entries, err := parseRawDiff(raw)
 	if err != nil {
 		return routing.Judgement{}, "", err
 	}
 	var changes []routing.Change
-	for _, f := range strings.Split(string(names), "\x00") {
-		if f == "" || !routing.IsContractName(f) {
+	for _, e := range entries {
+		c := routing.Change{Path: path.Join(child, e.file), OldMode: e.oldMode, NewMode: e.newMode}
+		// A file the index's folder rule selects goes to Judge by name and mode; only a contract's content is read.
+		if !routing.IsContractName(e.file) && imp.FolderRule(c) == "" {
 			continue
 		}
 		if len(changes) == maxContractChanges {
 			return routing.Judgement{Verdict: routing.Escalate, Evidence: routing.Inferred,
 				Reason: fmt.Sprintf("the move changes more than %d contract files", maxContractChanges)}, move, nil
 		}
-		c := routing.Change{Path: path.Join(child, f)}
-		if old, err := l.Output(ctx, "show", from+":"+f); err == nil {
-			c.Old = old
-		}
-		if nw, err := l.Output(ctx, "show", to+":"+f); err == nil {
-			c.New = nw
+		if routing.IsContractName(e.file) {
+			if old, err := l.Output(ctx, "show", from+":"+e.file); err == nil {
+				c.Old = old
+			}
+			if nw, err := l.Output(ctx, "show", to+":"+e.file); err == nil {
+				c.New = nw
+			}
 		}
 		changes = append(changes, c)
 	}
 	return routing.Judge(ctx, imp, changes, contractDiffer), move, nil
+}
+
+// rawChange is a file of `git diff --raw -z`: its path in the leaf and its git mode on each side ("000000"
+// for a side the file does not have).
+type rawChange struct{ file, oldMode, newMode string }
+
+// parseRawDiff reads the output of `git diff --raw -z --no-renames`: for each file a header
+// ":<old mode> <new mode> <old sha> <new sha> <status>" and then the path, each ended by NUL. -z keeps the
+// path raw, so a name with a space or a non-ASCII byte reaches the rule as it is.
+func parseRawDiff(raw []byte) ([]rawChange, error) {
+	var out []rawChange
+	fields := strings.Split(string(raw), "\x00")
+	for i := 0; i < len(fields); i += 2 {
+		if fields[i] == "" && i == len(fields)-1 {
+			break // the NUL after the last path
+		}
+		h := strings.Fields(strings.TrimPrefix(fields[i], ":"))
+		if !strings.HasPrefix(fields[i], ":") || len(h) < 5 || i+1 >= len(fields) || fields[i+1] == "" {
+			return nil, fmt.Errorf("git diff --raw gave a line that can't be read: %q", fields[i])
+		}
+		out = append(out, rawChange{file: fields[i+1], oldMode: h[0], newMode: h[1]})
+	}
+	return out, nil
 }
 
 // contractFacts runs the check for gate node n, writes pointer_contract_checked, and turns the verdict
