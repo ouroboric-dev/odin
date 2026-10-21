@@ -95,3 +95,25 @@ func TestTheRealExampleNeedsItsDollarCaps(t *testing.T) {
 		}
 	}
 }
+
+// A role's reasoning is checked when factory.yaml loads: a value the schema does not list is refused with the
+// setting named, and the four it lists load into the role.
+func TestTheFactoryFileRefusesAnUnknownReasoning(t *testing.T) {
+	reviewer := "reviewer: { agent: opencode, model: openrouter/qwen/qwen3.8-27b }"
+	for _, v := range []string{"low", "medium", "high", "off"} {
+		config, _, _ := realExample(t, func(s string) string {
+			return strings.Replace(s, reviewer, strings.TrimSuffix(reviewer, " }")+", reasoning: "+v+" }", 1)
+		})
+		f, err := schema.LoadFactory(config)
+		if err != nil || f.Roles["reviewer"].Reasoning != v {
+			t.Errorf("reasoning: %s loaded as %+v, %v", v, f, err)
+		}
+	}
+	config, _, _ := realExample(t, func(s string) string {
+		return strings.Replace(s, reviewer, strings.TrimSuffix(reviewer, " }")+", reasoning: max }", 1)
+	})
+	_, err := schema.LoadFactory(config)
+	if err == nil || !strings.Contains(err.Error(), "reasoning") {
+		t.Errorf("reasoning: max loaded with error %v, want a refusal that names reasoning", err)
+	}
+}

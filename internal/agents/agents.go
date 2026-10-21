@@ -32,7 +32,9 @@ func New(role schema.Role, configDir string, o Options) (gungnir.Agent, error) {
 	case "claude-code":
 		return &claudecode.Agent{}, nil
 	case "opencode":
-		cfg := opencode.Config{Privacy: o.Privacy}
+		// The schema checks Reasoning when factory.yaml loads and opencode.New checks it again, so a bad value
+		// does not pass here unseen. A claude-code or scripted role ignores it, as it does price.
+		cfg := opencode.Config{Privacy: o.Privacy, Reasoning: role.Reasoning}
 		if p := role.Price; p != nil {
 			cfg.Price = &opencode.Price{Input: p.Input, Output: p.Output, CacheRead: p.CacheRead, CacheWrite: p.CacheWrite}
 		}
