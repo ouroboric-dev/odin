@@ -246,7 +246,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 		}
 	}
 	sp := sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, readOnly: n.ReadOnly, before: before,
-		maxTurns: n.MaxTurns, timeout: time.Duration(n.Timeout)}
+		maxTurns: n.MaxTurns, maxTokens: n.MaxTokens, timeout: time.Duration(n.Timeout)}
 	res, ev, err := session(ctx, r, sp)
 	if err := checkReadOnly(ctx, r, sp, ev, err); err != nil {
 		return nodeError(err)

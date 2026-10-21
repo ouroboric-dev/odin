@@ -17,14 +17,15 @@ import (
 // sessionSpec says what one agent session is. key names its ledger lines, its transcripts and its
 // script: a node's id, or the session key of a loop's reviewer.
 type sessionSpec struct {
-	key      string
-	role     string
-	repo     string
-	text     string // the whole prompt
-	readOnly bool
-	before   string // a read-only session's snapshot of the leaf before it ran
-	maxTurns int
-	timeout  time.Duration
+	key       string
+	role      string
+	repo      string
+	text      string // the whole prompt
+	readOnly  bool
+	before    string // a read-only session's snapshot of the leaf before it ran
+	maxTurns  int
+	maxTokens int
+	timeout   time.Duration
 	// scratch, when set, is the workspace a scratch agent works in, in place of a leaf: the session runs
 	// there, in the scratch sandbox of key, and a try that failed starts again from reseed's fresh copy.
 	scratch string
@@ -103,7 +104,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 			return stop(sandboxStart(err))
 		}
 		task := gungnir.Task{Role: sp.role, Node: sp.key, Attempt: attempt, Prompt: sp.text, Workdir: workdir,
-			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turnsFor(sp.maxTurns, left), Timeout: sp.timeout,
+			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turnsFor(sp.maxTurns, left), MaxTokens: sp.maxTokens, Timeout: sp.timeout,
 			TranscriptDir: filepath.Join(r.Dir, "transcripts"), Sandbox: runner}
 		actx, cancel := ctx, context.CancelFunc(func() {})
 		if task.Timeout > 0 {
@@ -198,7 +199,7 @@ func turnsFor(node int, left int64) int {
 // nodeError turns the error of a session into what the engine does with it, for a node that is not
 // in a loop: a budget cap that is reached is a hard stop at budget-cap, a used-up quota pauses the run,
 // and everything else that is the session's own, an agent failure, retries that ran out or an
-// infrastructure failure, fails the node.
+// infrastructure failure, fails the node. A session stopped for its token limit is an agent failure.
 // An error of Odin's own stays as it is.
 func nodeError(err error) error {
 	var af *jormungandr.AgentFailure

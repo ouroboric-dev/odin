@@ -56,7 +56,7 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	if refusal := s.Refusals[n.ID]; refusal != "" {
 		text += "\n\n" + jormungandr.Refusal(refusal)
 	}
-	sp := sessionSpec{key: n.ID, role: n.Role, text: text, maxTurns: n.MaxTurns, timeout: time.Duration(n.Timeout),
+	sp := sessionSpec{key: n.ID, role: n.Role, text: text, maxTurns: n.MaxTurns, maxTokens: n.MaxTokens, timeout: time.Duration(n.Timeout),
 		scratch: dir, reseed: func() error { _, err := seedScratch(r, n); return err }}
 	res, ev, err := session(ctx, r, sp)
 	if err != nil {
