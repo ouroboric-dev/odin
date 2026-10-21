@@ -6,10 +6,14 @@ github.com/ouroboric-dev/gleipnir v0.0.0-20261019162247-129f91755490 h1:5cY1iqUJ
 github.com/ouroboric-dev/gleipnir v0.0.0-20261019162247-129f91755490/go.mod h1:HQ35wHtM1LIbU4kAE381WB0274UeR7Tb6ngUWPaMAGE=
 github.com/ouroboric-dev/gleipnir v0.0.0-20261020084632-da4f35fd0328 h1:45+im1v8P8BSnhN52DeXVO7RmTF6fBXrQgJBGHH65hs=
 github.com/ouroboric-dev/gleipnir v0.0.0-20261020084632-da4f35fd0328/go.mod h1:HQ35wHtM1LIbU4kAE381WB0274UeR7Tb6ngUWPaMAGE=
+github.com/ouroboric-dev/gleipnir v0.0.0-20261020232007-18756c25e920 h1:JMcSwPcXjkvwlnMNcOoBT/XjCwnpxpXM94/DPmBPuUE=
+github.com/ouroboric-dev/gleipnir v0.0.0-20261020232007-18756c25e920/go.mod h1:HQ35wHtM1LIbU4kAE381WB0274UeR7Tb6ngUWPaMAGE=
 github.com/ouroboric-dev/gungnir v0.0.0-20261019162223-c91ccdfa8272 h1:lL+KGuDoSwvhGLqPpFG9CGX1LMpXC+i6LDJFUsTBe6E=
 github.com/ouroboric-dev/gungnir v0.0.0-20261019162223-c91ccdfa8272/go.mod h1:NEj+bRbIgN2QLv8AbnDF4CAn9IYV0m/8i4j25unu10s=
 github.com/ouroboric-dev/gungnir v0.0.0-20261020221847-50c0ec19a49f h1:EJJNih0wG6rxha3hzYSUb6vxCg/Yrx8VLOlxivN/2kY=
 github.com/ouroboric-dev/gungnir v0.0.0-20261020221847-50c0ec19a49f/go.mod h1:NEj+bRbIgN2QLv8AbnDF4CAn9IYV0m/8i4j25unu10s=
+github.com/ouroboric-dev/gungnir v0.0.0-20261020232029-ef6c0efde50d h1:5Td5Kq3aaz1uZofCrD78knrtryyxz+Adqwx7Hb/DtEU=
+github.com/ouroboric-dev/gungnir v0.0.0-20261020232029-ef6c0efde50d/go.mod h1:NEj+bRbIgN2QLv8AbnDF4CAn9IYV0m/8i4j25unu10s=
 github.com/ouroboric-dev/havamal v0.0.0-20261017195922-be698041a5ae h1:9atkMeo0Y4fCM3UfCJBfainJGVcy5NNLLqPAzSq0FNs=
 github.com/ouroboric-dev/havamal v0.0.0-20261017195922-be698041a5ae/go.mod h1:wGR2yR184wSq86n1p4tPv/nqgq3O8+JLw7b5Rw6+BPo=
 github.com/ouroboric-dev/jormungandr v0.0.0-20261017110129-97ae1fd0ad99 h1:pJEbH6dhZ/wt3lv/YwpLJqETp22bEy+zvkSn7gpDrWA=
