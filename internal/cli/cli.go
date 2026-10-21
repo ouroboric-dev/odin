@@ -354,6 +354,7 @@ func (c *command) status(args []string) int {
 	if line := capsLine(s); line != "" {
 		fmt.Fprintf(c.out, "caps:     %s\n", line)
 	}
+	c.bumpLines(project, s.ConfigPath)
 	return ExitDone
 }
 
@@ -397,4 +398,19 @@ func describeCaps(cfg *schema.Factory, runUse, dayUse gungnir.Usage) string {
 		return out
 	}
 	return "this run " + one(cfg.Budget.PerRun, runUse) + "; today " + one(cfg.Budget.PerDay, dayUse)
+}
+
+// bumpLines says what a killed bump left in the project: an unfinished ledger, and its containers.
+func (c *command) bumpLines(project, configPath string) {
+	ids, msgs, err := unfinishedBumps(project)
+	for i := range ids {
+		fmt.Fprintf(c.out, "bump:     %s: %s\n", ids[i], msgs[i])
+	}
+	if err != nil {
+		fmt.Fprintf(c.out, "bump:     %v\n", err)
+	}
+	cfg, _ := schema.LoadFactory(configPath)
+	for _, l := range c.bumpContainers(project, cfg) {
+		fmt.Fprintf(c.out, "bump:     %s: a container of the sandbox of %s is left (%s). Run: ygg doctor --project %s\n", l.Run, l.Leaf, l.State, project)
+	}
 }

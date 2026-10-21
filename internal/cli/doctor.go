@@ -100,6 +100,13 @@ func (c *command) doctor(args []string) int {
 		}
 		report("OK", "run "+s.ID, string(s.Status))
 	}
+	ids, msgs, err := unfinishedBumps(f.project)
+	if err != nil {
+		report("ERROR", "bumps", err.Error())
+	}
+	for i := range ids {
+		report("WARN", "bump "+ids[i], msgs[i])
+	}
 	return exit(bad)
 }
 
@@ -336,6 +343,19 @@ func (c *command) checkSandbox(project string, f *schema.Factory, report func(le
 	stopped := map[string]bool{}
 	for _, l := range left {
 		dir := run.Dir(project, l.Run)
+		if isBump(project, l.Run) { // a bump names its sandbox by its own id; a live bump holds the runs lock
+			switch {
+			case bumpRunning(project), stopped[l.Project]:
+			default:
+				stopped[l.Project] = true
+				if err := d.StopLeftover(c.ctx, l); err != nil {
+					report("ERROR", "sandboxes", fmt.Sprintf("couldn't stop %s of bump %s: %v", l.Project, l.Run, err))
+				} else {
+					report("WARN", "sandboxes", fmt.Sprintf("bump %s left the sandbox of %s (%s); stopped it. %s", l.Run, l.Leaf, l.State, nextForProduct(project, l.Leaf)))
+				}
+			}
+			continue
+		}
 		switch _, err := os.Stat(dir); {
 		case err != nil:
 			report("WARN", "sandboxes", fmt.Sprintf("container %.12s of run %s belongs to another project; doctor in that project stops it", l.Container, l.Run))
