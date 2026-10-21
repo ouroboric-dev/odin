@@ -45,6 +45,7 @@ func (c *command) deps(args []string) int {
 			f.rollout = append(f.rollout, v)
 			return nil
 		})
+		fs.BoolVar(&f.host, "host", false, "run on the host, with no sandbox, when factory.yaml has no sandbox section (it has no effect with one)")
 	})
 	if !ok {
 		return ExitRefused
@@ -55,6 +56,9 @@ func (c *command) deps(args []string) int {
 	cfg, err := schema.LoadFactory(f.config)
 	if err != nil {
 		return c.refuse(err)
+	}
+	if cfg.Sandbox == nil && !f.host { // before the lock, the folder and the ledger: a refusal leaves nothing
+		return c.refuse(errors.New("deps bump has no sandbox: factory.yaml has no sandbox section, so the package manager and its scripts would run on the host with the full network and your user id. Add a sandbox section, or pass --host to accept that"))
 	}
 	root, projectPath, err := tree.FindRoot(c.ctx, f.project)
 	if err != nil {
@@ -131,6 +135,11 @@ func (c *command) deps(args []string) int {
 			var err error
 			if l, err = ledger.Open(filepath.Join(work, "ledger.jsonl"), ledger.Anchor{}); err != nil {
 				return err
+			}
+			if cfg.Sandbox == nil { // --host: the first line says so, before any product is touched
+				if err := l.Append(gungnir.Event{Name: gungnir.EventDepsBump, Run: id, Note: deps.HostNote}); err != nil {
+					return err
+				}
 			}
 		}
 		e.Run = id

@@ -63,7 +63,7 @@ func lastBumpLine(path string) (*gungnir.Event, error) {
 		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
 			return nil, fmt.Errorf("%s:%d: %w", path, n, err)
 		}
-		if e.Name == gungnir.EventDepsBump {
+		if e.Name == gungnir.EventDepsBump && e.Note != HostNote {
 			last = &e
 		}
 	}

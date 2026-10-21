@@ -120,10 +120,9 @@ func TestACancelledBumpPutsTheProductBackAndStopsItsSandbox(t *testing.T) {
 	if !same2(before, w.bytes("api")) || strings.Join(w.stopped, ",") != "api" {
 		t.Errorf("not put back, or not stopped: %v", w.stopped)
 	}
-	for _, e := range w.events {
-		if e.Name == gungnir.EventDepsBump && e.Verdict != "" {
-			t.Errorf("a cancelled bump logged a verdict: %+v", e)
-		}
+	// The last line closes the bump, so that FindUnfinished does not report it: the product is back.
+	if last := w.events[len(w.events)-1]; last.Name != gungnir.EventDepsBump || last.Verdict != "fail" || !strings.Contains(last.Note, "stopped") {
+		t.Errorf("last event of a cancelled bump: %+v", last)
 	}
 }
 

@@ -113,7 +113,11 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   file differs after the checks from what the `deps` check judged. A product that fails is put back as it was,
   the rollout products after it are never touched, and the verdict is `fail`. A bump has its own folder
   under `.factory/deps/`, takes the runs lock of the project, and leaves the change uncommitted in the
-  working copies.
+  working copies. It runs in the sandbox of `factory.yaml`. With no `sandbox:` section it refuses (exit 2,
+  before the lock) unless `--host` is given; the bump then runs on the host, and the first line of its ledger
+  is a `deps_bump` line with no verdict whose note says it ran on the host. With a sandbox section `--host` has no effect. A bump that is
+  cancelled, or whose sandbox does not start, ends its ledger with a `fail` line, so that `doctor` and
+  `status` do not list it as unfinished.
 - Walks the instance tree and moves pointers. It is the only writer of umbrellas, `features.json`,
   the ledger, gate files and reports (spec §3.3).
 - Does every git operation, from the host (spec §6.3).
