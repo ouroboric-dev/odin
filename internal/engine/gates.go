@@ -17,7 +17,8 @@ import (
 )
 
 // reachGate decides gate node n (spec §7.2). Both a stop and an auto-pass write a gate file, so
-// unattended decisions can be audited. A stop saves the run as stopped and reports true.
+// unattended decisions can be audited. A stop saves the run as stopped and reports true. An unattended
+// block of a task's pointer-contract gate returns a *contractBlock, and the loop gives the task up.
 func reachGate(ctx context.Context, r *run.Run, n schema.Node) (bool, error) {
 	s := r.State
 	attempt, err := startAttempt(r, n)
@@ -61,6 +62,12 @@ func reachGate(ctx context.Context, r *run.Run, n schema.Node) (bool, error) {
 		ev.Name = gungnir.EventGateAutoPassed
 		return false, r.Log(ev)
 	}
+	if action == gate.Block && blocksTasks(r, n) {
+		// Unattended: nobody is to approve this. The task is blocked and the run goes on (spec §7.1, §7.3);
+		// pointer_contract_checked and task_blocked are the ledger's record of it.
+		return false, &contractBlock{why: "its pointer move changes a contract that is not in the approved spec" + contractNames(evidence) +
+			". The decision is in " + file + "."}
+	}
 	ev.Name = gungnir.EventGatePending
 	if err := r.Log(ev); err != nil {
 		return false, err
@@ -69,14 +76,38 @@ func reachGate(ctx context.Context, r *run.Run, n schema.Node) (bool, error) {
 	return true, r.Save()
 }
 
+// contractBlock is a pointer-contract gate that an unattended run answered by blocking the task: the
+// engine loop gives the task up with why and goes on.
+type contractBlock struct{ why string }
+
+func (c *contractBlock) Error() string { return c.why }
+
+// contractNames lists the contracts the gate's evidence section names, as " (a, b)", or "" for none.
+func contractNames(evidence string) string {
+	var names []string
+	for _, line := range strings.Split(evidence, "\n") {
+		if name, ok := strings.CutPrefix(line, "- Contract: "); ok {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(names, ", ") + ")"
+}
+
 // writeGateFile writes gates/<node>-<attempt>.md and returns its path relative to the run.
 func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, verdict *gungnir.Conformance, evidence string) (string, error) {
 	s := r.State
 	rel := filepath.Join("gates", fmt.Sprintf("%s-%d.md", n.ID, attempt))
 	var b strings.Builder
 	decision := "stopped for a decision"
-	if action == gate.Auto {
+	blocked := action == gate.Block && blocksTasks(r, n)
+	switch {
+	case action == gate.Auto:
 		decision = "passed automatically"
+	case blocked:
+		decision = "blocked the task, which an unattended run gives up while the rest goes on"
 	}
 	fmt.Fprintf(&b, "# Approval point %s (%s)\n\n", n.ID, n.Gate)
 	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Decision: %s\n- Time: %s\n\n", s.ID, s.Mode, decision,
@@ -106,7 +137,10 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, v
 		b.WriteString(" (estimated)")
 	}
 	b.WriteString("\n")
-	if action != gate.Auto {
+	if blocked {
+		fmt.Fprintf(&b, "\n## Blocked\n\nThe task %s is blocked, and the tasks that depend on it. Nothing is waiting for an approval. "+
+			"What the task did is kept on a ref for the operator (see the task's reason in the report).\n", n.Task)
+	} else if action != gate.Auto {
 		fmt.Fprintf(&b, "\n## Decide\n\n    ygg approve %s %s [--note \"...\"]\n    ygg reject %s %s --reason \"...\"\n\n"+
 			"A rejection re-runs %s with the reason.\n", s.ID, n.ID, s.ID, n.ID, n.Reruns)
 	}
