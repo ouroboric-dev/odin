@@ -124,6 +124,13 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 		if errors.As(err, &p) {
 			return pauseRun(r, n, p)
 		}
+		var cb *contractBlock
+		if errors.As(err, &cb) {
+			if err := blockTask(ctx, r, nodes, n, cb.why); err != nil {
+				return Outcome{}, err
+			}
+			continue
+		}
 		var esc *escalation
 		if errors.As(err, &esc) {
 			if blocksTasks(r, n) {
