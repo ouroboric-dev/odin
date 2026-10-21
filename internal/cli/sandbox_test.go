@@ -35,6 +35,7 @@ case "$1" in
       *--format*) answer left "[]" ;;
       *) echo c1 ;;
     esac ;;
+  rm) [ -f "$d/fail-rm" ] && exit 1 ;;
   network) [ "$2" = exists ] && exit 1 ;;
   image) case "$2 $3" in
       "exists localhost/ygg-stack-"*) [ -f "$d/built-$(echo "$3" | tr '/:' '__')" ] || exit 1 ;;

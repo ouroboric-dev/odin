@@ -43,7 +43,7 @@ func FindUnfinished(project string) ([]Unfinished, error) {
 		case err != nil:
 			errs = append(errs, err)
 		case last != nil && last.Verdict == "":
-			out = append(out, Unfinished{ID: e.Name(), Package: last.Package, Product: strings.TrimSuffix(last.Note, ": started"), Ledger: path})
+			out = append(out, Unfinished{ID: e.Name(), Package: last.Package, Product: strings.TrimSuffix(last.Note, startedNote), Ledger: path})
 		}
 	}
 	return out, errors.Join(errs...)

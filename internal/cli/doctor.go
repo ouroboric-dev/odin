@@ -55,13 +55,14 @@ func (c *command) doctor(args []string) int {
 	if rootOnly {
 		return exit(bad)
 	}
+	settled := false // no containers of a bump hold a product: git in a product is safe only when this is true
 	if factory != nil {
 		checkRealms(factory, report)
 		checkGraphs(factory, report)
 		checkBudget(factory, report)
 		checkPrices(factory, report)
 		checkGrader(factory, report)
-		c.checkSandbox(f.project, factory, report)
+		settled = c.checkSandbox(f.project, factory, report)
 	}
 	runs := filepath.Join(f.project, ".factory", "runs")
 	entries, err := os.ReadDir(runs)
@@ -100,7 +101,7 @@ func (c *command) doctor(args []string) int {
 		}
 		report("OK", "run "+s.ID, string(s.Status))
 	}
-	ids, msgs, err := c.unfinishedBumps(f.project)
+	ids, msgs, err := c.unfinishedBumps(f.project, settled, "The sandbox containers of the bump are not known to be stopped, so git is not safe in the product yet. Once the engine answers, run: ygg doctor --project "+f.project)
 	if err != nil {
 		report("ERROR", "bumps", err.Error())
 	}
@@ -296,7 +297,7 @@ func checkPrices(f *schema.Factory, report func(level, what, msg string)) {
 // engine answers and is rootless, the devcontainer CLI is the version the factory was tested with,
 // and no container a killed ygg left is still running. It stops what it finds, because a run that no
 // process holds will never stop it.
-func (c *command) checkSandbox(project string, f *schema.Factory, report func(level, what, msg string)) {
+func (c *command) checkSandbox(project string, f *schema.Factory, report func(level, what, msg string)) (settled bool) {
 	for _, r := range f.Roles {
 		if r.Agent == "claude-code" && os.Getenv("ANTHROPIC_API_KEY") != "" {
 			report("WARN", "env", "ANTHROPIC_API_KEY is set in this shell; claude-code sessions never receive it, and bill the subscription")
@@ -305,27 +306,27 @@ func (c *command) checkSandbox(project string, f *schema.Factory, report func(le
 	}
 	if f.Sandbox == nil {
 		report("WARN", "sandbox", "no sandbox section: leaf commands run on the host, and checkpoints aren't scanned for secrets (only scripted roles can run)")
-		return
+		return true // no container of a bump can hold a product
 	}
 	work, err := os.MkdirTemp("", "ygg-doctor-")
 	if err != nil {
 		report("ERROR", "sandbox", err.Error())
-		return
+		return false
 	}
 	defer os.RemoveAll(work)
 	d, err := sandbox.New(f.Sandbox.Engine, sandbox.Config{}, work)
 	if err != nil {
 		report("ERROR", "sandbox", err.Error())
-		return
+		return false
 	}
 	info, err := d.Info(c.ctx)
 	switch {
 	case err != nil:
 		report("ERROR", "engine", fmt.Sprintf("%s doesn't answer: %v", f.Sandbox.Engine, err))
-		return
+		return false
 	case !info.Rootless:
 		report("ERROR", "engine", fmt.Sprintf("%s is a rootful engine: a container escape would land as root there (sandbox spike)", f.Sandbox.Engine))
-		return
+		return false
 	}
 	report("OK", "engine", fmt.Sprintf("podman %s, rootless, at %s", info.Podman, f.Sandbox.Engine))
 	if v, err := d.DevcontainerCLI(c.ctx); err != nil {
@@ -338,9 +339,10 @@ func (c *command) checkSandbox(project string, f *schema.Factory, report func(le
 	left, err := d.Leftovers(c.ctx)
 	if err != nil {
 		report("ERROR", "sandboxes", err.Error())
-		return
+		return false
 	}
 	stopped := map[string]bool{}
+	settled = true // every container of a bump listed above is stopped, or there is none
 	for _, l := range left {
 		dir := run.Dir(project, l.Run)
 		if isBump(project, l.Run) { // a bump names its sandbox by its own id; a live bump holds the runs lock
@@ -350,6 +352,7 @@ func (c *command) checkSandbox(project string, f *schema.Factory, report func(le
 				stopped[l.Project] = true
 				if err := d.StopLeftover(c.ctx, l); err != nil {
 					report("ERROR", "sandboxes", fmt.Sprintf("couldn't stop %s of bump %s: %v", l.Project, l.Run, err))
+					settled = false
 				} else {
 					report("WARN", "sandboxes", fmt.Sprintf("bump %s left the sandbox of %s (%s); stopped it. %s", l.Run, l.Leaf, l.State, c.nextForProduct(project, l.Leaf, l.Run)))
 				}
@@ -375,6 +378,7 @@ func (c *command) checkSandbox(project string, f *schema.Factory, report func(le
 	if f.Grader != nil {
 		c.checkGraders(d, project, report)
 	}
+	return settled
 }
 
 // checkGrader says how many tasks the grader's folder holds, and that its two folders are there.

@@ -53,7 +53,7 @@ func TestDoctorListsAnUnfinishedBump(t *testing.T) {
 	withLeaf(t, dir, config)
 	plantBump(t, dir, bumpID, "")
 	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
-	want := "WARN  bump " + bumpID + ": the bump of golang.org/x/text stopped in repos/app before it ended; the product may be changed. Run: git -C " + filepath.Join(dir, "repos/app") + " diff. Once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID) + "."
+	want := "WARN  bump " + bumpID + ": the bump of golang.org/x/text stopped in repos/app before it ended; the product may be changed. Run: git -C " + filepath.Join(dir, "repos/app") + " diff\nThen, once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID)
 	if !strings.Contains(out, want) {
 		t.Errorf("doctor lacks %q:\n%s", want, out)
 	}
@@ -97,7 +97,7 @@ func TestDoctorStopsTheContainersOfABump(t *testing.T) {
 	plantBump(t, dir, bumpID, "", "pass")
 	stubSays(t, log, "left", leftoverJSON(bumpID, "repos/app", "ygg-bump"))
 	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
-	want := "WARN  sandboxes: bump " + bumpID + " left the sandbox of repos/app (running); stopped it. Run: git -C " + filepath.Join(dir, "repos/app") + " diff. Once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID) + "."
+	want := "WARN  sandboxes: bump " + bumpID + " left the sandbox of repos/app (running); stopped it. Run: git -C " + filepath.Join(dir, "repos/app") + " diff\nThen, once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID)
 	if !strings.Contains(out, want) {
 		t.Errorf("doctor lacks %q:\n%s", want, out)
 	}
@@ -148,8 +148,11 @@ func TestStatusListsAnUnfinishedBumpAndItsContainers(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, out, _ = ygg(t, "status", id, "--project", dir)
+	if strings.Contains(out, "git -C") {
+		t.Errorf("status offered git while a container may hold the product:\n%s", out)
+	}
 	for _, want := range []string{
-		"bump:     " + bumpID + ": the bump of golang.org/x/text stopped in repos/app before it ended; the product may be changed. Run: git -C " + filepath.Join(dir, "repos/app") + " diff. Once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID) + ".",
+		"bump:     " + bumpID + ": the bump of golang.org/x/text stopped in repos/app before it ended; the product may be changed. A container of its sandbox may still hold the product, so git is not safe there yet. Run: ygg doctor --project " + dir,
 		"bump:     " + bumpID + ": a container of the sandbox of repos/app is left (running). Run: ygg doctor --project " + dir,
 	} {
 		if !strings.Contains(out, want) {
@@ -171,15 +174,43 @@ func TestDoctorAndStatusDoNotOfferGitInAProductWhoseGitWasChanged(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(product, ".git"), []byte("gitdir: /tmp/elsewhere\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	want := "do not run git in " + product + ". Once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID) + "."
+	want := "Do not run git in " + product + ". Once the product is as you want it, remove " + filepath.Join(dir, ".factory", "deps", bumpID)
 	_, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
 	if strings.Count(out, "The .git of the product is not as it was") != 2 || strings.Count(out, want) != 2 || strings.Contains(out, "Run: git -C") {
 		t.Errorf("doctor, ledger and container:\n%s", out)
 	}
-	b, _ := os.ReadFile(plain)
-	os.WriteFile(plain, append(b, sandboxExtra...), 0o644)
+	b, err := os.ReadFile(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plain, append(b, sandboxExtra...), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	_, out, _ = ygg(t, "status", runID(t, dir), "--project", dir)
-	if !strings.Contains(out, want) || strings.Contains(out, "Run: git -C") {
+	if strings.Contains(out, "Do not run git") || strings.Contains(out, "Run: git -C") {
 		t.Errorf("status:\n%s", out)
+	}
+}
+
+func TestDoctorOffersNoGitWhileTheContainersOfABumpAreNotStopped(t *testing.T) {
+	dir, plain := project(t, "script.yaml", "")
+	config := withSandbox(t, plain)
+	withLeaf(t, dir, plain)
+	plantBump(t, dir, bumpID, "")
+	for name, setup := range map[string]func(log string){
+		"the container list fails": func(log string) { stubSays(t, log, "left", "not json") },
+		"the stop fails": func(log string) {
+			stubSays(t, log, "left", leftoverJSON(bumpID, "repos/app", "ygg-bump"))
+			stubSays(t, log, "fail-rm", "x")
+		},
+	} {
+		setup(stubEngine(t))
+		_, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+		if strings.Contains(out, "git -C") || strings.Contains(out, "stopped it") {
+			t.Errorf("%s: doctor offered git:\n%s", name, out)
+		}
+		if want := "bump " + bumpID + ": the bump of golang.org/x/text stopped in repos/app before it ended; the product may be changed. The sandbox containers of the bump are not known to be stopped, so git is not safe in the product yet. Once the engine answers, run: ygg doctor --project " + dir; !strings.Contains(out, want) {
+			t.Errorf("%s: doctor lacks %q:\n%s", name, want, out)
+		}
 	}
 }

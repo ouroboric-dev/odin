@@ -24,14 +24,20 @@ func isBump(project, id string) bool {
 }
 
 // unfinishedBumps lists the bumps that stopped before they ended, one finding each, unless a ygg is running one.
-func (c *command) unfinishedBumps(project string) (ids []string, msgs []string, err error) {
+// With git true it runs the leaf guard and offers git; otherwise it only reads files and says instead, which
+// is next. Status never offers git: a container of the bump may still hold the product.
+func (c *command) unfinishedBumps(project string, git bool, instead string) (ids []string, msgs []string, err error) {
 	if bumpRunning(project) {
 		return nil, nil, nil
 	}
 	list, err := deps.FindUnfinished(project)
 	for _, u := range list {
 		ids = append(ids, u.ID)
-		msgs = append(msgs, fmt.Sprintf("the bump of %s stopped in %s before it ended; the product may be changed. %s", u.Package, orUnknown(u.Product), c.nextForProduct(project, u.Product, u.ID)))
+		next := instead
+		if git {
+			next = c.nextForProduct(project, u.Product, u.ID)
+		}
+		msgs = append(msgs, fmt.Sprintf("the bump of %s stopped in %s before it ended; the product may be changed. %s", u.Package, orUnknown(u.Product), next))
 	}
 	return ids, msgs, err
 }
@@ -45,17 +51,19 @@ func orUnknown(product string) string {
 
 // nextForProduct is what to do next: look at what the bump left in the product, and then clear the bump's
 // folder. A killed bump may have rewritten the product's .git file, and git would then run the bump's
-// code on the host, so the leaf guard runs first and git is only offered when it passes.
+// code on the host, so the leaf guard runs first and git is only offered when it passes. The caller has
+// stopped the bump's containers, or the config has no sandbox: nothing else writes in the product. The
+// sentences end in the command, with no full stop, so that it can be copied.
 func (c *command) nextForProduct(project, product, id string) string {
-	clear := "Once the product is as you want it, remove " + filepath.Join(project, ".factory", "deps", id) + "."
+	clear := "remove " + filepath.Join(project, ".factory", "deps", id)
 	if product == "" {
-		return "Look at the products the bump named. " + clear
+		return "Look at the products the bump named. Once they are as you want them, " + clear
 	}
 	dir := filepath.Join(project, product)
 	if err := c.guardProduct(project, product); err != nil {
-		return fmt.Sprintf("The .git of the product is not as it was (%v): do not run git in %s. %s", err, dir, clear)
+		return fmt.Sprintf("The .git of the product is not as it was (%v). Do not run git in %s. Once the product is as you want it, %s", err, dir, clear)
 	}
-	return "Run: git -C " + dir + " diff. " + clear
+	return "Run: git -C " + dir + " diff\nThen, once the product is as you want it, " + clear
 }
 
 // guardProduct runs the leaf guard on the product, as the bump does before it starts: the .git file is the
