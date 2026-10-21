@@ -162,3 +162,93 @@ func TestJudgeWithTheRealOasdiffExitCodes(t *testing.T) {
 		}
 	}
 }
+
+// An index with a contract at the root of a leaf (leaf-app) and one in a subfolder of another (leaf-web).
+func folderIndex() *Impact {
+	return &Impact{Schema: ImpactSchema, Bound: "lower", Contracts: []ContractEntry{
+		{ID: "contract:leaf-app/openapi.yaml", Path: "leaf-app/openapi.yaml", Owner: "leaf-app"},
+		{ID: "contract:leaf-web/contracts/api.openapi.yaml", Path: "leaf-web/contracts/api.openapi.yaml", Owner: "leaf-web"},
+	}}
+}
+
+func modeChange(p, old, new string) Change {
+	c := Change{Path: p, OldMode: old, NewMode: new}
+	if new != "" {
+		c.New = []byte("new")
+	}
+	if old != "" {
+		c.Old = []byte("old")
+	}
+	return c
+}
+
+func TestJudgeEscalatesOnTheFolderOfAListedContract(t *testing.T) {
+	const reg, link = "100644", "120000"
+	cases := []struct {
+		name string
+		ch   Change
+		want Verdict
+	}{
+		{"a new YAML file in a contract's folder", modeChange("leaf-web/contracts/user.yaml", "", reg), Escalate},
+		{"a changed yml file", modeChange("leaf-web/contracts/user.yml", reg, reg), Escalate},
+		{"a changed JSON file", modeChange("leaf-web/contracts/user.json", reg, reg), Escalate},
+		{"the extension is not case sensitive", modeChange("leaf-web/contracts/user.YAML", reg, reg), Escalate},
+		{"a deleted YAML file", modeChange("leaf-web/contracts/user.yaml", reg, ""), Escalate},
+		{"a changed markdown file", modeChange("leaf-web/contracts/README.md", reg, reg), Pass},
+		{"a changed YAML file outside every folder", modeChange("leaf-web/src/config.yaml", reg, reg), Pass},
+		{"a YAML file in a folder of another leaf", modeChange("other/contracts/user.yaml", reg, reg), Pass},
+		{"a folder whose name only starts like the contract's", modeChange("leaf-web/contracts-old/user.yaml", reg, reg), Pass},
+		{"a subfolder of a contract's subfolder", modeChange("leaf-web/contracts/schemas/user.yaml", reg, reg), Escalate},
+		{"a YAML file directly in a leaf's root", modeChange("leaf-app/sqlc.yaml", reg, reg), Escalate},
+		{"a YAML file below a contract at a leaf's root", modeChange("leaf-app/.github/ci.yml", reg, reg), Pass},
+		{"a JSON file below a contract at a leaf's root", modeChange("leaf-app/.devcontainer/devcontainer.json", reg, reg), Pass},
+		{"a symlink with any name in the folder", modeChange("leaf-web/contracts/link", "", link), Escalate},
+		{"a symlink named like a contract", modeChange("leaf-web/contracts/x.openapi.yaml", "", link), Escalate},
+		{"a symlink below a contract in a subfolder", modeChange("leaf-web/contracts/deep/er/link.txt", "", link), Escalate},
+		{"a file that stops being a symlink", modeChange("leaf-web/contracts/link.txt", link, reg), Escalate},
+		{"a file that becomes a symlink", modeChange("leaf-web/contracts/link.txt", reg, link), Escalate},
+		{"a symlink directly in a leaf's root", modeChange("leaf-app/link", "", link), Escalate},
+		{"a symlink below a contract at a leaf's root", modeChange("leaf-app/sub/link", "", link), Pass},
+		{"a symlink outside every folder", modeChange("leaf-web/src/link", "", link), Pass},
+	}
+	for _, c := range cases {
+		j := Judge(context.Background(), folderIndex(), []Change{c.ch}, nil)
+		if j.Verdict != c.want {
+			t.Errorf("%s: %+v; want %s", c.name, j, c.want)
+		}
+		if c.want == Escalate && (j.Evidence != Inferred || !strings.Contains(j.Reason, c.ch.Path) || len(j.Contracts) != 1) {
+			t.Errorf("%s: %+v; want inferred evidence, a reason naming %s and the file listed", c.name, j, c.ch.Path)
+		}
+	}
+}
+
+func TestTheFolderReasonNamesTheRule(t *testing.T) {
+	yaml := Judge(context.Background(), folderIndex(), []Change{modeChange("leaf-web/contracts/user.yaml", "", "100644")}, nil)
+	link := Judge(context.Background(), folderIndex(), []Change{modeChange("leaf-web/contracts/l", "", "120000")}, nil)
+	if !strings.Contains(yaml.Reason, "YAML or JSON") || !strings.Contains(link.Reason, "symlink") {
+		t.Errorf("the reasons don't name the rule: %q, %q", yaml.Reason, link.Reason)
+	}
+}
+
+// Without a listed contract there is no folder to watch; an absent index lists nothing.
+func TestNoFolderWithoutAListedContract(t *testing.T) {
+	for _, imp := range []*Impact{nil, {}} {
+		j := Judge(context.Background(), imp, []Change{modeChange("leaf-web/contracts/user.yaml", "100644", "100644"), modeChange("leaf-web/l", "", "120000")}, nil)
+		if j.Verdict != Pass {
+			t.Errorf("index %v: %+v; want pass", imp, j)
+		}
+	}
+}
+
+// A file named like a contract that is a regular file stays on its present path: a changed openapi.yaml
+// at a listed contract's root gives the verdict the index and oasdiff give, not a folder escalation.
+func TestAContractFileKeepsItsVerdictInItsFolder(t *testing.T) {
+	imp := folderIndex()
+	if j := Judge(context.Background(), imp, []Change{modeChange("leaf-app/openapi.yaml", "100644", "100644")}, nil); j.Verdict != Pass {
+		t.Errorf("a listed contract nobody reads: %+v; want pass", j)
+	}
+	both := []Change{modeChange("leaf-app/openapi.yaml", "100644", "100644"), modeChange("leaf-app/sqlc.yaml", "100644", "100644")}
+	if j := Judge(context.Background(), imp, both, nil); j.Verdict != Escalate || len(j.Contracts) != 1 || j.Contracts[0] != "leaf-app/sqlc.yaml" {
+		t.Errorf("the contract and a sibling: %+v; want escalate on the sibling", j)
+	}
+}
