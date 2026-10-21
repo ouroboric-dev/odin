@@ -22,7 +22,7 @@ ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
 ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
 ygg status  <run-id> [--project <dir>]
 ygg grade   <run-id> [--task <id>] [--project <dir>]
-ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--project <dir>] [--config <factory.yaml>]
+ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
 ```
@@ -32,6 +32,10 @@ used up), 5 done with tasks given up (unattended).
 
 `factory.yaml` must set both budget caps, `per_run` and `per_day`, each with `tokens` and `turns`.
 The factory ships no defaults, so a config without them runs nothing.
+
+`ygg deps bump` runs the package manager and the checks in the sandbox of `factory.yaml`. Without a `sandbox:`
+section it refuses (exit 2) unless you pass `--host`, which runs the bump on the host with the full network and
+your user id, and records that in the first line of the bump's ledger. With a sandbox section `--host` has no effect.
 
 `--project` names a project umbrella. A project is usually its own tree, its `umbrella.yaml` setting
 `root: true`; inside a company umbrella, every umbrella above it lists the one below, up to the one

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,8 +10,11 @@ import (
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/deps"
 	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/ledger"
+	"github.com/ouroboric-dev/odin/internal/lock"
+	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 	"github.com/ouroboric-dev/odin/internal/tree"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
@@ -118,7 +122,7 @@ func TestALeafThatPinsNoRealmIsRefusedWhateverTheUmbrellaPins(t *testing.T) {
 	if _, err := git.Run(ctx, dir, "commit", "-q", "-am", "repos/old pins no realm"); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config,
+	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--host",
 		"--canary", "repos/old", "--rollout", "repos/web")
 	if code != ExitRefused || !strings.Contains(errOut, "pins no realm") {
 		t.Errorf("exit %d, want %d and %q:\n%s%s", code, ExitRefused, "pins no realm", out, errOut)
@@ -127,7 +131,7 @@ func TestALeafThatPinsNoRealmIsRefusedWhateverTheUmbrellaPins(t *testing.T) {
 
 func TestDepsBumpMovesTheCanaryThenTheRolloutProduct(t *testing.T) {
 	dir, config := depsProject(t, "")
-	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config,
+	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--host",
 		"--canary", filepath.Join(dir, "repos/api"), "--rollout", "repos/web")
 	if code != ExitDone || !strings.Contains(out, "repos/api (canary): 0.41.0 to 0.42.0: pass") || !strings.Contains(out, "repos/web (rollout): 0.41.0 to 0.42.0: pass") {
 		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
@@ -148,7 +152,7 @@ func TestDepsBumpPutsAFailedCanaryBackAndTouchesNoRolloutProduct(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "repos/api/ok.txt")); err != nil { // the unit rung of api now fails
 		t.Fatal(err)
 	}
-	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api", "--rollout", "repos/web")
+	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--host", "--canary", "repos/api", "--rollout", "repos/web")
 	if code != ExitFailed || !strings.Contains(out, "repos/api (canary): 0.41.0 to 0.42.0: fail (the check unit failed") || !strings.Contains(errOut, "repos/api failed") {
 		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
 	}
@@ -163,7 +167,7 @@ func TestDepsBumpPutsAFailedCanaryBackAndTouchesNoRolloutProduct(t *testing.T) {
 
 func TestDepsBumpRefusalsExitTwoAndLeaveNoTrace(t *testing.T) {
 	dir, config := depsProject(t, "")
-	common := []string{"--project", dir, "--config", config}
+	common := []string{"--project", dir, "--config", config, "--host"}
 	cases := map[string]struct {
 		args []string
 		want string
@@ -246,7 +250,7 @@ func TestDepsBumpRefusesALeafWhoseManifestHasUncommittedChanges(t *testing.T) {
 		if err := os.WriteFile(p, []byte(goMod("0.41.0")+"// dirty\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api", "--rollout", "repos/web")
+		code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--host", "--canary", "repos/api", "--rollout", "repos/web")
 		if code != ExitRefused || !strings.Contains(errOut, "uncommitted") || !strings.Contains(errOut, "commit or stash") {
 			t.Errorf("%s: exit %d:\n%s%s", file, code, out, errOut)
 		}
@@ -261,10 +265,11 @@ func TestDepsBumpRefusesALeafWhoseManifestHasUncommittedChanges(t *testing.T) {
 
 func TestDepsBumpWritesAStartedLineBeforeTheToolRuns(t *testing.T) {
 	dir, config := depsProject(t, "")
-	if code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api"); code != ExitDone {
+	if code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--host", "--canary", "repos/api"); code != ExitDone {
 		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
 	}
-	first, _, _ := strings.Cut(bumpLedger(t, dir), "\n")
+	_, rest, _ := strings.Cut(bumpLedger(t, dir), "\n") // the first line is the host line
+	first, _, _ := strings.Cut(rest, "\n")
 	if !strings.Contains(first, `"event":"deps_bump"`) || !strings.Contains(first, "started") || strings.Contains(first, `"ygg.verdict"`) {
 		t.Errorf("first line of the ledger: %s", first)
 	}
@@ -297,7 +302,7 @@ func TestDepsBumpFailsAToolThatPlantsAGitRepositoryUnderNodeModulesAndRemovesIt(
 	depsFakeGoExtra = "mkdir -p node_modules/.c/.git && echo '[core]' > node_modules/.c/.git/config\n"
 	t.Cleanup(func() { depsFakeGoExtra = "" })
 	dir, config := depsProject(t, "")
-	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api", "--rollout", "repos/web")
+	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--host", "--canary", "repos/api", "--rollout", "repos/web")
 	if code != ExitFailed || !strings.Contains(errOut, "repos/api failed") || !strings.Contains(out, "git repository") {
 		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
 	}
@@ -306,5 +311,76 @@ func TestDepsBumpFailsAToolThatPlantsAGitRepositoryUnderNodeModulesAndRemovesIt(
 	}
 	if _, err := os.Stat(filepath.Join(dir, "repos/api/node_modules/.c/.git")); !os.IsNotExist(err) {
 		t.Errorf("the planted repository is still there: %v", err)
+	}
+}
+
+func TestDepsBumpWithNoSandboxAndNoHostIsRefusedBeforeTheLockAndLeavesNoTrace(t *testing.T) {
+	dir, config := depsProject(t, "")
+	release, err := lock.Take(run.RunsLock(dir)) // held: a refusal that came after the lock would say the project is busy
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api")
+	want := "ygg: deps bump has no sandbox: factory.yaml has no sandbox section, so the package manager and its scripts would run on the host with the full network and your user id. Add a sandbox section, or pass --host to accept that\n"
+	if code != ExitRefused || errOut != want {
+		t.Errorf("exit %d, want %d and %q:\n%s%s", code, ExitRefused, want, out, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".factory", "deps")); !os.IsNotExist(err) {
+		t.Errorf("a refusal left the folder of a bump: %v", err)
+	}
+	if mod(t, dir, "api") != goMod("0.41.0") {
+		t.Error("a refusal changed the canary")
+	}
+}
+
+func TestDepsBumpOnTheHostStartsItsLedgerWithTheHostLine(t *testing.T) {
+	dir, config := depsProject(t, "")
+	if code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api", "--host"); code != ExitDone {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	lines := strings.Split(strings.TrimSpace(bumpLedger(t, dir)), "\n")
+	if len(lines) < 2 || !strings.Contains(lines[0], `"event":"deps_bump"`) || !strings.Contains(lines[0], deps.HostNote) || strings.Contains(lines[0], `"ygg.verdict"`) {
+		t.Fatalf("the ledger does not start with the host line:\n%s", strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(lines[1], "started") || strings.Contains(lines[1], `"ygg.verdict"`) {
+		t.Errorf("second line of the ledger: %s", lines[1])
+	}
+	if got, err := deps.FindUnfinished(dir); err != nil || len(got) != 0 {
+		t.Errorf("a finished host bump is unfinished: %+v, %v", got, err)
+	}
+}
+
+func TestDepsBumpWithASandboxNeedsNoHostAndWritesNoHostLine(t *testing.T) {
+	for _, extra := range [][]string{nil, {"--host"}} {
+		dir, config := depsProject(t, goStack)
+		fake := &sandboxfake.Sandbox{}
+		old := newDepsSandbox
+		newDepsSandbox = func(engine string, cfg sandbox.Config, work string) (gungnir.Sandbox, error) { return fake, nil }
+		t.Cleanup(func() { newDepsSandbox = old })
+		args := append([]string{"deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api"}, extra...)
+		if code, out, errOut := ygg(t, args...); code != ExitDone {
+			t.Fatalf("%v: exit %d:\n%s%s", extra, code, out, errOut)
+		}
+		if len(fake.Ups) != 1 {
+			t.Errorf("%v: the bump did not run in the sandbox: %d ups", extra, len(fake.Ups))
+		}
+		if l := bumpLedger(t, dir); strings.Contains(l, deps.HostNote) {
+			t.Errorf("%v: a sandbox bump has a host line:\n%s", extra, l)
+		}
+	}
+}
+
+func TestDepsBumpWhoseSandboxDoesNotStartIsNotReportedUnfinished(t *testing.T) {
+	dir, config := depsProject(t, goStack)
+	old := newDepsSandbox
+	newDepsSandbox = func(string, sandbox.Config, string) (gungnir.Sandbox, error) { return nil, errors.New("no engine") }
+	t.Cleanup(func() { newDepsSandbox = old })
+	code, out, errOut := ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api")
+	if code != ExitFailed {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	if got, err := deps.FindUnfinished(dir); err != nil || len(got) != 0 {
+		t.Errorf("found %+v, %v", got, err)
 	}
 }

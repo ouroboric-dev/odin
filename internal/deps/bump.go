@@ -19,6 +19,11 @@ import (
 // verdict. FindUnfinished reads the product's name from it.
 const startedNote = ": started"
 
+// HostNote is the note of the line a bump on the host starts its ledger with (spec §9.6, --host). The ledger
+// schema allows no verdict for it, so it is a deps_bump line with no verdict and no package, and
+// FindUnfinished passes it: it says nothing about a product.
+const HostNote = "ran on the host: factory.yaml has no sandbox section and --host was given"
+
 // Ladder is the checks a bump runs in a product, in this order: the dependency policy, then the unit
 // tests. Both are checks of the product's realm, run by the same check runner as a loop's ladder.
 var Ladder = []string{"deps", "unit"}
@@ -104,7 +109,11 @@ func (b *Bumper) Bump(ctx context.Context, pkg, version string, canary Product, 
 		var serr error
 		step.Verdict, step.Reason, serr = b.stage(ctx, pkg, to, pl)
 		if serr != nil && step.Verdict == "" {
-			return rep, serr // a cancel or a sandbox error: the product is back, and no verdict is claimed
+			// A cancel or a sandbox error: the product is back. The closing line has a verdict, so that
+			// FindUnfinished does not report the bump; the verdict is fail, as the bump did not pass here.
+			cerr := b.Log(gungnir.Event{Name: gungnir.EventDepsBump, Package: pkg, From: step.From, To: step.To,
+				Stage: pl.stage, Verdict: "fail", Note: cut(pl.p.Name+": stopped: "+serr.Error(), 400)})
+			return rep, errors.Join(serr, cerr)
 		}
 		rep.Steps = append(rep.Steps, step)
 		note := pl.p.Name

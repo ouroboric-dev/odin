@@ -37,7 +37,7 @@ const usage = `usage:
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
   ygg status  <run-id> [--project <dir>]
   ygg grade   <run-id> [--task <id>] [--project <dir>]
-  ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--project <dir>] [--config <factory.yaml>]
+  ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
   ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
 exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused: the provider's quota is used up,
@@ -72,7 +72,7 @@ type command struct {
 type flags struct {
 	project, config, graph, realm, brief, mode, note, reason, root, task, canary string
 	realms, rollout                                                              []string        // sandbox build: every --realm given; deps bump: every --rollout given
-	all                                                                          bool            // sandbox build: --all
+	all, host                                                                    bool            // sandbox build: --all; deps bump: --host
 	set                                                                          map[string]bool // the flags given
 }
 
