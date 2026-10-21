@@ -1,19 +1,22 @@
 package engine
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/task/tasktest"
 )
 
-func TestAResultsFileThatDoesNotMatchTheManifestIsRefusedAsBadManifest(t *testing.T) {
+func TestAReportThatDoesNotMatchTheManifestIsRefusedAsBadManifest(t *testing.T) {
 	missing := strings.Replace(tasktest.Results(nil), `{"title":"a thing is private","tests":[{"results":[{"status":"passed"}]}]}`, ``, 1)
 	missing = strings.Replace(missing, `},]`, `}]`, 1)
 	extra := strings.TrimSuffix(tasktest.Results(nil), `]}]}`) + `,{"title":"a new thing","tests":[{"results":[{"status":"passed"}]}]}]}]}`
@@ -70,13 +73,112 @@ func TestAGradingRunThatFailsFailsTheNodeAndAResumeGradesAgain(t *testing.T) {
 	}
 }
 
-func TestASuiteThatWritesNoResultsIsAFailureNotAPass(t *testing.T) {
-	g := startGraded(t, gradedNodes, "", nil)
-	if out := g.advance(t); out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "wrote no results") {
+// Every way a stdout can fail to hold exactly one keyed report is a failed grade: no score, a ledger that
+// ends at grade_started, and a resume that grades again. It is never a score of 0 and never a refusal.
+func TestAStdoutWithoutExactlyOneKeyedReportIsAFailureNotAPass(t *testing.T) {
+	const other = "ffffffffffffffffffffffffffffffff"
+	report := tasktest.Results(nil)
+	for name, c := range map[string]struct {
+		stdout func(key string) string
+		say    string
+	}{
+		"no output":           {func(string) string { return "" }, "printed no scores"},
+		"no keyed line":       {func(string) string { return "tests ran\nygg-results/v1\n" }, "printed no scores"},
+		"another key only":    {func(string) string { return keyedLine(other, report) }, "printed no scores"},
+		"two identical lines": {func(k string) string { return keyedLine(k, report) + keyedLine(k, report) }, "printed the scores twice"},
+		"two different lines": {func(k string) string {
+			return keyedLine(k, report) + keyedLine(k, tasktest.Results(map[string]string{"a thing is private": "failed"}))
+		}, "printed the scores twice"},
+		"a line that is no report": {func(k string) string { return keyedLine(k, "not json") }, "not a Playwright report"},
+		"a report with no spec":    {func(k string) string { return keyedLine(k, `{"suites":[]}`) }, "holds no spec"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := startGraded(t, gradedNodes, "", nil)
+			g.grader.Stdout = c.stdout
+			out := g.advance(t)
+			// The node's failure carries the text of the error, not the error: *GradeFailed is told by its prefix.
+			if out.Status != run.StatusFailed || out.Err == nil || !strings.Contains(out.Err.Error(), "grading failed: ") || !strings.Contains(out.Err.Error(), c.say) {
+				t.Fatalf("Advance() = %+v, want a failed run, a grading failure that says %q", out, c.say)
+			}
+			if _, err := os.Stat(filepath.Join(g.r.Dir, "score.json")); err == nil {
+				t.Error("a stdout with no usable report left a score.json")
+			}
+			text := ledgerText(t, g.r)
+			if !strings.Contains(text, `"event":"grade_started"`) || strings.Contains(text, `"event":"grade_finished"`) || strings.Contains(text, `"event":"grade_refused"`) {
+				t.Errorf("the ledger:\n%s", text)
+			}
+			var failed *GradeFailed
+			if _, err := Grade(context.Background(), g.r, ""); !errors.As(err, &failed) {
+				t.Errorf("Grade() = %T %v, want a *GradeFailed", err, err)
+			}
+			g.grader.Stdout = nil
+			g.grader.Results = report
+			if out := g.advance(t); out.Status != run.StatusDone || len(g.grader.Specs) != 3 {
+				t.Fatalf("the resumed Advance() = %+v after %d grading run(s)", out, len(g.grader.Specs))
+			}
+		})
+	}
+}
+
+// The suite shares its container with the app, and a results.json in the logs folder is the app's to forge.
+// Odin does not open it.
+func TestAResultsFileInTheLogsFolderChangesNothing(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(map[string]string{"a thing is private": "failed"}), nil)
+	g.grader.Forged = tasktest.Results(nil) // every scenario passes
+	if out := g.advance(t); out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v", out)
+	}
+	if s := readScore(t, g.r); s.Reward > 0.6+1e-9 || s.FailToPass != (gungnir.Tally{Passed: 2, Total: 3}) {
+		t.Errorf("the score followed the forged file: %+v", s)
+	}
+	// With no keyed line, a forged file is no score at all.
+	g = startGraded(t, gradedNodes, "", nil)
+	g.grader.Forged = tasktest.Results(nil)
+	if out := g.advance(t); out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "printed no scores") {
 		t.Errorf("Advance() = %+v", out)
 	}
-	if _, err := os.Stat(filepath.Join(g.r.Dir, "score.json")); err == nil {
-		t.Error("a suite with no results has a score")
+}
+
+// A line that carries another key is the app's, and it does not stand next to the suite's line.
+func TestALineOfAnotherKeyIsIgnoredBesideTheSuitesLine(t *testing.T) {
+	g := startGraded(t, gradedNodes, "", nil)
+	g.grader.Stdout = func(k string) string {
+		return keyedLine("ffffffffffffffffffffffffffffffff", tasktest.Results(nil)) + keyedLine(k, tasktest.Results(map[string]string{"a thing is private": "failed"}))
+	}
+	if out := g.advance(t); out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v", out)
+	}
+	if s := readScore(t, g.r); s.FailToPass != (gungnir.Tally{Passed: 2, Total: 3}) {
+		t.Errorf("score = %+v", s)
+	}
+}
+
+// The key is Odin's and the container's for one attempt: 32 hex characters, new each time, in no file the
+// run keeps but grade.log (the tail of the container's own output, which the suite may have echoed it into).
+func TestEachGradingAttemptHasItsOwnKeyAndTheKeyIsNotInTheLedgerOrTheState(t *testing.T) {
+	g := startGraded(t, gradedNodes, "", nil)
+	g.grader.Stdout = func(string) string { return "" }
+	g.advance(t)
+	g.grader.Stdout = nil
+	g.grader.Results = tasktest.Results(nil)
+	if out := g.advance(t); out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v", out)
+	}
+	if len(g.grader.Specs) != 2 {
+		t.Fatalf("%d grading runs, want 2", len(g.grader.Specs))
+	}
+	hex32 := regexp.MustCompile(`^[0-9a-f]{32}$`)
+	k1, k2 := g.grader.Specs[0].ScoreKey, g.grader.Specs[1].ScoreKey
+	if !hex32.MatchString(k1) || !hex32.MatchString(k2) || k1 == k2 {
+		t.Fatalf("keys %q and %q: want two different 32-character hex strings", k1, k2)
+	}
+	state, _ := os.ReadFile(filepath.Join(g.r.Dir, "run.json"))
+	score, _ := os.ReadFile(filepath.Join(g.r.Dir, "score.json"))
+	text := ledgerText(t, g.r)
+	for _, k := range []string{k1, k2} {
+		if strings.Contains(text, k) || strings.Contains(string(state), k) || strings.Contains(string(score), k) {
+			t.Errorf("the key %s is in the ledger, the state or score.json", k)
+		}
 	}
 }
 

@@ -1,24 +1,19 @@
 // Package score turns the results of a hidden suite into score.json (spec §11, change benchmark-split).
-// It reads the Playwright report the suite wrote, joins it with the suite's manifest by scenario id,
+// It reads the Playwright report the suite printed on its stdout, joins it with the suite's manifest by scenario id,
 // and adds up the reward. A scenario on one side only is an error, never a pass. It writes score.json
 // to the run folder and nowhere else: the score is for the operator and the ledger, never for an agent.
 package score
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/ouroboric-dev/gungnir"
 )
-
-// maxResults is the most bytes of a results file that are read.
-const maxResults = 32 << 20
 
 // MismatchError says the manifest and the results do not name the same scenarios, or that the results
 // name one twice. No score comes out of it: a missing scenario can't be told from a failed one.
@@ -73,37 +68,42 @@ type reportSpec struct {
 	} `json:"tests"`
 }
 
-// ReadResults reads a Playwright JSON report and returns the status of each spec by title. A test is
-// as good as its last try (a retry that passes counts); a spec passes when all its tests pass, fails
-// when one fails, times out or is interrupted, and is skipped when none ran. A report with no spec,
-// or one that names a title twice, is an error.
-func ReadResults(path string) (map[string]gungnir.ScenarioStatus, error) {
-	// The folder is the grader's to write: a named pipe would hang Odin, a symlink would make it read another file.
-	st, err := os.Lstat(path)
-	if err != nil {
-		return nil, fmt.Errorf("the suite wrote no results: %w", err)
+// marker starts the line a suite prints for Odin: marker, a space, the key, a space, the report on one line.
+const marker = "ygg-results/v1"
+
+// ParseStdout finds the report the suite printed on its stdout, on the one line that starts with the marker
+// and carries key, and returns the status of each spec by title. Every other line is the suite's or the
+// app's own output and is ignored, a line of another key too. A test is as good as its last try (a retry
+// that passes counts); a spec passes when all its tests pass, fails when one fails, times out or is
+// interrupted, and is skipped when none ran. No keyed line, two or more of them (identical or not), a line
+// that is not a report, a report with no spec, or one that names a title twice, is an error. The line is
+// found by searching the bytes, so its length is the stdout's bound and no scanner's.
+func ParseStdout(stdout []byte, key string) (map[string]gungnir.ScenarioStatus, error) {
+	prefix := []byte(marker + " " + key)
+	var found []byte
+	n := 0
+	for rest := stdout; len(rest) > 0; {
+		line := rest
+		if i := bytes.IndexByte(rest, '\n'); i >= 0 {
+			line, rest = rest[:i], rest[i+1:]
+		} else {
+			rest = nil
+		}
+		if after, ok := bytes.CutPrefix(line, prefix); ok && (len(after) == 0 || after[0] == ' ') {
+			found = after
+			n++
+		}
 	}
-	if !st.Mode().IsRegular() {
-		return nil, fmt.Errorf("the suite's results %s are not a regular file", path)
+	switch {
+	case n == 0:
+		return nil, errors.New("the suite printed no scores: no line on its stdout starts with " + marker + " and the key")
+	case n > 1:
+		return nil, fmt.Errorf("the suite printed the scores twice: %d lines on its stdout carry the key, and none is taken", n)
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, fmt.Errorf("the suite wrote no results: %w", err)
-	}
-	defer f.Close()
-	if now, err := f.Stat(); err != nil || !os.SameFile(st, now) || !now.Mode().IsRegular() {
-		return nil, fmt.Errorf("the suite's results %s changed while they were opened, or are not a regular file", path)
-	}
-	b, err := io.ReadAll(io.LimitReader(f, maxResults+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(b) > maxResults {
-		return nil, fmt.Errorf("the results are over %d bytes", maxResults)
-	}
+	b := found
 	var r report
 	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, fmt.Errorf("the results are not a Playwright report: %w", err)
+		return nil, fmt.Errorf("the line with the key is not a Playwright report: %w", err)
 	}
 	out := map[string]gungnir.ScenarioStatus{}
 	var again []string
@@ -125,7 +125,7 @@ func ReadResults(path string) (map[string]gungnir.ScenarioStatus, error) {
 		return nil, &MismatchError{Repeated: slices.Compact(again)}
 	}
 	if len(out) == 0 {
-		return nil, errors.New("the results hold no spec")
+		return nil, errors.New("the report holds no spec")
 	}
 	return out, nil
 }

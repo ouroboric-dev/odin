@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -24,7 +26,7 @@ type Graded struct {
 }
 
 // GradeFailed is a grading run that could not finish: the container did not run or timed out, the
-// suite wrote no readable results, or the project could not be exported. It is not a refusal and
+// suite printed no readable scores, or the project could not be exported. It is not a refusal and
 // not a score. The run stops failed, and a resume grades again.
 type GradeFailed struct{ Err error }
 
@@ -71,7 +73,10 @@ func runGrade(ctx context.Context, r *run.Run, n schema.Node) error {
 //
 // The container sees three folders and nothing else (v0-T246): /app, a copy of the project's committed
 // files in the run folder; /tests, the suite's tests folder in the store, read only; and /logs/verifier,
-// an empty folder in the run folder. The suite's folder is never given to an agent's sandbox.
+// an empty folder in the run folder for the suite's own logs, which Odin never opens: the app shares the
+// container and can write there. The scores are the report on the one stdout line that carries the key of
+// this attempt (YGG_SCORE_KEY, which the suite keeps from the app); the key is in no event and no state.
+// The suite's folder is never given to an agent's sandbox.
 func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 	cfg := r.Setup.Config.Grader
 	if cfg == nil || r.Grader == nil {
@@ -121,8 +126,12 @@ func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 	if err := os.MkdirAll(logs, 0o755); err != nil {
 		return nil, err
 	}
+	key, err := scoreKey()
+	if err != nil {
+		return nil, err
+	}
 	memory, cpus := cfg.Limits() // "none" and 0 are the operator's choice of no limit, for an engine that cannot apply one
-	res, err := r.Grader.Grade(ctx, sandbox.GradeSpec{Run: r.State.ID, Task: t.ID, Environment: t.Environment, App: app, Tests: t.Tests, Logs: logs,
+	res, err := r.Grader.Grade(ctx, sandbox.GradeSpec{Run: r.State.ID, Task: t.ID, Environment: t.Environment, App: app, Tests: t.Tests, Logs: logs, ScoreKey: key,
 		Timeout: min(time.Duration(cfg.Timeout), t.Timeout), Memory: memory, CPUs: cpus, Env: t.Env})
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -134,7 +143,7 @@ func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 	if err != nil {
 		return nil, &GradeFailed{err}
 	}
-	results, err := score.ReadResults(filepath.Join(logs, "results.json"))
+	results, err := score.ParseStdout(res.Stdout, key)
 	var mismatch *score.MismatchError
 	if errors.As(err, &mismatch) {
 		return nil, refused(r, t.ID, t.Suite, gungnir.GradeBadManifest, "%v", err)
@@ -158,6 +167,15 @@ func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 		return nil, err
 	}
 	return &Graded{Score: s, Path: path}, r.Save()
+}
+
+// scoreKey is the key of one grading attempt: 16 random bytes as 32 lowercase hex characters.
+func scoreKey() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("making the score key: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // refused records grade_refused in the ledger and returns the refusal. A failure to write the ledger is

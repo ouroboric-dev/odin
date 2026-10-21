@@ -20,19 +20,19 @@ const gradePack = "leaves:\n  repos/app: { description: the app, template: t, fi
 	"sandbox:\n  stack: docker.io/library/golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514\n  egress: [proxy.golang.org]\n"
 
 // engineStub puts a podman and a devcontainer that log what they are asked in front of the real ones. The
-// podman answers `run` as a hidden suite would, by copying results into the logs folder it mounts, and
-// lists graderPS (a JSON array) for the containers that carry the grader label. Their answers are written
+// podman answers `run` as a hidden suite would, by printing the results on its stdout on a line with the key
+// it is given, and lists graderPS (a JSON array) for the containers that carry the grader label. Their answers are written
 // into the scripts, because the driver passes the stubs no variable of the test's. It returns the log.
 func engineStub(t *testing.T, results, graderPS string) string {
 	t.Helper()
 	bin, work := t.TempDir(), t.TempDir()
-	log, res, ps := filepath.Join(work, "calls.log"), filepath.Join(work, "results.json"), filepath.Join(work, "ps.json")
+	log, res, ps := filepath.Join(work, "calls.log"), filepath.Join(work, "report.json"), filepath.Join(work, "ps.json")
 	os.WriteFile(res, []byte(results), 0o644)
 	os.WriteFile(ps, []byte(graderPS), 0o644)
 	podman := "#!/bin/sh\necho \"podman $*\" >> " + log + "\ncase \"$1\" in\n  info) echo \"true 5.0.0\" ;;\n  image) exit 0 ;;\n" +
 		"  ps) case \"$*\" in *ygg.grader*) cat " + ps + " ;; *) echo '[]' ;; esac ;;\n" +
-		"  run) src=; for a in \"$@\"; do case \"$a\" in *dst=/logs/verifier) src=${a#type=bind,src=}; src=${src%,dst=*} ;; esac; done\n" +
-		"    [ -z \"$src\" ] || cp " + res + " \"$src/results.json\" ;;\nesac\nexit 0\n"
+		"  run) key=; for a in \"$@\"; do case \"$a\" in YGG_SCORE_KEY=*) key=${a#YGG_SCORE_KEY=} ;; esac; done\n" +
+		"    echo 'starting the app'; echo \"ygg-results/v1 $key $(cat " + res + ")\" ;;\nesac\nexit 0\n"
 	for name, body := range map[string]string{"podman": podman, "devcontainer": "#!/bin/sh\necho 0.89.0\n"} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
