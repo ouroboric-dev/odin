@@ -12,6 +12,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/pointer"
@@ -60,6 +61,9 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.AddRealms(spec.Pins()); err != nil {
 		return &nodeFailure{err}
 	}
+	if err := ignoreFactory(ctx, r.Project); err != nil {
+		return &nodeFailure{err}
+	}
 	var created, kept []string
 	for _, p := range initOrder(spec) {
 		made, err := initLeaf(ctx, r, n, p, spec.Leaves[p])
@@ -74,6 +78,37 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	}
 	r.State.Summaries[n.ID] = fmt.Sprintf("created %d leaf(s) (%s); %d already there (%s)", len(created), strings.Join(created, ", "), len(kept), strings.Join(kept, ", "))
 	return r.Log(gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Result: r.State.Summaries[n.ID]})
+}
+
+// factoryIgnore is the line the project's .gitignore needs, so the run folders under .factory/ do not
+// show in its status (backlog B-073).
+const factoryIgnore = ".factory/"
+
+// ignoreFactory makes the project's .gitignore name .factory/ and commits that. It creates the file
+// when the project has none, adds the line to one that lacks it, and leaves one that has it alone, so
+// a resumed init adds nothing twice.
+func ignoreFactory(ctx context.Context, project string) error {
+	path := filepath.Join(project, ".gitignore")
+	b, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(line) == factoryIgnore {
+			return nil
+		}
+	}
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		b = append(b, '\n')
+	}
+	if err := os.WriteFile(path, append(b, factoryIgnore+"\n"...), 0o644); err != nil {
+		return err
+	}
+	if _, err := git.Run(ctx, project, "add", "--", ".gitignore"); err != nil {
+		return err
+	}
+	_, err = git.Run(ctx, project, "commit", "-q", "-m", "ygg init: ignore "+factoryIgnore, "--", ".gitignore")
+	return err
 }
 
 // maxLeavesFile is the biggest leaves file Odin reads: a few leaves, each a few lines.

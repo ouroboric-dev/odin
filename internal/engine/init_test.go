@@ -550,3 +550,36 @@ func TestInitRefusesAnExistingLeafThatPinsNoRealmUnderAGraphPackWithNoRecipe(t *
 		t.Errorf("init created %v before it refused", u.Paths())
 	}
 }
+
+func TestInitIgnoresTheFactoryFolderOfTheProject(t *testing.T) {
+	ctx := context.Background()
+	for name, before := range map[string]string{"no .gitignore": "", "an existing one": "node_modules/\n", "one with the line": "node_modules/\n.factory/\n", "one with no final newline": "node_modules/"} {
+		t.Run(name, func(t *testing.T) {
+			r := initRun(t, galleryLeaves)
+			path := filepath.Join(r.Project, ".gitignore")
+			if before != "" {
+				if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				for _, args := range [][]string{{"add", "--", ".gitignore"}, {"commit", "-q", "-m", "a .gitignore", "--", ".gitignore"}} {
+					if _, err := git.Run(ctx, r.Project, args...); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
+				t.Fatalf("Advance() = %+v, %v", out, err)
+			}
+			if _, err := git.Run(ctx, r.Project, "check-ignore", "-q", ".factory/runs"); err != nil {
+				t.Errorf("git check-ignore .factory/runs = %v; the project's .gitignore must name .factory/", err)
+			}
+			b, _ := os.ReadFile(path)
+			if n := strings.Count(string(b), ".factory/\n"); n != 1 || !strings.HasPrefix(string(b), strings.TrimSuffix(before, "\n")) {
+				t.Errorf(".gitignore = %q after %q; want the old lines kept and .factory/ once", b, before)
+			}
+			if st, _ := git.Run(ctx, r.Project, "status", "--porcelain", "--", ".gitignore"); st != "" {
+				t.Errorf(".gitignore is left uncommitted: %q", st)
+			}
+		})
+	}
+}
