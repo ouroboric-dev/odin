@@ -92,16 +92,16 @@ func TestARangeTableHasARowPerRunAndATotalLine(t *testing.T) {
 // A blocked task's reason can hold text an agent wrote. A terminal acts on control characters, so none is printed.
 func TestTextFromAnAgentIsPrintedOnOneLineWithNoControlCharacters(t *testing.T) {
 	r := sample()
-	r.BlockedTasks = []BlockedTask{{Task: "g-T2", Why: "gave up\n\x1b[31m# injected\x07\u009b​‮ \r\nsecond line"}}
-	r.Warnings = []string{"the sessions\nadd up‮ wrong"}
-	r.Grade = &Grade{Refused: "no grade\nfor this‮ run", Categories: map[string]Category{}}
+	r.BlockedTasks = []BlockedTask{{Task: "g-T2", Why: "gave up\n\x1b[31m# injected\x07\u009b\u200b\u202e \r\nsecond line"}}
+	r.Warnings = []string{"the sessions\nadd up\u202e wrong"}
+	r.Grade = &Grade{Refused: "no grade\nfor this\u202e run", Categories: map[string]Category{}}
 	var b bytes.Buffer
 	r.WriteText(&b)
 	out := b.String()
 	if strings.ContainsAny(out, "\x1b\x07\r") {
 		t.Errorf("a control character reached the output:\n%q", out)
 	}
-	for _, bad := range []string{"\u009b", "​", "‮"} {
+	for _, bad := range []string{"\u009b", "\u200b", "\u202e"} {
 		if strings.Contains(out, bad) {
 			t.Errorf("the character %U reached the output:\n%q", []rune(bad)[0], out)
 		}
