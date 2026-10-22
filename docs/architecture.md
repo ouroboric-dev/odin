@@ -91,6 +91,10 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   `grader.cpus: 0` ask for no limit, for an engine that cannot apply one; `ygg doctor` warns when either is
   set, because only the timeout then holds a suite that hangs. `ygg doctor` also finds the grader containers
   a killed `ygg` left (label `ygg.grader`) and removes the ones no live run holds.
+- Finds, in `ygg doctor`, the empty pods that compose leaves behind when a sandbox goes (named
+  `pod_ygg<run id>...`, no label), reports their number and removes the ones no live run or bump holds. A
+  pod is tied to its run by its name starting with the run's prefix, so a pod that matches no run of the
+  project is left to `ygg doctor` in the project it belongs to. A pod that cannot be removed is a warning.
 - Builds the routing indexes (spec §8) at a pointer move whose node lists them as generated files, in the
   project umbrella, with no model call: the wiring index (the block of `REPOS.md` between its two markers)
   and the impact index (`.ygg/impact.json`). Every edge is tagged `extracted` (read from a manifest, an
