@@ -39,6 +39,7 @@ const usage = `usage:
   ygg grade   <run-id> [--task <id>] [--project <dir>]
   ygg metrics <run-id|first..last> [--json] [--project <dir>]
   ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
+  ygg report  <run-id> [--commit] [--project <dir>]
   ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
   ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -55,7 +56,7 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	c := &command{ctx: ctx, out: stdout, err: stderr}
 	cmds := map[string]func([]string) int{
 		"run": c.run, "resume": c.resume, "approve": c.approve, "reject": c.reject,
-		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics,
+		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics, "report": c.report,
 	}
 	f, ok := cmds[args[0]]
 	if !ok {

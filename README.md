@@ -24,6 +24,7 @@ ygg status  <run-id> [--project <dir>]
 ygg grade   <run-id> [--task <id>] [--project <dir>]
 ygg metrics <run-id|first..last> [--json] [--project <dir>]
 ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
+ygg report  <run-id> [--commit] [--project <dir>]
 ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -51,6 +52,11 @@ config hash, the agent and model of each role, the realm versions, the mode, the
 Runs of another brief, task version or suite are marked as not comparable, with the reason, and the deltas are still
 printed. It names the metrics that improved and the ones that got worse, and says whether the hidden score held: a
 factory change counts only if it did (design doc §2.3, criterion 7).
+
+`ygg report <run-id>` writes `report.md` into the run's folder: the tasks the run gave up first, the metrics, every
+intervention with its note, the loops that gave up, and each finding a dispute overruled with both sides. It names the
+ledger line it was read from, and the same run always gives the same bytes. Text an agent wrote is quoted, so it cannot
+open a heading or end a block. `--commit` also commits a copy as `docs/runs/<run-id>.md`, because a project ignores `.factory/`.
 
 `ygg deps bump` runs the package manager and the checks in the sandbox of `factory.yaml`. Without a `sandbox:`
 section it refuses (exit 2) unless you pass `--host`, which runs the bump on the host with the full network and

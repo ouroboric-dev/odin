@@ -152,6 +152,10 @@ B minus A, and a verdict for success criterion 7 (the metrics that improved, the
 score held). Runs of another brief, task version or suite are marked not comparable, with the reason, because their
 scores are not on one scale. Metrics with no direction, such as the reviewer veto rate, are shown and never judged.
 
+`ygg report` (package `internal/report`) renders the run report of spec §10.3 as Markdown from the same checked figures,
+the interventions with their notes, and the loops' records in `run.json`. With `--commit` a copy is committed as
+`docs/runs/<run-id>.md`, because a project ignores `.factory/`.
+
 ## Depends on
 
 - Gungnir's interfaces, Gleipnir (adapters, the sandbox, the check runner) and Jormungandr (the loop).

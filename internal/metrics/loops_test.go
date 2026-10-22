@@ -93,3 +93,22 @@ func TestInterventionsAreRejectionsNotedApprovalsAndEscalations(t *testing.T) {
 		t.Errorf("Interventions = %+v; want 1 rejection, 1 noted approval, 1 escalation, 3 in all", got)
 	}
 }
+
+func TestEachInterventionIsListedWithWhereItHappenedAndItsNote(t *testing.T) {
+	f := newFake(t)
+	f.log(0, gungnir.Event{Name: gungnir.EventRunStarted})
+	f.log(1, gungnir.Event{Name: gungnir.EventGateApproved, Node: "x-contract-gate", Gate: "x-contract-gate", Note: "the contract change is in the spec"})
+	f.log(2, gungnir.Event{Name: gungnir.EventGateRejected, Node: "plan-gate", Gate: "plan-gate", Note: "split task 3"})
+	f.log(3, gungnir.Event{Name: gungnir.EventEscalation, Node: "y-implement", Attempt: 3, Result: "attempts-exhausted"})
+	f.log(4, gungnir.Event{Name: gungnir.EventGateApproved, Node: "design-gate", Gate: "design-gate"}) // plain: not an intervention
+	got := mustCollect(t, f.done()).Interventions.Items
+	want := []Item{{"approval with a note", "x-contract-gate", "the contract change is in the spec"}, {"rejection", "plan-gate", "split task 3"}, {"escalation", "y-implement", "attempts-exhausted"}}
+	if len(got) != len(want) {
+		t.Fatalf("Items = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Items[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

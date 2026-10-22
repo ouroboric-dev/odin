@@ -45,11 +45,19 @@ type Findings struct {
 	DisputesIgnored    int `json:"disputes_ignored"`
 }
 
+// Item is one intervention: what kind, where, and what the person or the loop said.
+type Item struct {
+	Kind string `json:"kind"` // rejection, approval with a note or escalation
+	Node string `json:"node"`
+	Note string `json:"note"`
+}
+
 // Interventions are the times a person had to step in (spec §7.2).
 type Interventions struct {
-	Rejections     int `json:"rejections"`
-	NotedApprovals int `json:"noted_approvals"`
-	Escalations    int `json:"escalations"`
+	Rejections     int    `json:"rejections"`
+	NotedApprovals int    `json:"noted_approvals"`
+	Escalations    int    `json:"escalations"`
+	Items          []Item `json:"items"`
 }
 
 // Total is every intervention.
@@ -92,12 +100,15 @@ func (r *Run) measure(state *record, events []gungnir.Event) error {
 			}
 		case gungnir.EventEscalation:
 			r.Interventions.Escalations++
+			r.Interventions.Items = append(r.Interventions.Items, Item{"escalation", e.Node, e.Result})
 			end(e.Node, e.Attempt, false)
 		case gungnir.EventGateRejected:
 			r.Interventions.Rejections++
+			r.Interventions.Items = append(r.Interventions.Items, Item{"rejection", e.Node, e.Note})
 		case gungnir.EventGateApproved:
 			if e.Note != "" {
 				r.Interventions.NotedApprovals++
+				r.Interventions.Items = append(r.Interventions.Items, Item{"approval with a note", e.Node, e.Note})
 			}
 		case gungnir.EventNodeFinished, gungnir.EventNodeFailed:
 			if loop, ok := loopOf(e.Node, loops); ok {

@@ -30,7 +30,7 @@ func TestTheDocsNameEveryCommand(t *testing.T) {
 	}
 	for _, want := range []string{"ygg grade", "ygg deps bump", "`grade` node", "--canary", "--host", "--task", "grade_refused", "score.json", "ygg.grader",
 		"REPOS.md", ".ygg/impact.json", "shrink guard", "pointer-contract", "routing_index_built", "pointer_contract_checked", "deps_bump", "memory: none",
-		"ygg metrics", "--compare", "not comparable", "ygg.factory.version", "dispute_ignored", "approval wait", "--graph", "graphs.dir", "graph pin", "ygg.run/v3", "factory layer", "snapshot/<node>/<realm>"} {
+		"ygg metrics", "ygg report", "docs/runs", "--compare", "not comparable", "ygg.factory.version", "dispute_ignored", "approval wait", "--graph", "graphs.dir", "graph pin", "ygg.run/v3", "factory layer", "snapshot/<node>/<realm>"} {
 		if !strings.Contains(string(arch), want) {
 			t.Errorf("docs/architecture.md does not mention %q", want)
 		}
