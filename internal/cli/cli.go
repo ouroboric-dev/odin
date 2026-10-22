@@ -198,7 +198,7 @@ func (c *command) resume(args []string) int {
 		}
 		return c.advance(r)
 	}
-	if err := r.Log(gungnir.Event{Name: gungnir.EventRunResumed, Mode: r.State.Mode, Note: strings.Join(r.Saved, "; ")}); err != nil {
+	if err := r.Resumed(strings.Join(r.Saved, "; ")); err != nil {
 		return c.refuse(err)
 	}
 	return c.advance(r)

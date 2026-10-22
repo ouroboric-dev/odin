@@ -70,6 +70,7 @@ type State struct {
 	GraphPackSHA256 string                 `json:"graph_pack_sha256"` // of every file of the graph pack a run could read
 	GraphSHA256     string                 `json:"graph_sha256"`      // of graph.yaml
 	Realms          map[string]RealmRecord `json:"realms,omitempty"`  // every realm of the run, by name
+	Factory         string                 `json:"factory,omitempty"` // the build of ygg that started the run (version.Factory)
 	ConfigPath      string                 `json:"config_path"`
 	ConfigSHA256    string                 `json:"config_sha256"`
 	Brief           string                 `json:"brief,omitempty"`

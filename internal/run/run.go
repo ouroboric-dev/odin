@@ -28,6 +28,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/tree"
+	"github.com/ouroboric-dev/odin/internal/version"
 )
 
 // Options say what to run.
@@ -982,13 +983,14 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		ID: id, Status: StatusRunning, Mode: setup.Mode,
 		Graph: setup.GraphPack.Name, GraphVersion: setup.GraphPack.Version, GraphDir: setup.GraphPack.Dir, GraphPackSHA256: setup.GraphPack.Hash,
 		Realms: realmRecords(setup), GraphSHA256: setup.GraphSHA256,
+		Factory:    version.Factory(),
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
 		Waived: map[string]bool{}, Judged: map[string]string{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, NewLeaves: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Created: now, Updated: now,
 	}}
-	started := gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256,
+	started := gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256, FactoryVersion: r.State.Factory,
 		Note: graphNote(setup.GraphPack) + "; " + realmNote(setup.Realms)}
 	if err := r.Log(started); err != nil {
 		r.Close()
@@ -1353,4 +1355,9 @@ func stopLeftover(p *ExecProcess) error {
 func sum(b []byte) string {
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
+}
+
+// Resumed logs run_resumed with the build of ygg that resumes the run, which may not be the build that started it.
+func (r *Run) Resumed(note string) error {
+	return r.Log(gungnir.Event{Name: gungnir.EventRunResumed, Mode: r.State.Mode, Note: note, FactoryVersion: version.Factory()})
 }
