@@ -89,7 +89,8 @@ func (c *Comparison) differences() {
 	for _, name := range union(maps.Keys(a.Roles), maps.Keys(b.Roles)) {
 		c.differ("role "+name, setting(a.Roles, name), setting(b.Roles, name))
 	}
-	if a.Grade != nil && b.Grade != nil {
+	if a.Grade != nil && b.Grade != nil && a.Grade.Suite != "" && b.Grade.Suite != "" {
+		// A refused grade has no suite or task version: it is compared with nothing.
 		c.differ("task version", a.Grade.TaskVersion, b.Grade.TaskVersion)
 		c.differ("suite", a.Grade.Suite, b.Grade.Suite)
 		if a.Grade.TaskVersion != b.Grade.TaskVersion {

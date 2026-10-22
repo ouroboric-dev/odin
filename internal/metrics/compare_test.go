@@ -167,3 +167,15 @@ func TestNotComparableTextHasNoVerdict(t *testing.T) {
 		}
 	}
 }
+
+// A refused grade has no suite and no task version: the runs are not "different in suite", the grade is missing.
+func TestARefusedGradeIsNotASuiteThatDiffers(t *testing.T) {
+	b := variant()
+	b.Grade = &Grade{Reward: 0}
+	c := Compare(sample(), b)
+	var w bytes.Buffer
+	c.WriteText(&w)
+	if !c.Comparable || strings.Contains(w.String(), "suites differ") || strings.Contains(w.String(), "task versions differ") || strings.Contains(w.String(), "( and") {
+		t.Errorf("Comparable = %v, Reasons = %v:\n%s", c.Comparable, c.Reasons, w.String())
+	}
+}

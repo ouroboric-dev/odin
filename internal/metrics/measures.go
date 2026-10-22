@@ -32,6 +32,8 @@ type Loops struct {
 // Review is the reviewers' side of the loops.
 type Review struct {
 	Vetoes Ratio `json:"vetoes"` // attempts in which a reviewer raised a blocker or a major, out of the attempts reviewers saw
+	// VetoesUnknown says why the rate has no value when the ledger is too old to tell a reviewer's finding from a check's.
+	VetoesUnknown string `json:"vetoes_unknown,omitempty"`
 }
 
 // Findings counts what the finding events record.
@@ -92,15 +94,25 @@ func (r *Run) measure(state *record, events []gungnir.Event) error {
 		attempt int
 	}
 	reviewed, vetoed := map[key]bool{}, map[key]bool{}
+	cur := map[string]int{} // loop node: the attempt in progress, from its loop_attempt lines
 	for _, e := range events {
 		switch e.Name {
 		case gungnir.EventLoopAttempt:
+			cur[e.Node] = e.Attempt
 			if e.Result == "passed" {
 				end(e.Node, e.Attempt, true)
 			}
+			// Before the ledger had a dispute_ignored event, main wrote the ignored dispute on a loop_attempt line.
+			if strings.HasPrefix(e.Result, "dispute ignored") {
+				r.Findings.DisputesIgnored++
+			}
 		case gungnir.EventEscalation:
 			r.Interventions.Escalations++
-			r.Interventions.Items = append(r.Interventions.Items, Item{"escalation", e.Node, e.Result})
+			why := e.Note
+			if why == "" {
+				why = e.Result
+			}
+			r.Interventions.Items = append(r.Interventions.Items, Item{"escalation", e.Node, why})
 			end(e.Node, e.Attempt, false)
 		case gungnir.EventGateRejected:
 			r.Interventions.Rejections++
@@ -112,7 +124,9 @@ func (r *Run) measure(state *record, events []gungnir.Event) error {
 			}
 		case gungnir.EventNodeFinished, gungnir.EventNodeFailed:
 			if loop, ok := loopOf(e.Node, loops); ok {
-				reviewed[key{loop, e.Attempt}] = true
+				// A reviewer's own session counter drifts from the loop's attempt: key the session by the attempt
+				// the loop is in, which its "attempt N of M starts" line gave.
+				reviewed[key{loop, cur[loop]}] = true
 			}
 		case gungnir.EventFindingRaised:
 			switch e.FindingOrigin {
@@ -143,6 +157,10 @@ func (r *Run) measure(state *record, events []gungnir.Event) error {
 		r.Loops.AvgAttempts /= float64(r.Loops.Finished)
 	}
 	r.Loops.FirstPass.D = r.Loops.Finished
+	if r.Findings.RaisedUnattributed > 0 && r.Findings.RaisedByCheck+r.Findings.RaisedByReview == 0 {
+		r.Review.VetoesUnknown = "the ledger names no origin for its findings, so a reviewer's veto can't be told from a check's"
+		return nil
+	}
 	for k := range reviewed {
 		r.Review.Vetoes.D++
 		if vetoed[k] {

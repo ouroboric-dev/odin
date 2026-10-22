@@ -182,5 +182,6 @@ func (j *Journal) entries(t time.Time) ([]Entry, error) {
 // finite reports whether u is a usage a session could have had.
 func finite(u gungnir.Usage) bool {
 	return u.InTok >= 0 && u.OutTok >= 0 && u.CacheTok >= 0 && u.Turns >= 0 &&
-		u.CostUSD >= 0 && !math.IsNaN(u.CostUSD) && !math.IsInf(u.CostUSD, 0)
+		u.CostUSD >= 0 && !math.IsNaN(u.CostUSD) && !math.IsInf(u.CostUSD, 0) &&
+		u.BilledUSD >= 0 && !math.IsNaN(u.BilledUSD) && !math.IsInf(u.BilledUSD, 0)
 }

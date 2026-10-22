@@ -46,7 +46,11 @@ func (r *Run) WriteText(w io.Writer) {
 	line(w, "cost:", "%s", cost)
 	l := r.Loops
 	line(w, "loops:", "%d ended: first pass %s, %.2f attempts on average, %d gave up", l.Finished, ratio(l.FirstPass, "", "no loop has ended"), l.AvgAttempts, l.GaveUp)
-	line(w, "review:", "reviewer vetoes %s", ratio(r.Review.Vetoes, "attempts", "no reviewer has run"))
+	empty := "no reviewer has run"
+	if r.Review.VetoesUnknown != "" {
+		empty = r.Review.VetoesUnknown
+	}
+	line(w, "review:", "reviewer vetoes %s", ratio(r.Review.Vetoes, "attempts", empty))
 	f := r.Findings
 	raised := f.RaisedByCheck + f.RaisedByReview + f.RaisedUnattributed
 	by := fmt.Sprintf("%d by checks, %d by reviewers", f.RaisedByCheck, f.RaisedByReview)

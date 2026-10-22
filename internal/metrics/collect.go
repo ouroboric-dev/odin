@@ -24,12 +24,17 @@ func Collect(dir string) (*Run, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "ledger.jsonl")
-	if _, err := ledger.Verify(path, state.Ledger); err != nil {
+	head, err := ledger.Verify(path, state.Ledger)
+	if err != nil {
 		return nil, fmt.Errorf("the ledger of run %s can't be trusted: %w", state.ID, err)
 	}
 	events, err := readEvents(path)
 	if err != nil {
 		return nil, err
+	}
+	// A line appended after Verify read the file was never verified: only the verified lines count.
+	if int64(len(events)) > head.Seq {
+		events = events[:head.Seq]
 	}
 	r := &Run{ID: state.ID, Status: string(state.Status), Mode: string(state.Mode), Graph: state.Graph, GraphVersion: state.GraphVersion,
 		ConfigSHA256: state.ConfigSHA256, BriefSHA256: state.BriefSHA256, Roles: map[string]Setting{}, Realms: map[string]string{},
@@ -45,6 +50,7 @@ func Collect(dir string) (*Run, error) {
 	}
 	r.clock(events)
 	taskUsage := map[string]Usage{}
+	slugs := taskSlugs(state)
 	for _, e := range events {
 		switch e.Name {
 		case gungnir.EventRunStarted, gungnir.EventRunResumed:
@@ -63,10 +69,14 @@ func Collect(dir string) (*Run, error) {
 		by := r.ByRole[key]
 		by.add(u)
 		r.ByRole[key] = by
-		if e.Task != "" {
-			tu := taskUsage[e.Task]
+		task := e.Task
+		if task == "" {
+			task = taskOf(e.Node, slugs)
+		}
+		if task != "" {
+			tu := taskUsage[task]
 			tu.add(u)
-			taskUsage[e.Task] = tu
+			taskUsage[task] = tu
 		}
 	}
 	r.tasks(state, taskUsage)
