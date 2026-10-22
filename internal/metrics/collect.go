@@ -33,7 +33,7 @@ func Collect(dir string) (*Run, error) {
 	}
 	r := &Run{ID: state.ID, Status: string(state.Status), Mode: string(state.Mode), Graph: state.Graph, GraphVersion: state.GraphVersion,
 		ConfigSHA256: state.ConfigSHA256, BriefSHA256: state.BriefSHA256, Roles: map[string]Setting{}, Realms: map[string]string{},
-		ByRole: map[string]Usage{}, Factory: []string{}}
+		ByRole: map[string]Usage{}, Leaves: map[string]Group{}, Tasks: []Task{}, BlockedTasks: []BlockedTask{}, Factory: []string{}, Warnings: []string{}}
 	for name, rr := range state.Roles {
 		r.Roles[name] = Setting{Agent: rr.Agent, Model: rr.Model}
 	}
@@ -68,6 +68,11 @@ func Collect(dir string) (*Run, error) {
 			tu.add(u)
 			taskUsage[e.Task] = tu
 		}
+	}
+	r.tasks(state, taskUsage)
+	r.crossCheck(state)
+	if err := r.measure(state, events); err != nil {
+		return nil, err
 	}
 	return r, nil
 }
@@ -112,4 +117,17 @@ func sessionUsage(e gungnir.Event) (Usage, bool) {
 		u.Unpriced = 1
 	}
 	return u, true
+}
+
+// crossCheck compares what the ledger's sessions add up to with the totals run.json keeps. They are written
+// apart, so a difference means one of them is wrong or the run was edited.
+func (r *Run) crossCheck(state *record) {
+	u := state.Usage
+	if u.InTok+u.OutTok+u.Turns == 0 {
+		return
+	}
+	if r.Usage.InTok != u.InTok || r.Usage.OutTok != u.OutTok || r.Usage.Turns != u.Turns {
+		r.Warnings = append(r.Warnings, fmt.Sprintf("the ledger's sessions add up to %d tokens in, %d out and %d turns, but run.json says %d, %d and %d",
+			r.Usage.InTok, r.Usage.OutTok, r.Usage.Turns, u.InTok, u.OutTok, u.Turns))
+	}
 }

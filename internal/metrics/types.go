@@ -75,5 +75,14 @@ type Run struct {
 	Time         Time               `json:"time"`
 	Usage        Usage              `json:"usage"`
 	ByRole       map[string]Usage   `json:"by_role"` // "role adapter model": what its sessions used
+	Tasks        []Task             `json:"tasks"`
+	Leaves       map[string]Group   `json:"leaves"`
+	BlockedTasks []BlockedTask      `json:"blocked_tasks"`
 	Retries      int                `json:"retries"`
+	Warnings     []string           `json:"warnings"` // things that do not add up, such as a ledger and run.json that disagree
+
+	Loops         Loops         `json:"loops"`
+	Review        Review        `json:"review"`
+	Findings      Findings      `json:"findings"`
+	Interventions Interventions `json:"interventions"`
 }

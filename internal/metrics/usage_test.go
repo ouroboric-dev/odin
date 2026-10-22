@@ -97,3 +97,19 @@ func TestARunWrittenByAnotherBuildWithOtherFieldsIsStillMeasured(t *testing.T) {
 		t.Error("Collect() accepted a run.json that is not a ygg run record")
 	}
 }
+
+func TestUsageThatDisagreesWithRunJSONIsReportedAsAWarning(t *testing.T) {
+	f := newFake(t)
+	f.log(0, gungnir.Event{Name: gungnir.EventRunStarted}).log(1, session("a", "implementer", "claude-code", "sonnet", 10, 1, 1, 0.01, true))
+	f.State.Usage = gungnir.Usage{InTok: 10, OutTok: 1, CacheTok: 20, Turns: 1, CostUSD: 0.01}
+	if r := mustCollect(t, f.done()); len(r.Warnings) != 0 {
+		t.Errorf("Warnings = %v, want none when the ledger and run.json agree", r.Warnings)
+	}
+	g := newFake(t)
+	g.log(0, gungnir.Event{Name: gungnir.EventRunStarted}).log(1, session("a", "implementer", "claude-code", "sonnet", 10, 1, 1, 0.01, true))
+	g.State.Usage = gungnir.Usage{InTok: 99, OutTok: 1, Turns: 1, CostUSD: 0.01}
+	r := mustCollect(t, g.done())
+	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "run.json") {
+		t.Errorf("Warnings = %v, want one that names run.json", r.Warnings)
+	}
+}

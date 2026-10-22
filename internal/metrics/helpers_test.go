@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -64,6 +65,15 @@ func (f *fake) done() string {
 		f.t.Fatal(err)
 	}
 	return f.dir
+}
+
+func (f *fake) features(fs ...schema.FeatureRecord) *fake {
+	f.State.Features = fs
+	return f
+}
+
+func feature(id, leaf string, status schema.TaskStatus, why string) schema.FeatureRecord {
+	return schema.FeatureRecord{Feature: schema.Feature{ID: id, Title: "title of " + id, Layer: leaf}, Status: status, Why: why}
 }
 
 func mustCollect(t *testing.T, dir string) *Run {
