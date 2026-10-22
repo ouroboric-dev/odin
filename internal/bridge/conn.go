@@ -11,8 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path"
 	"sync"
+
+	"github.com/ouroboric-dev/odin/internal/metrics"
 )
 
 // maxLine bounds one line from the adapter. A reply to the requests used here is a few hundred bytes.
@@ -33,18 +36,23 @@ type Check struct {
 	Detail string `json:"detail"`
 }
 
-// RemoteError is a request the adapter refused or could not carry out; Msg is its own words.
+// RemoteError is a request the adapter refused or could not carry out; Msg is its own words, raw. Error prints them
+// cleaned: the adapter's text may carry newlines or escape sequences.
 type RemoteError struct{ Op, Msg string }
 
-func (e *RemoteError) Error() string { return "the adapter did not carry out " + e.Op + ": " + e.Msg }
+func (e *RemoteError) Error() string {
+	return "the adapter did not carry out " + e.Op + ": " + metrics.Clean(e.Msg)
+}
 
 // Conn is the factory's end of the bridge. Its methods may be called from several goroutines: each request is
-// sent and answered before the next one goes out.
+// sent and answered before the next one goes out. After a protocol error the lines are out of step, so every later
+// call returns that error without writing or reading.
 type Conn struct {
 	in   *bufio.Reader
 	out  io.Writer
 	mu   sync.Mutex
 	next int
+	err  error
 }
 
 // NewConn makes the factory's end from the adapter's output (the factory's standard input) and the factory's
@@ -62,6 +70,9 @@ func (c *Conn) ReadStart() (Start, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&s); err != nil {
 		return Start{}, fmt.Errorf("the first line from the adapter is not a start line: %w", err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return Start{}, errors.New("the start line has data after the JSON object")
 	}
 	switch {
 	case s.Type != "start":
@@ -87,6 +98,9 @@ func (c *Conn) Selfcheck() (Check, error) { return c.check("selfcheck") }
 
 // Spend reports the run's total cost so far. The adapter stops the factory when it passes the budget.
 func (c *Conn) Spend(usd float64) error {
+	if math.IsNaN(usd) || math.IsInf(usd, 0) || usd < 0 {
+		return fmt.Errorf("the spend %v is not a finite amount of 0 or more", usd)
+	}
 	_, err := c.call("spend", map[string]any{"usd": usd})
 	return err
 }
@@ -110,8 +124,11 @@ func (c *Conn) check(op string) (Check, error) {
 func (c *Conn) call(op string, fields map[string]any) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.next++
-	req := map[string]any{"id": c.next, "op": op}
+	if c.err != nil {
+		return nil, c.err
+	}
+	id := c.next + 1
+	req := map[string]any{"id": id, "op": op}
 	for k, v := range fields {
 		req[k] = v
 	}
@@ -119,12 +136,13 @@ func (c *Conn) call(op string, fields map[string]any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.next = id
 	if _, err := c.out.Write(append(b, '\n')); err != nil {
-		return nil, fmt.Errorf("the bridge is closed: %w", err)
+		return nil, c.fail(fmt.Errorf("the bridge is closed: %w", err))
 	}
 	line, err := c.readLine()
 	if err != nil {
-		return nil, fmt.Errorf("the adapter closed the bridge before it answered %s: %w", op, err)
+		return nil, c.fail(fmt.Errorf("the adapter closed the bridge before it answered %s: %w", op, err))
 	}
 	var reply struct {
 		ID    *int   `json:"id"`
@@ -132,15 +150,29 @@ func (c *Conn) call(op string, fields map[string]any) ([]byte, error) {
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(line, &reply); err != nil {
-		return nil, fmt.Errorf("the reply to %s is not JSON: %w", op, err)
+		return nil, c.fail(fmt.Errorf("the reply to %s is not JSON: %w", op, err))
 	}
 	if reply.ID == nil || *reply.ID != c.next {
-		return nil, fmt.Errorf("the reply to %s has the id %v, want %d", op, reply.ID, c.next)
+		got := "no id"
+		if reply.ID != nil {
+			got = fmt.Sprintf("the id %d", *reply.ID)
+		}
+		msg := fmt.Sprintf("the reply to %s has %s, want %d", op, got, c.next)
+		if said := metrics.Clean(reply.Error); said != "" {
+			msg += ": the adapter said " + said
+		}
+		return nil, c.fail(errors.New(msg))
 	}
 	if !reply.OK {
 		return nil, &RemoteError{Op: op, Msg: reply.Error}
 	}
 	return line, nil
+}
+
+// fail records a protocol error, after which the bridge refuses every call, and returns it.
+func (c *Conn) fail(err error) error {
+	c.err = err
+	return err
 }
 
 func (c *Conn) readLine() ([]byte, error) {

@@ -2,9 +2,11 @@ package bridge
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -102,8 +104,8 @@ func TestEachRequestCarriesTheNextIDAndTheReplyMustBeForIt(t *testing.T) {
 	if err := c.Spend(0.5); err != nil {
 		t.Fatalf("first request: %v", err)
 	}
-	if err := c.Spend(0.7); err == nil || !strings.Contains(err.Error(), "id") {
-		t.Errorf("a reply for another id: Spend() = %v; want an error that names the id", err)
+	if err := c.Spend(0.7); err == nil || !strings.Contains(err.Error(), "99") {
+		t.Errorf("a reply for another id: Spend() = %v; want an error that names the id it got, 99", err)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -190,10 +192,108 @@ func TestRequestsFromTwoGoroutinesAreSentOneAtATime(t *testing.T) {
 
 func TestAReplyLineOverTheBoundIsRefused(t *testing.T) {
 	c, a := newConn(t, "")
-	go a.answer(func(req map[string]any) string {
-		return `{"id":1,"ok":true,"detail":"` + strings.Repeat("x", maxLine+10) + `"}`
-	})
+	go func() {
+		// Quiet on purpose: the factory stops reading at the bound, so this write blocks until cleanup closes the pipe.
+		if _, err := a.fromYgg.ReadBytes('\n'); err != nil {
+			return
+		}
+		a.toYgg.Write([]byte(`{"id":1,"ok":true,"detail":"` + strings.Repeat("x", maxLine+10) + `"}` + "\n")) //nolint:errcheck // the pipe closes at cleanup
+	}()
 	if err := c.Spend(1); err == nil {
 		t.Error("Spend() accepted a reply line over the bound")
+	}
+}
+
+func TestAReplyWithNoIDIsNamedAsSuch(t *testing.T) {
+	c, a := newConn(t, "")
+	go func() {
+		a.answer(ok(""))
+		a.answer(func(req map[string]any) string { return `{"id":null,"ok":true}` })
+	}()
+	if err := c.Spend(1); err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+	if err := c.Spend(1); err == nil || !strings.Contains(err.Error(), "no id") {
+		t.Errorf("a reply with id null: Spend() = %v; want an error that says no id", err)
+	}
+}
+
+func TestAMismatchedReplyCarriesTheAdaptersWords(t *testing.T) {
+	c := NewConn(strings.NewReader(`{"id":99,"ok":false,"error":"busy now"}`+"\n"), io.Discard)
+	err := c.Spend(1)
+	if err == nil || !strings.Contains(err.Error(), "99") || !strings.Contains(err.Error(), "busy now") {
+		t.Errorf("Spend() = %v; want an error that names id 99 and the adapter's words", err)
+	}
+}
+
+func TestAfterAProtocolErrorTheConnFailsFastAndWritesNothing(t *testing.T) {
+	var out bytes.Buffer
+	c := NewConn(strings.NewReader(`{"id":99,"ok":true}`+"\n"), &out)
+	first := c.Spend(1)
+	if first == nil {
+		t.Fatal("a reply for another id: Spend() = nil")
+	}
+	written := out.Len()
+	second := c.Spend(1)
+	if second == nil || second.Error() != first.Error() {
+		t.Errorf("the second call: Spend() = %v; want the same error as the first, %v", second, first)
+	}
+	if out.Len() != written {
+		t.Errorf("the second call wrote %q after a protocol error", out.String()[written:])
+	}
+}
+
+func TestAStartLineWithDataAfterTheObjectIsRefused(t *testing.T) {
+	for _, line := range []string{goodStart + " junk", goodStart + goodStart} {
+		c := NewConn(strings.NewReader(line+"\n"), io.Discard)
+		if s, err := c.ReadStart(); err == nil {
+			t.Errorf("ReadStart(%q) = %+v, nil; want a refusal", line, s)
+		}
+	}
+}
+
+func TestASpendThatIsNotAFiniteNonNegativeNumberIsRefusedBeforeAnIDIsTaken(t *testing.T) {
+	var out bytes.Buffer
+	c := NewConn(strings.NewReader(""), &out)
+	for _, usd := range []float64{math.NaN(), math.Inf(1), -1} {
+		if err := c.Spend(usd); err == nil {
+			t.Errorf("Spend(%v) = nil; want a refusal", usd)
+		}
+	}
+	if out.Len() != 0 {
+		t.Errorf("refused spends wrote %q", out.String())
+	}
+
+	c, a := newConn(t, "")
+	go a.answer(ok(""))
+	if err := c.Spend(math.NaN()); err == nil {
+		t.Error("Spend(NaN) = nil; want a refusal")
+	}
+	if err := c.Spend(1); err != nil {
+		t.Fatalf("the next spend: %v", err)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.requests) != 1 || a.requests[0]["id"] != float64(1) {
+		t.Errorf("requests = %+v; want the one request with id 1", a.requests)
+	}
+}
+
+func TestARemoteErrorReadsCleanAndKeepsTheAdaptersWordsRaw(t *testing.T) {
+	c, a := newConn(t, "")
+	go a.answer(func(req map[string]any) string {
+		id, _ := json.Marshal(req["id"])
+		return `{"id":` + string(id) + `,"ok":false,"error":"refused\nnow \u001b[31mred"}`
+	})
+	err := c.UploadDir("/tmp/product", "/app")
+	var re *RemoteError
+	if !errors.As(err, &re) {
+		t.Fatalf("UploadDir() = %v; want a *RemoteError", err)
+	}
+	if strings.ContainsAny(err.Error(), "\n\x1b") {
+		t.Errorf("Error() = %q; want no newline and no escape character", err.Error())
+	}
+	if !strings.Contains(re.Msg, "\n") || !strings.Contains(re.Msg, "\x1b") {
+		t.Errorf("Msg = %q; want the adapter's raw words", re.Msg)
 	}
 }
