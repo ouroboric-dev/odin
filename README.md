@@ -20,11 +20,13 @@ ygg run     --graph <name|dir> [--project <dir>] [--config <factory.yaml>] [--br
 ygg resume  <run-id> [--project <dir>] [--mode <mode>]
 ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
 ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
-ygg status  <run-id> [--project <dir>]
+ygg status  <run-id> [--watch [--interval <duration>]] [--project <dir>]
 ygg grade   <run-id> [--task <id>] [--project <dir>]
 ygg metrics <run-id|first..last> [--json] [--project <dir>]
 ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
 ygg report  <run-id> [--commit] [--project <dir>]
+ygg board   [--project <dir>] | --all [--projects <file>]
+ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <mode>]
 ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -49,14 +51,34 @@ same figures for a tool. It writes nothing.
 
 `ygg metrics --compare <runA> <runB>` prints what differed between two runs of one project (the factory build, the
 config hash, the agent and model of each role, the realm versions, the mode, the graph) and the deltas, B minus A.
-Runs of another brief, task version or suite are marked as not comparable, with the reason, and the deltas are still
-printed. It names the metrics that improved and the ones that got worse, and says whether the hidden score held: a
-factory change counts only if it did (design doc §2.3, criterion 7).
+Runs of another brief, task version, suite or mode are marked as not comparable, with the reason, and the deltas are
+still printed. A comparable pair names the metrics that improved and the ones that got worse, and says whether the
+hidden score held: a factory change counts only if it did (design doc §2.3, criterion 7). A pair that is not comparable
+gets no verdict: it prints `verdict: not judged: the runs are not comparable` instead.
 
 `ygg report <run-id>` writes `report.md` into the run's folder: the tasks the run gave up first, the metrics, every
 intervention with its note, the loops that gave up, and each finding a dispute overruled with both sides. It names the
 ledger line it was read from, and the same run always gives the same bytes. Text an agent wrote is quoted, so it cannot
 open a heading or end a block. `--commit` also commits a copy as `docs/runs/<run-id>.md`, because a project ignores `.factory/`.
+
+`ygg status <run-id> --watch` prints the status again every `--interval` (2 seconds by default) while a process holds the
+run, with a `now:` line that names the node that is running, its attempt and how long it has run, and the cost so far.
+It stops when the run stops running, or at once for a run that no process holds. The live view reads a ledger that is
+being written and does not check its chain: `ygg metrics` is the evidence.
+
+`ygg board` shows the project's tasks by column, as a terminal board: Ready, In progress, Verifying, Blocked, Needs you
+and Done, in the plan's order, each with its leaf and, for a blocked task or one that needs you, the reason. It reads
+`.factory/features.json` and the run that file names, and writes nothing. `ygg board --all` shows the board of every project
+in the operator's local list, `$XDG_CONFIG_HOME/ouroboric/projects.yaml` (or `~/.config/ouroboric/projects.yaml`, or the file
+`--projects` names): `projects:` and a list of absolute paths. A path that is not a project umbrella, or one project whose board cannot be read, refuses the whole list.
+`--projects` without `--all` is refused.
+
+`ygg bridge` is the factory's side of the Harbor bridge (`bench/harbor`). The Harbor adapter starts it and sends the brief
+on standard input as one JSON line. It makes a scratch project (and names its folder on standard error), runs the graph on the brief, reports the cost
+so far (`spend`), copies the committed product to the task environment's working folder through the adapter
+(`upload_dir`), asks for a self-check (`selfcheck`) and says `done`. Standard output carries the bridge and nothing else; the run's own output goes to standard
+error. A Harbor run has no one to approve a gate: a run that stops is handed over as it is, and the exit code is the
+run's. The config's `budget.per_run.usd` must not be above the task's budget when a role bills per token.
 
 `ygg deps bump` runs the package manager and the checks in the sandbox of `factory.yaml`. Without a `sandbox:`
 section it refuses (exit 2) unless you pass `--host`, which runs the bump on the host with the full network and

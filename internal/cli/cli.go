@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/engine"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -35,11 +37,13 @@ const usage = `usage:
   ygg resume  <run-id> [--project <dir>] [--mode <mode>]
   ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
-  ygg status  <run-id> [--project <dir>]
+  ygg status  <run-id> [--watch [--interval <duration>]] [--project <dir>]
   ygg grade   <run-id> [--task <id>] [--project <dir>]
   ygg metrics <run-id|first..last> [--json] [--project <dir>]
   ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
   ygg report  <run-id> [--commit] [--project <dir>]
+  ygg board   [--project <dir>] | --all [--projects <file>]
+  ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <mode>]   (started by the Harbor adapter)
   ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
   ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -49,14 +53,19 @@ exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 
 
 // Main runs one ygg command and returns its exit code.
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return MainWithInput(ctx, args, os.Stdin, stdout, stderr)
+}
+
+// MainWithInput is Main with the standard input given, for the one command that reads it: ygg bridge.
+func MainWithInput(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return ExitRefused
 	}
-	c := &command{ctx: ctx, out: stdout, err: stderr}
+	c := &command{ctx: ctx, in: stdin, out: stdout, err: stderr}
 	cmds := map[string]func([]string) int{
 		"run": c.run, "resume": c.resume, "approve": c.approve, "reject": c.reject,
-		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics, "report": c.report,
+		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics, "report": c.report, "board": c.board, "bridge": c.bridge,
 	}
 	f, ok := cmds[args[0]]
 	if !ok {
@@ -68,6 +77,7 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 type command struct {
 	ctx      context.Context
+	in       io.Reader
 	out, err io.Writer
 }
 
@@ -87,7 +97,9 @@ func (c *command) parse(name string, args []string, want int, define func(*flag.
 	f := &flags{}
 	fs.StringVar(&f.project, "project", ".", "the project directory")
 	fs.StringVar(&f.mode, "mode", "", "step-by-step, key-points or unattended")
-	define(fs, f)
+	if define != nil {
+		define(fs, f)
+	}
 	var pos []string
 	for {
 		if err := fs.Parse(args); err != nil {
@@ -276,30 +288,61 @@ func (c *command) advance(r *run.Run) int {
 		return ExitStopped
 	case run.StatusPaused:
 		fmt.Fprintf(c.err, "Run %s paused: %v\nNothing is lost. Once the provider's quota is back, run: ygg resume %s\n"+
-			"A resume starts the node again from its last checkpoint.\n", id, out.Err, id)
+			"A resume starts the node again from its last checkpoint.\n", id, metrics.Clean(fmt.Sprint(out.Err)), id)
 		return ExitPaused
 	default:
-		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", id, out.Err, resumeHint(id))
+		fmt.Fprintf(c.err, "Run %s failed: %s\n%s", id, metrics.Clean(fmt.Sprint(out.Err)), resumeHint(id))
 		return ExitFailed
 	}
 }
 
 func (c *command) status(args []string) int {
-	f, pos, ok := c.parse("status", args, 1, func(*flag.FlagSet, *flags) {})
+	var watch bool
+	var every time.Duration
+	f, pos, ok := c.parse("status", args, 1, func(fs *flag.FlagSet, f *flags) {
+		fs.BoolVar(&watch, "watch", false, "print the status again until the run stops running")
+		fs.DurationVar(&every, "interval", 2*time.Second, "with --watch, how often to print again")
+	})
 	if !ok {
 		return ExitRefused
 	}
 	if !run.ValidID(pos[0]) {
 		return c.refuse(fmt.Errorf("%q is not a run id", pos[0]))
 	}
+	if f.set["interval"] && !watch {
+		return c.refuse(fmt.Errorf("--interval is for --watch"))
+	}
+	if watch && (every < 50*time.Millisecond || every > time.Hour) {
+		return c.refuse(fmt.Errorf("--interval %s is not between 50ms and 1h", every))
+	}
 	project, err := filepath.Abs(f.project)
 	if err != nil {
 		return c.refuse(err)
 	}
-	dir := run.Dir(project, pos[0])
+	if !watch {
+		_, code := c.printStatus(project, pos[0])
+		return code
+	}
+	for {
+		s, code := c.printStatus(project, pos[0])
+		if s == nil || code != ExitDone || s.Status != run.StatusRunning || !run.Locked(run.Dir(project, pos[0])) {
+			return code
+		}
+		fmt.Fprintln(c.out)
+		select {
+		case <-c.ctx.Done():
+			return ExitDone
+		case <-time.After(every):
+		}
+	}
+}
+
+// printStatus prints the status of one run, and returns its state so a watch can tell whether it still runs.
+func (c *command) printStatus(project, id string) (*run.State, int) {
+	dir := run.Dir(project, id)
 	s, err := run.LoadState(dir)
 	if err != nil {
-		return c.refuse(err)
+		return nil, c.refuse(err)
 	}
 	status := string(s.Status)
 	if s.Status == run.StatusRunning && !run.Locked(dir) {
@@ -307,6 +350,13 @@ func (c *command) status(args []string) int {
 	}
 	fmt.Fprintf(c.out, "run:      %s\nstatus:   %s\nmode:     %s\ngraph:    %s %s\nposition: %d\n",
 		s.ID, status, s.Mode, s.Graph, s.GraphVersion, s.Position)
+	if now, err := metrics.Current(dir); err == nil && now.Node != "" && s.Status == run.StatusRunning {
+		if now.Between {
+			fmt.Fprintf(c.out, "now:      between nodes, after %s (attempt %d)\n", now.Node, now.Attempt)
+		} else {
+			fmt.Fprintf(c.out, "now:      %s, attempt %d, for %s\n", now.Node, now.Attempt, time.Since(now.Since).Round(time.Second))
+		}
+	}
 	if s.Pending != "" {
 		fmt.Fprintf(c.out, "waiting:  %s (%s)\n", s.Pending, s.PendingGate)
 	}
@@ -346,10 +396,10 @@ func (c *command) status(args []string) int {
 		}
 	}
 	if s.Paused != nil {
-		fmt.Fprintf(c.out, "paused:   at %s since %s: %s\n", s.Paused.Node, s.Paused.Since.Format(time.RFC3339), s.Paused.Reason)
+		fmt.Fprintf(c.out, "paused:   at %s since %s: %s\n", s.Paused.Node, s.Paused.Since.Format(time.RFC3339), oneLine(s.Paused.Reason))
 	}
 	if s.Error != "" {
-		fmt.Fprintf(c.out, "error:    %s\n", s.Error)
+		fmt.Fprintf(c.out, "error:    %s\n", oneLine(s.Error))
 	}
 	u := s.Usage
 	fmt.Fprintf(c.out, "usage:    %d tokens in, %d out, %d from cache; %d turns; $%.4f\n",
@@ -358,7 +408,13 @@ func (c *command) status(args []string) int {
 		fmt.Fprintf(c.out, "caps:     %s\n", line)
 	}
 	c.bumpLines(project, s.ConfigPath)
-	return ExitDone
+	return s, ExitDone
+}
+
+// oneLine makes agent text safe to print: its first line only, with no control character (as tracker's oneLine).
+func oneLine(s string) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return metrics.Clean(first)
 }
 
 // blockedTasks lists the tasks the run gave up, one line each, with why.
@@ -366,7 +422,7 @@ func blockedTasks(s *run.State) []string {
 	var out []string
 	for _, f := range s.Features {
 		if f.Status == schema.TaskBlocked {
-			out = append(out, fmt.Sprintf("%s: %s\n", f.ID, f.Why))
+			out = append(out, fmt.Sprintf("%s: %s\n", oneLine(f.ID), oneLine(f.Why)))
 		}
 	}
 	return out

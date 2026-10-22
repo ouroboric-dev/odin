@@ -84,3 +84,16 @@ func mustCollect(t *testing.T, dir string) *Run {
 	}
 	return r
 }
+
+// appendRaw adds text to the ledger as it is, with no newline: a line another process is still writing.
+func appendRaw(t *testing.T, dir, text string) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(dir, "ledger.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(text); err != nil {
+		t.Fatal(err)
+	}
+}

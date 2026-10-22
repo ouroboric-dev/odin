@@ -61,7 +61,7 @@ type Verdict struct {
 	RewardHeld  bool     `json:"reward_held"`
 }
 
-// Compare lays two runs side by side. Two runs of another brief, task version or suite are not comparable: the
+// Compare lays two runs side by side. Two runs of another brief, mode, task version or suite are not comparable: the
 // deltas are still computed, and the result says why they do not mean what a delta usually means.
 func Compare(a, b *Run) *Comparison {
 	c := &Comparison{A: a.ID, B: b.ID, a: a, b: b, Comparable: true, Reasons: []string{}, Differences: []Difference{}}

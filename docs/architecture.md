@@ -149,12 +149,27 @@ be used is a `dispute_ignored` line, and every run records the build of ygg that
 
 `ygg metrics --compare <runA> <runB>` lays two runs side by side: what differed in the setup, the metrics with the delta
 B minus A, and a verdict for success criterion 7 (the metrics that improved, the ones that got worse, and whether the hidden
-score held). Runs of another brief, task version or suite are marked not comparable, with the reason, because their
-scores are not on one scale. Metrics with no direction, such as the reviewer veto rate, are shown and never judged.
+score held). Runs of another brief, task version, suite or mode are marked not comparable, with the reason, because
+their scores are not on one scale. A pair that is not comparable gets no verdict, only
+`verdict: not judged: the runs are not comparable`. Metrics with no direction, such as the reviewer veto rate, are shown
+and never judged.
 
 `ygg report` (package `internal/report`) renders the run report of spec §10.3 as Markdown from the same checked figures,
 the interventions with their notes, and the loops' records in `run.json`. With `--commit` a copy is committed as
 `docs/runs/<run-id>.md`, because a project ignores `.factory/`.
+
+`ygg board` (package `internal/tracker`) is the local tracker of spec §10.4: it projects `.factory/features.json` and the
+run it names into the `Board` of Gungnir's `Tracker` interface. A task that is doing is in progress while its implementer
+works, verifying once the checks and reviewers judge it or its loop has passed, and in needs you when the run stopped at
+one of its gates, is paused, failed, or ended with the task still doing. The operator's list of projects for `ygg board --all` is local configuration (`projects.yaml` in the config folder), never part of a tree.
+
+`ygg status --watch` is the live view of spec §10.3: it prints the status block again until the run stops running, with the
+node that runs now (`metrics.Current`, the end of the ledger, read while another process writes it).
+
+`ygg bridge` (packages `internal/bridge` and `internal/cli`) is Yggdrasil's side of the Harbor bridge: the start line,
+then `spend`, `upload_dir`, `selfcheck` and `done` requests, one at a time, each answered with its id. A reply for another
+id, a refusal and a line over 1 MiB are errors. The run, its checks and its sandboxes are the same as for `ygg run`; the
+Harbor verifier, not Odin's grader, scores the product.
 
 ## Depends on
 
