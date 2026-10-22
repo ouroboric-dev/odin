@@ -17,6 +17,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/budget"
 	"github.com/ouroboric-dev/odin/internal/engine"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -35,7 +36,7 @@ const usage = `usage:
   ygg resume  <run-id> [--project <dir>] [--mode <mode>]
   ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
-  ygg status  <run-id> [--project <dir>]
+  ygg status  <run-id> [--watch [--interval <duration>]] [--project <dir>]
   ygg grade   <run-id> [--task <id>] [--project <dir>]
   ygg metrics <run-id|first..last> [--json] [--project <dir>]
   ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
@@ -288,21 +289,52 @@ func (c *command) advance(r *run.Run) int {
 }
 
 func (c *command) status(args []string) int {
-	f, pos, ok := c.parse("status", args, 1, func(*flag.FlagSet, *flags) {})
+	var watch bool
+	var every time.Duration
+	f, pos, ok := c.parse("status", args, 1, func(fs *flag.FlagSet, f *flags) {
+		fs.BoolVar(&watch, "watch", false, "print the status again until the run stops running")
+		fs.DurationVar(&every, "interval", 2*time.Second, "with --watch, how often to print again")
+	})
 	if !ok {
 		return ExitRefused
 	}
 	if !run.ValidID(pos[0]) {
 		return c.refuse(fmt.Errorf("%q is not a run id", pos[0]))
 	}
+	if f.set["interval"] && !watch {
+		return c.refuse(fmt.Errorf("--interval is for --watch"))
+	}
+	if watch && (every < 50*time.Millisecond || every > time.Hour) {
+		return c.refuse(fmt.Errorf("--interval %s is not between 50ms and 1h", every))
+	}
 	project, err := filepath.Abs(f.project)
 	if err != nil {
 		return c.refuse(err)
 	}
-	dir := run.Dir(project, pos[0])
+	if !watch {
+		_, code := c.printStatus(project, pos[0])
+		return code
+	}
+	for {
+		s, code := c.printStatus(project, pos[0])
+		if s == nil || code != ExitDone || s.Status != run.StatusRunning || !run.Locked(run.Dir(project, pos[0])) {
+			return code
+		}
+		fmt.Fprintln(c.out)
+		select {
+		case <-c.ctx.Done():
+			return ExitDone
+		case <-time.After(every):
+		}
+	}
+}
+
+// printStatus prints the status of one run, and returns its state so a watch can tell whether it still runs.
+func (c *command) printStatus(project, id string) (*run.State, int) {
+	dir := run.Dir(project, id)
 	s, err := run.LoadState(dir)
 	if err != nil {
-		return c.refuse(err)
+		return nil, c.refuse(err)
 	}
 	status := string(s.Status)
 	if s.Status == run.StatusRunning && !run.Locked(dir) {
@@ -310,6 +342,13 @@ func (c *command) status(args []string) int {
 	}
 	fmt.Fprintf(c.out, "run:      %s\nstatus:   %s\nmode:     %s\ngraph:    %s %s\nposition: %d\n",
 		s.ID, status, s.Mode, s.Graph, s.GraphVersion, s.Position)
+	if now, err := metrics.Current(dir); err == nil && now.Node != "" && s.Status == run.StatusRunning {
+		if now.Between {
+			fmt.Fprintf(c.out, "now:      between nodes, after %s (attempt %d)\n", now.Node, now.Attempt)
+		} else {
+			fmt.Fprintf(c.out, "now:      %s, attempt %d, for %s\n", now.Node, now.Attempt, time.Since(now.Since).Round(time.Second))
+		}
+	}
 	if s.Pending != "" {
 		fmt.Fprintf(c.out, "waiting:  %s (%s)\n", s.Pending, s.PendingGate)
 	}
@@ -361,7 +400,7 @@ func (c *command) status(args []string) int {
 		fmt.Fprintf(c.out, "caps:     %s\n", line)
 	}
 	c.bumpLines(project, s.ConfigPath)
-	return ExitDone
+	return s, ExitDone
 }
 
 // blockedTasks lists the tasks the run gave up, one line each, with why.

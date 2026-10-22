@@ -161,6 +161,9 @@ run it names into the `Board` of Gungnir's `Tracker` interface. A task that is d
 works, verifying once the checks and reviewers judge it or its loop has passed, and in needs you when the run stopped at
 one of its gates or failed. The operator's list of projects for `ygg board --all` is local configuration (`projects.yaml` in the config folder), never part of a tree.
 
+`ygg status --watch` is the live view of spec §10.3: it prints the status block again until the run stops running, with the
+node that runs now (`metrics.Current`, the end of the ledger, read while another process writes it).
+
 ## Depends on
 
 - Gungnir's interfaces, Gleipnir (adapters, the sandbox, the check runner) and Jormungandr (the loop).

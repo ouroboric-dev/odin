@@ -20,7 +20,7 @@ ygg run     --graph <name|dir> [--project <dir>] [--config <factory.yaml>] [--br
 ygg resume  <run-id> [--project <dir>] [--mode <mode>]
 ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
 ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
-ygg status  <run-id> [--project <dir>]
+ygg status  <run-id> [--watch [--interval <duration>]] [--project <dir>]
 ygg grade   <run-id> [--task <id>] [--project <dir>]
 ygg metrics <run-id|first..last> [--json] [--project <dir>]
 ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
@@ -58,6 +58,11 @@ factory change counts only if it did (design doc §2.3, criterion 7).
 intervention with its note, the loops that gave up, and each finding a dispute overruled with both sides. It names the
 ledger line it was read from, and the same run always gives the same bytes. Text an agent wrote is quoted, so it cannot
 open a heading or end a block. `--commit` also commits a copy as `docs/runs/<run-id>.md`, because a project ignores `.factory/`.
+
+`ygg status <run-id> --watch` prints the status again every `--interval` (2 seconds by default) while a process holds the
+run, with a `now:` line that names the node that is running, its attempt and how long it has run, and the cost so far.
+It stops when the run stops running, or at once for a run that no process holds. The live view reads a ledger that is
+being written and does not check its chain: `ygg metrics` is the evidence.
 
 `ygg board` shows the project's tasks by column, as a terminal board: Ready, In progress, Verifying, Blocked, Needs you
 and Done, in the plan's order, each with its leaf and, for a blocked task or one that needs you, the reason. It reads
