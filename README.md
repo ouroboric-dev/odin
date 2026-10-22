@@ -51,9 +51,10 @@ same figures for a tool. It writes nothing.
 
 `ygg metrics --compare <runA> <runB>` prints what differed between two runs of one project (the factory build, the
 config hash, the agent and model of each role, the realm versions, the mode, the graph) and the deltas, B minus A.
-Runs of another brief, task version or suite are marked as not comparable, with the reason, and the deltas are still
-printed. It names the metrics that improved and the ones that got worse, and says whether the hidden score held: a
-factory change counts only if it did (design doc §2.3, criterion 7).
+Runs of another brief, task version, suite or mode are marked as not comparable, with the reason, and the deltas are
+still printed. A comparable pair names the metrics that improved and the ones that got worse, and says whether the
+hidden score held: a factory change counts only if it did (design doc §2.3, criterion 7). A pair that is not comparable
+gets no verdict: it prints `verdict: not judged: the runs are not comparable` instead.
 
 `ygg report <run-id>` writes `report.md` into the run's folder: the tasks the run gave up first, the metrics, every
 intervention with its note, the loops that gave up, and each finding a dispute overruled with both sides. It names the

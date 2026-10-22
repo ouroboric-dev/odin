@@ -149,8 +149,10 @@ be used is a `dispute_ignored` line, and every run records the build of ygg that
 
 `ygg metrics --compare <runA> <runB>` lays two runs side by side: what differed in the setup, the metrics with the delta
 B minus A, and a verdict for success criterion 7 (the metrics that improved, the ones that got worse, and whether the hidden
-score held). Runs of another brief, task version or suite are marked not comparable, with the reason, because their
-scores are not on one scale. Metrics with no direction, such as the reviewer veto rate, are shown and never judged.
+score held). Runs of another brief, task version, suite or mode are marked not comparable, with the reason, because
+their scores are not on one scale. A pair that is not comparable gets no verdict, only
+`verdict: not judged: the runs are not comparable`. Metrics with no direction, such as the reviewer veto rate, are shown
+and never judged.
 
 `ygg report` (package `internal/report`) renders the run report of spec §10.3 as Markdown from the same checked figures,
 the interventions with their notes, and the loops' records in `run.json`. With `--commit` a copy is committed as
