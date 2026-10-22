@@ -111,3 +111,26 @@ func anotherRun(t *testing.T, dir, config string) string {
 	}
 	return id
 }
+
+func TestYggMetricsCompareOfTwoRealRunsPrintsTheDeltas(t *testing.T) {
+	dir, config := project(t, "script.yaml", "mode: key-points\n")
+	first, _ := walk(t, dir, config)
+	second := anotherRun(t, dir, config)
+	code, out, errOut := ygg(t, "metrics", "--compare", first, second, "--project", dir)
+	if code != ExitDone {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	for _, want := range []string{"compare:", first, second, "comparable:   yes", "metric", "cost at API prices (usd)", "interventions", "reward:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the comparison lacks %q:\n%s", want, out)
+		}
+	}
+	code, out, _ = ygg(t, "metrics", "--compare", first, second, "--project", dir, "--json")
+	var got struct {
+		Comparable bool
+		Rows       []struct{ Name string }
+	}
+	if err := json.Unmarshal([]byte(out), &got); code != ExitDone || err != nil || !got.Comparable || len(got.Rows) == 0 {
+		t.Errorf("--json: exit %d, %v, %+v", code, err, got)
+	}
+}

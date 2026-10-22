@@ -38,6 +38,7 @@ const usage = `usage:
   ygg status  <run-id> [--project <dir>]
   ygg grade   <run-id> [--task <id>] [--project <dir>]
   ygg metrics <run-id|first..last> [--json] [--project <dir>]
+  ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
   ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
   ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]

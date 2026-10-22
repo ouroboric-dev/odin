@@ -23,6 +23,7 @@ ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
 ygg status  <run-id> [--project <dir>]
 ygg grade   <run-id> [--task <id>] [--project <dir>]
 ygg metrics <run-id|first..last> [--json] [--project <dir>]
+ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
 ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -44,6 +45,12 @@ the reviewer veto rate, findings, interventions, blocked tasks, the hidden score
 routing indexes scored. A rate over nothing says `n/a`. It checks the ledger's hash chain first and refuses a ledger that
 was changed. `first..last` lists every run of the project from one id to the other, with a total line. `--json` prints the
 same figures for a tool. It writes nothing.
+
+`ygg metrics --compare <runA> <runB>` prints what differed between two runs of one project (the factory build, the
+config hash, the agent and model of each role, the realm versions, the mode, the graph) and the deltas, B minus A.
+Runs of another brief, task version or suite are marked as not comparable, with the reason, and the deltas are still
+printed. It names the metrics that improved and the ones that got worse, and says whether the hidden score held: a
+factory change counts only if it did (design doc §2.3, criterion 7).
 
 `ygg deps bump` runs the package manager and the checks in the sandbox of `factory.yaml`. Without a `sandbox:`
 section it refuses (exit 2) unless you pass `--host`, which runs the bump on the host with the full network and

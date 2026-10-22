@@ -147,6 +147,11 @@ killed process to the next `run_resumed` is stopped time; neither is the factory
 grade time. A finding line says whether a check or a reviewer raised it (`ygg.finding.origin`), a dispute that could not
 be used is a `dispute_ignored` line, and every run records the build of ygg that wrote it (`ygg.factory.version`).
 
+`ygg metrics --compare <runA> <runB>` lays two runs side by side: what differed in the setup, the metrics with the delta
+B minus A, and a verdict for success criterion 7 (the metrics that improved, the ones that got worse, and whether the hidden
+score held). Runs of another brief, task version or suite are marked not comparable, with the reason, because their
+scores are not on one scale. Metrics with no direction, such as the reviewer veto rate, are shown and never judged.
+
 ## Depends on
 
 - Gungnir's interfaces, Gleipnir (adapters, the sandbox, the check runner) and Jormungandr (the loop).

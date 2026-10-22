@@ -18,6 +18,9 @@ import (
 // metrics runs ygg metrics: the figures of spec §10.2 for one run, or for the runs between two ids (A..B). It
 // reads the run's folder and writes nothing. --json prints the same figures as JSON, for a tool.
 func (c *command) metrics(args []string) int {
+	if i := slices.Index(args, "--compare"); i >= 0 {
+		return c.compare(slices.Delete(slices.Clone(args), i, i+1))
+	}
 	f, pos, ok := c.parse("metrics", args, 1, func(fs *flag.FlagSet, f *flags) {
 		fs.BoolVar(&f.json, "json", false, "print JSON, not text")
 	})
@@ -97,4 +100,8 @@ func runIDs(project, spec string) ([]string, error) {
 	}
 	slices.Sort(ids)
 	return ids, nil
+}
+
+func errNotOneRun(spec string) error {
+	return fmt.Errorf("%q is not one run id: compare takes two ids, not a range", spec)
 }
