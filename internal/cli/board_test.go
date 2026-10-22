@@ -54,3 +54,40 @@ func TestYggBoardAllShowsEveryProjectOfTheLocalListAndRefusesAListWithAnImpostor
 		t.Errorf("--all with --project: exit %d, want a refusal", code)
 	}
 }
+
+// One board that cannot be read refuses the whole list: the healthy board before it is not shown.
+func TestYggBoardAllRefusesTheWholeListWhenOneProjectsBoardFails(t *testing.T) {
+	a, _ := project(t, "script.yaml", "")
+	b, _ := project(t, "script.yaml", "")
+	if err := os.MkdirAll(filepath.Join(b, ".factory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b, ".factory", "features.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list := filepath.Join(t.TempDir(), "projects.yaml")
+	if err := os.WriteFile(list, []byte("projects:\n  - "+a+"\n  - "+b+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := ygg(t, "board", "--all", "--projects", list)
+	if code != ExitRefused || out != "" || !strings.Contains(errOut, b) {
+		t.Errorf("a corrupt features.json in the second project: exit %d, stdout %q, stderr %q; want exit %d, no board, and the stderr to name %s", code, out, errOut, ExitRefused, b)
+	}
+}
+
+// A folder name with a control character is quoted in the refusal, never printed raw to the terminal.
+func TestYggBoardAllQuotesAControlCharacterInAPath(t *testing.T) {
+	bad := filepath.Join(t.TempDir(), "gallery\x1b[31m")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	list := filepath.Join(t.TempDir(), "projects.yaml")
+	// The YAML escape \e is the control character once the list is parsed.
+	if err := os.WriteFile(list, []byte("projects:\n  - \""+strings.Replace(bad, "\x1b", `\e`, 1)+"\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := ygg(t, "board", "--all", "--projects", list)
+	if code != ExitRefused || out != "" || strings.ContainsRune(errOut, '\x1b') || !strings.Contains(errOut, `\x1b`) {
+		t.Errorf("exit %d, stdout %q, stderr %q; want a refusal with the path quoted and no raw control character", code, out, errOut)
+	}
+}

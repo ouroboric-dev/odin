@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/tracker"
 )
 
@@ -17,7 +18,7 @@ func (c *command) board(args []string) int {
 	var list string
 	f, _, ok := c.parse("board", args, 0, func(fs *flag.FlagSet, f *flags) {
 		fs.BoolVar(&all, "all", false, "show every project of the local list")
-		fs.StringVar(&list, "projects", "", "the list of projects (default "+tracker.DefaultProjectsFile()+")")
+		fs.StringVar(&list, "projects", "", "the list of projects (default $XDG_CONFIG_HOME/ouroboric/projects.yaml, else ~/.config/ouroboric/projects.yaml)")
 	})
 	if !ok {
 		return ExitRefused
@@ -27,7 +28,11 @@ func (c *command) board(args []string) int {
 			return c.refuse(fmt.Errorf("--all shows the projects of the local list; it takes no --project"))
 		}
 		if list == "" {
-			list = tracker.DefaultProjectsFile()
+			def, err := tracker.DefaultProjectsFile()
+			if err != nil {
+				return c.refuse(err)
+			}
+			list = def
 		}
 		projects, err := tracker.LoadProjects(list)
 		if err != nil {
@@ -37,7 +42,7 @@ func (c *command) board(args []string) int {
 		for _, p := range projects {
 			b, err := tracker.Local{Project: p}.Board(c.ctx)
 			if err != nil {
-				return c.refuse(fmt.Errorf("%s: %w", p, err))
+				return c.refuse(fmt.Errorf("%q: %s", p, metrics.Clean(err.Error())))
 			}
 			boards = append(boards, b)
 		}

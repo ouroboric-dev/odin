@@ -62,13 +62,41 @@ func TestAListNamingAnythingButProjectRootsIsRefusedWholeWithTheBadPath(t *testi
 
 func TestTheDefaultListIsInTheOperatorsConfigFolder(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/cfg")
-	if got := DefaultProjectsFile(); got != "/cfg/ouroboric/projects.yaml" {
-		t.Errorf("DefaultProjectsFile() = %q", got)
+	if got, err := DefaultProjectsFile(); err != nil || got != "/cfg/ouroboric/projects.yaml" {
+		t.Errorf("DefaultProjectsFile() = %q, %v", got, err)
 	}
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", "/home/someone")
-	if got := DefaultProjectsFile(); got != "/home/someone/.config/ouroboric/projects.yaml" {
-		t.Errorf("DefaultProjectsFile() = %q", got)
+	if got, err := DefaultProjectsFile(); err != nil || got != "/home/someone/.config/ouroboric/projects.yaml" {
+		t.Errorf("DefaultProjectsFile() = %q, %v", got, err)
+	}
+	// The XDG spec says a relative XDG_CONFIG_HOME is invalid and must be ignored.
+	t.Setenv("XDG_CONFIG_HOME", "relative/cfg")
+	if got, err := DefaultProjectsFile(); err != nil || got != "/home/someone/.config/ouroboric/projects.yaml" {
+		t.Errorf("a relative XDG_CONFIG_HOME: DefaultProjectsFile() = %q, %v; want the HOME default", got, err)
+	}
+}
+
+func TestTheDefaultListIsRefusedWithoutAnAbsoluteHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	for _, home := range []string{"", "relative/home"} {
+		t.Setenv("HOME", home)
+		if got, err := DefaultProjectsFile(); err == nil || got != "" {
+			t.Errorf("HOME=%q: DefaultProjectsFile() = %q, %v; want a refusal that names the problem", home, got, err)
+		}
+	}
+}
+
+// A control character in a folder name is written in the refusal as a Go quote, never raw to the terminal.
+func TestAPathWithAControlCharacterIsQuotedInTheRefusal(t *testing.T) {
+	bad := filepath.Join(t.TempDir(), "gallery\x1b[31m")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// In the YAML list the escape is written as \e, which the parser reads as the control character.
+	_, err := LoadProjects(writeList(t, "projects:\n  - \""+strings.Replace(bad, "\x1b", `\e`, 1)+"\"\n"))
+	if err == nil || strings.ContainsRune(err.Error(), '\x1b') || !strings.Contains(err.Error(), `\x1b`) {
+		t.Errorf("LoadProjects() error %q; want the path quoted, with no raw control character", err)
 	}
 }
 
