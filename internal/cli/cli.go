@@ -40,7 +40,7 @@ const usage = `usage:
   ygg metrics <run-id|first..last> [--json] [--project <dir>]
   ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
   ygg report  <run-id> [--commit] [--project <dir>]
-  ygg board   [--project <dir>]
+  ygg board   [--project <dir>] | --all [--projects <file>]
   ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
   ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]

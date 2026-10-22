@@ -25,7 +25,7 @@ ygg grade   <run-id> [--task <id>] [--project <dir>]
 ygg metrics <run-id|first..last> [--json] [--project <dir>]
 ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
 ygg report  <run-id> [--commit] [--project <dir>]
-ygg board   [--project <dir>]
+ygg board   [--project <dir>] | --all [--projects <file>]
 ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -61,7 +61,9 @@ open a heading or end a block. `--commit` also commits a copy as `docs/runs/<run
 
 `ygg board` shows the project's tasks by column, as a terminal board: Ready, In progress, Verifying, Blocked, Needs you
 and Done, in the plan's order, each with its leaf and, for a blocked task or one that needs you, the reason. It reads
-`.factory/features.json` and the run that file names, and writes nothing.
+`.factory/features.json` and the run that file names, and writes nothing. `ygg board --all` shows the board of every project
+in the operator's local list, `$XDG_CONFIG_HOME/ouroboric/projects.yaml` (or `~/.config/ouroboric/projects.yaml`, or the file
+`--projects` names): `projects:` and a list of absolute paths. A path that is not a project umbrella refuses the whole list.
 
 `ygg deps bump` runs the package manager and the checks in the sandbox of `factory.yaml`. Without a `sandbox:`
 section it refuses (exit 2) unless you pass `--host`, which runs the bump on the host with the full network and

@@ -159,7 +159,7 @@ the interventions with their notes, and the loops' records in `run.json`. With `
 `ygg board` (package `internal/tracker`) is the local tracker of spec §10.4: it projects `.factory/features.json` and the
 run it names into the `Board` of Gungnir's `Tracker` interface. A task that is doing is in progress while its implementer
 works, verifying once the checks and reviewers judge it or its loop has passed, and in needs you when the run stopped at
-one of its gates or failed.
+one of its gates or failed. The operator's list of projects for `ygg board --all` is local configuration (`projects.yaml` in the config folder), never part of a tree.
 
 ## Depends on
 
