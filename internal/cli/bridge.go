@@ -34,6 +34,9 @@ func (c *command) bridge(args []string) int {
 	if !ok {
 		return ExitRefused
 	}
+	if f.set["project"] {
+		return c.refuse(errors.New("bridge makes its own project: --project is not accepted (use --work)"))
+	}
 	if f.config == "" || f.graph == "" {
 		return c.refuse(errors.New("bridge needs --config and --graph"))
 	}
@@ -42,6 +45,7 @@ func (c *command) bridge(args []string) int {
 		return c.refuse(err)
 	}
 	conn := bridge.NewConn(c.in, c.out)
+	defer conn.Close()
 	start, err := conn.ReadStart()
 	if err != nil {
 		return c.refuse(err)
@@ -65,9 +69,22 @@ func (c *command) bridge(args []string) int {
 		return c.refuse(err)
 	}
 
+	// The run stops when the adapter goes away (the bridge is dead), when a spend report fails, and on a signal.
+	// A signal also closes the bridge, so that no call waits for an adapter that does not answer.
+	runCtx, cancelRun := context.WithCancel(c.ctx)
+	defer cancelRun()
+	go func() {
+		select {
+		case <-conn.Dead():
+			cancelRun()
+		case <-c.ctx.Done():
+			conn.Close()
+		case <-runCtx.Done():
+		}
+	}()
 	// The run prints to standard error: standard output is the bridge.
-	sub := &command{ctx: c.ctx, out: c.err, err: c.err}
-	stopSpend := c.reportSpend(conn, project)
+	sub := &command{ctx: runCtx, out: c.err, err: c.err}
+	stopSpend := c.reportSpend(conn, project, cancelRun)
 	runArgs := []string{"--project", project, "--config", f.config, "--graph", f.graph, "--brief", brief}
 	if f.mode != "" {
 		runArgs = append(runArgs, "--mode", f.mode)
@@ -75,6 +92,16 @@ func (c *command) bridge(args []string) int {
 	code := sub.run(runArgs)
 	stopSpend()
 	fmt.Fprintf(c.err, "bridge: the run ended with exit code %d\n", code)
+	select {
+	case <-conn.Dead():
+		fmt.Fprintf(c.err, "bridge: the adapter went away (%v): nothing is handed over\n", conn.Err())
+		return stoppedCode(code)
+	default:
+	}
+	if c.ctx.Err() != nil {
+		fmt.Fprintln(c.err, "bridge: stopped by a signal: nothing is handed over")
+		return stoppedCode(code)
+	}
 	if code == ExitRefused {
 		return code // nothing started: no product to hand over, and the adapter fails the run for want of done
 	}
@@ -84,7 +111,7 @@ func (c *command) bridge(args []string) int {
 		if state.Pending != "" {
 			fmt.Fprintf(c.err, "bridge: the run stopped at %s (%s): there is no one to approve in a Harbor run, so what exists is handed over\n", state.Pending, state.PendingGate)
 		}
-		if err := conn.Spend(state.Usage.CostUSD); err != nil {
+		if err := conn.Spend(spentUSD(state)); err != nil {
 			fmt.Fprintf(c.err, "bridge: %v\n", err)
 		}
 	}
@@ -119,9 +146,22 @@ func checkTaskBudget(cfg *schema.Factory, budget float64) error {
 	return nil
 }
 
+// stoppedCode is the exit code of a run the bridge stopped: the run's own when it says the run did not end well,
+// else a failure. A run that was cancelled before it began says "refused", but the bridge did not refuse it.
+func stoppedCode(code int) int {
+	if code == ExitDone || code == ExitRefused {
+		return ExitFailed
+	}
+	return code
+}
+
+// spentUSD is what the run has spent: the dollars a paid adapter billed. The caps count it, and not the cost figure,
+// which for a subscription is only what the sessions would cost on the API.
+func spentUSD(s *run.State) float64 { return s.Usage.BilledUSD }
+
 // reportSpend starts a goroutine that sends the run's cost so far every spendEvery. The returned function stops
 // it and waits, so no request is in flight when the caller sends the next one.
-func (c *command) reportSpend(conn *bridge.Conn, project string) (stop func()) {
+func (c *command) reportSpend(conn *bridge.Conn, project string, onFail func()) (stop func()) {
 	ctx, cancel := context.WithCancel(c.ctx)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -135,8 +175,10 @@ func (c *command) reportSpend(conn *bridge.Conn, project string) (stop func()) {
 				return
 			case <-tick.C:
 				if s := lastState(project); s != nil {
-					if err := conn.Spend(s.Usage.CostUSD); err != nil {
+					if err := conn.Spend(spentUSD(s)); err != nil {
 						fmt.Fprintf(c.err, "bridge: %v\n", err)
+						onFail() // a spend the adapter does not take: no one is counting, so the run stops
+						return
 					}
 				}
 			}

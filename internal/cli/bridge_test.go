@@ -11,8 +11,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/run"
 )
 
 // harbor plays the Harbor agent adapter for `ygg bridge`: it sends the start line, answers each request, and
@@ -171,5 +174,96 @@ func TestACapOfThePaidRolesAboveTheTasksBudgetIsRefused(t *testing.T) {
 	sub := &schema.Factory{Roles: map[string]schema.Role{"implementer": {Agent: "claude-code", Model: "sonnet"}}, Budget: schema.Budget{PerRun: schema.Cap{USD: 50}}}
 	if err := checkTaskBudget(sub, 10); err != nil {
 		t.Errorf("a subscription's dollar figure is not a cap: checkTaskBudget() = %v", err)
+	}
+}
+
+// The dollar caps count what a paid adapter billed (plan decision 4); a subscription's figure is not spent money.
+func TestBridgeReportsTheBilledDollarsAndNotTheCostFigure(t *testing.T) {
+	s := &run.State{Usage: gungnir.Usage{CostUSD: 4.5, CostEstimated: true, BilledUSD: 0.5}}
+	if got := spentUSD(s); got != 0.5 {
+		t.Errorf("spentUSD = %v; want the billed 0.5, not the cost figure 4.5", got)
+	}
+}
+
+func TestBridgeRefusesProject(t *testing.T) {
+	_, config := project(t, "script.yaml", "mode: unattended\n")
+	h := runBridge(t, bridgeStart("100"), "--config", config, "--graph", toyRealm(t), "--project", t.TempDir())
+	if h.code != ExitRefused || len(h.requests) != 0 || !strings.Contains(h.stderr, "--project") {
+		t.Errorf("exit %d, %d requests, stderr %q; want a refusal that names --project", h.code, len(h.requests), h.stderr)
+	}
+}
+
+// bridgeAlone runs ygg bridge with the pipes in the test's hands and returns the exit code once it ends.
+func bridgeAlone(t *testing.T, ctx context.Context, work string, args ...string) (inW *io.PipeWriter, outR *bufio.Reader, code chan int, stderr *strings.Builder) {
+	t.Helper()
+	inR, inW := io.Pipe()
+	outPR, outW := io.Pipe()
+	stderr = &strings.Builder{}
+	code = make(chan int, 1)
+	go func() { code <- MainWithInput(ctx, append([]string{"bridge"}, args...), inR, outW, stderr) }()
+	t.Cleanup(func() { inW.Close(); outPR.Close() })
+	return inW, bufio.NewReader(outPR), code, stderr
+}
+
+func waitCode(t *testing.T, code chan int) int {
+	t.Helper()
+	select {
+	case c := <-code:
+		return c
+	case <-time.After(60 * time.Second):
+		t.Fatal("ygg bridge does not end")
+		return 0
+	}
+}
+
+// An adapter that goes away mid-run leaves no one to hand the product to: the run stops, and nothing more is sent.
+func TestBridgeStopsTheRunAndSendsNothingWhenTheAdapterClosesItsOutput(t *testing.T) {
+	_, config := project(t, "script.yaml", "mode: unattended\ngates:\n  design: auto\n")
+	inW, outR, code, stderr := bridgeAlone(t, context.Background(), filepath.Join(t.TempDir(), "w"), "--config", config, "--graph", toyRealm(t))
+	fmt.Fprintln(inW, bridgeStart("100"))
+	inW.Close() // the adapter is gone
+	c := waitCode(t, code)
+	var sent []string
+	for {
+		line, err := outR.ReadString('\n')
+		if err != nil {
+			break
+		}
+		sent = append(sent, line)
+	}
+	if c == ExitDone || c == ExitRefused {
+		t.Errorf("exit %d; want a failure that is not a clean end or a refusal:\n%s", c, stderr)
+	}
+	for _, l := range sent {
+		if strings.Contains(l, `"upload_dir"`) || strings.Contains(l, `"done"`) || strings.Contains(l, `"selfcheck"`) {
+			t.Errorf("sent %s after the adapter went away", l)
+		}
+	}
+	if !strings.Contains(stderr.String(), "the adapter went away") {
+		t.Errorf("stderr must say why nothing was handed over:\n%s", stderr)
+	}
+}
+
+// An adapter that stops replying cannot be told from a slow one, but a signal must end the command all the same.
+func TestBridgeEndsOnASignalWhileTheAdapterDoesNotReply(t *testing.T) {
+	old := spendEvery
+	spendEvery = 5 * time.Millisecond
+	t.Cleanup(func() { spendEvery = old })
+	_, config := project(t, "script.yaml", "mode: unattended\ngates:\n  design: auto\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inW, outR, code, stderr := bridgeAlone(t, ctx, filepath.Join(t.TempDir(), "w"), "--config", config, "--graph", toyRealm(t))
+	fmt.Fprintln(inW, bridgeStart("100"))
+	first, err := outR.ReadString('\n') // a request; it is never answered
+	if err != nil || !strings.Contains(first, `"op"`) {
+		t.Fatalf("no request: %q, %v", first, err)
+	}
+	cancel()
+	if c := waitCode(t, code); c == ExitDone {
+		t.Errorf("exit %d after the signal:\n%s", c, stderr)
+	}
+	rest, _ := io.ReadAll(outR)
+	if strings.Contains(string(rest), `"done"`) {
+		t.Errorf("sent done after the signal: %s", rest)
 	}
 }

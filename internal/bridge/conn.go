@@ -48,16 +48,75 @@ func (e *RemoteError) Error() string {
 // sent and answered before the next one goes out. After a protocol error the lines are out of step, so every later
 // call returns that error without writing or reading.
 type Conn struct {
-	in   *bufio.Reader
-	out  io.Writer
-	mu   sync.Mutex
-	next int
-	err  error
+	in    io.Reader
+	out   io.Writer
+	mu    sync.Mutex // one request at a time
+	next  int
+	lines chan []byte   // the lines the reader goroutine took from the adapter, one at a time
+	done  chan struct{} // closed when the bridge is dead: a protocol error, the end of the input or Close
+	once  sync.Once
+
+	errMu   sync.Mutex
+	err     error // the first thing that killed the bridge
+	readErr error // why the reader goroutine stopped
 }
 
 // NewConn makes the factory's end from the adapter's output (the factory's standard input) and the factory's
-// standard output.
-func NewConn(in io.Reader, out io.Writer) *Conn { return &Conn{in: bufio.NewReader(in), out: out} }
+// standard output. A goroutine reads the input for as long as the bridge lives, so the end of the input is seen
+// while no request is waiting: Dead reports it.
+func NewConn(in io.Reader, out io.Writer) *Conn {
+	c := &Conn{in: in, out: out, lines: make(chan []byte), done: make(chan struct{})}
+	go c.read(bufio.NewReader(in))
+	return c
+}
+
+// Dead is closed when the bridge is dead: after a protocol error, when the adapter's output ends, or after Close.
+func (c *Conn) Dead() <-chan struct{} { return c.done }
+
+// Err is why the bridge is dead, or nil while it lives.
+func (c *Conn) Err() error {
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	if c.err != nil {
+		return c.err
+	}
+	return c.readErr
+}
+
+// Close ends the bridge: a call that waits for the adapter returns, and later calls fail. It closes the input and
+// the output when they can be closed, for a read or a write on a pipe that no one serves does not return otherwise.
+func (c *Conn) Close() {
+	c.errMu.Lock()
+	if c.err == nil {
+		c.err = errors.New("the bridge is closed")
+	}
+	c.errMu.Unlock()
+	c.once.Do(func() { close(c.done) })
+	if cl, ok := c.in.(io.Closer); ok {
+		cl.Close()
+	}
+	if cl, ok := c.out.(io.Closer); ok {
+		cl.Close()
+	}
+}
+
+func (c *Conn) read(r *bufio.Reader) {
+	for {
+		line, err := readLine(r)
+		if err != nil {
+			c.errMu.Lock()
+			c.readErr = err
+			c.errMu.Unlock()
+			c.once.Do(func() { close(c.done) })
+			return
+		}
+		select {
+		case c.lines <- line:
+		case <-c.done:
+			return
+		}
+	}
+}
 
 // ReadStart reads and checks the start line.
 func (c *Conn) ReadStart() (Start, error) {
@@ -124,8 +183,10 @@ func (c *Conn) check(op string) (Check, error) {
 func (c *Conn) call(op string, fields map[string]any) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.err != nil {
-		return nil, c.err
+	select {
+	case <-c.done:
+		return nil, c.Err()
+	default:
 	}
 	id := c.next + 1
 	req := map[string]any{"id": id, "op": op}
@@ -171,14 +232,29 @@ func (c *Conn) call(op string, fields map[string]any) ([]byte, error) {
 
 // fail records a protocol error, after which the bridge refuses every call, and returns it.
 func (c *Conn) fail(err error) error {
-	c.err = err
+	c.errMu.Lock()
+	if c.err == nil {
+		c.err = err
+	}
+	c.errMu.Unlock()
+	c.once.Do(func() { close(c.done) })
 	return err
 }
 
+// readLine waits for the next line from the adapter, or for the bridge to die.
 func (c *Conn) readLine() ([]byte, error) {
+	select {
+	case line := <-c.lines:
+		return line, nil
+	case <-c.done:
+		return nil, c.Err()
+	}
+}
+
+func readLine(r *bufio.Reader) ([]byte, error) {
 	var line []byte
 	for {
-		chunk, isPrefix, err := c.in.ReadLine()
+		chunk, isPrefix, err := r.ReadLine()
 		if err != nil {
 			return nil, err
 		}

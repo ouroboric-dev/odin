@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // adapter plays the Harbor agent adapter (bench/harbor/ygg_harbor/agent.py) on the other end of the pipes: it
@@ -295,5 +296,52 @@ func TestARemoteErrorReadsCleanAndKeepsTheAdaptersWordsRaw(t *testing.T) {
 	}
 	if !strings.Contains(re.Msg, "\n") || !strings.Contains(re.Msg, "\x1b") {
 		t.Errorf("Msg = %q; want the adapter's raw words", re.Msg)
+	}
+}
+
+// The end of the adapter's output is seen while no request waits, so the factory can stop the run.
+func TestTheBridgeIsDeadAsSoonAsTheAdapterClosesItsOutput(t *testing.T) {
+	c, a := newConn(t, goodStart)
+	if _, err := c.ReadStart(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-c.Dead():
+		t.Fatal("the bridge is dead before the adapter went away")
+	default:
+	}
+	a.toYgg.Close()
+	select {
+	case <-c.Dead():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the bridge did not notice that the adapter closed its output")
+	}
+	if c.Err() == nil {
+		t.Error("Err() = nil on a dead bridge")
+	}
+	if err := c.Spend(1); err == nil {
+		t.Error("a dead bridge sent a request")
+	}
+}
+
+// An adapter that stops replying leaves a call waiting; Close ends it.
+func TestCloseEndsACallThatWaitsForTheAdapter(t *testing.T) {
+	c, a := newConn(t, goodStart)
+	if _, err := c.ReadStart(); err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- c.Spend(1) }()
+	if line, err := a.fromYgg.ReadBytes('\n'); err != nil {
+		t.Fatalf("no request: %v (%q)", err, line)
+	}
+	c.Close()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Error("Spend() = nil after Close")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Spend() still waits after Close")
 	}
 }
