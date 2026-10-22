@@ -46,6 +46,8 @@ func (c *command) bridge(args []string) int {
 	}
 	conn := bridge.NewConn(c.in, c.out)
 	defer conn.Close()
+	// A signal closes the bridge for the whole command, so that no call waits for an adapter that does not answer.
+	defer context.AfterFunc(c.ctx, conn.Close)()
 	start, err := conn.ReadStart()
 	if err != nil {
 		return c.refuse(err)
@@ -70,15 +72,12 @@ func (c *command) bridge(args []string) int {
 	}
 
 	// The run stops when the adapter goes away (the bridge is dead), when a spend report fails, and on a signal.
-	// A signal also closes the bridge, so that no call waits for an adapter that does not answer.
 	runCtx, cancelRun := context.WithCancel(c.ctx)
 	defer cancelRun()
 	go func() {
 		select {
 		case <-conn.Dead():
 			cancelRun()
-		case <-c.ctx.Done():
-			conn.Close()
 		case <-runCtx.Done():
 		}
 	}()
@@ -92,15 +91,15 @@ func (c *command) bridge(args []string) int {
 	code := sub.run(runArgs)
 	stopSpend()
 	fmt.Fprintf(c.err, "bridge: the run ended with exit code %d\n", code)
+	if c.ctx.Err() != nil {
+		fmt.Fprintln(c.err, "bridge: stopped by a signal: nothing is handed over")
+		return stoppedCode(code)
+	}
 	select {
 	case <-conn.Dead():
 		fmt.Fprintf(c.err, "bridge: the adapter went away (%v): nothing is handed over\n", conn.Err())
 		return stoppedCode(code)
 	default:
-	}
-	if c.ctx.Err() != nil {
-		fmt.Fprintln(c.err, "bridge: stopped by a signal: nothing is handed over")
-		return stoppedCode(code)
 	}
 	if code == ExitRefused {
 		return code // nothing started: no product to hand over, and the adapter fails the run for want of done
@@ -147,9 +146,9 @@ func checkTaskBudget(cfg *schema.Factory, budget float64) error {
 }
 
 // stoppedCode is the exit code of a run the bridge stopped: the run's own when it says the run did not end well,
-// else a failure. A run that was cancelled before it began says "refused", but the bridge did not refuse it.
+// else a failure (a run that gave up tasks is not a success when nothing was handed over). A run that was cancelled before it began says "refused", but the bridge did not refuse it.
 func stoppedCode(code int) int {
-	if code == ExitDone || code == ExitRefused {
+	if code == ExitDone || code == ExitRefused || code == ExitBlocked {
 		return ExitFailed
 	}
 	return code

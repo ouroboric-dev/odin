@@ -262,8 +262,58 @@ func TestBridgeEndsOnASignalWhileTheAdapterDoesNotReply(t *testing.T) {
 	if c := waitCode(t, code); c == ExitDone {
 		t.Errorf("exit %d after the signal:\n%s", c, stderr)
 	}
+	if !strings.Contains(stderr.String(), "stopped by a signal") || strings.Contains(stderr.String(), "went away") {
+		t.Errorf("stderr must say that a signal stopped the run, not that the adapter went away:\n%s", stderr)
+	}
 	rest, _ := io.ReadAll(outR)
 	if strings.Contains(string(rest), `"done"`) {
 		t.Errorf("sent done after the signal: %s", rest)
+	}
+}
+
+// A refused spend stops the run, but the bridge lives on to hand over; a signal must still end it when the adapter
+// then stops replying.
+func TestBridgeEndsOnASignalAfterARefusedSpendWhenTheAdapterStopsReplying(t *testing.T) {
+	old := spendEvery
+	spendEvery = 5 * time.Millisecond
+	t.Cleanup(func() { spendEvery = old })
+	_, config := project(t, "script.yaml", "mode: unattended\ngates:\n  design: auto\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inW, outR, code, stderr := bridgeAlone(t, ctx, filepath.Join(t.TempDir(), "w"), "--config", config, "--graph", toyRealm(t))
+	fmt.Fprintln(inW, bridgeStart("100"))
+	first, err := outR.ReadString('\n')
+	var req map[string]any
+	if err != nil || json.Unmarshal([]byte(first), &req) != nil {
+		t.Fatalf("no request: %q, %v", first, err)
+	}
+	reply, _ := json.Marshal(map[string]any{"id": req["id"], "ok": false, "error": "over budget"})
+	fmt.Fprintln(inW, string(reply))
+	second, err := outR.ReadString('\n') // the next request is never answered
+	if err != nil || !strings.Contains(second, `"op"`) {
+		t.Fatalf("no second request: %q, %v\n%s", second, err, stderr)
+	}
+	cancel()
+	done := make(chan int, 1)
+	go func() { done <- <-code }()
+	select {
+	case c := <-done:
+		if c == ExitDone {
+			t.Errorf("exit %d after the signal:\n%s", c, stderr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ygg bridge still waits for the adapter 5 s after the signal")
+	}
+	rest, _ := io.ReadAll(outR)
+	if strings.Contains(string(rest), `"done"`) {
+		t.Errorf("sent done after the signal: %s", rest)
+	}
+}
+
+func TestAStoppedBridgeNeverExitsAsDoneOrRefusedOrDoneWithGivenUpTasks(t *testing.T) {
+	for code, want := range map[int]int{ExitDone: ExitFailed, ExitRefused: ExitFailed, ExitBlocked: ExitFailed, ExitFailed: ExitFailed, ExitStopped: ExitStopped, ExitPaused: ExitPaused} {
+		if got := stoppedCode(code); got != want {
+			t.Errorf("stoppedCode(%d) = %d; want %d", code, got, want)
+		}
 	}
 }
