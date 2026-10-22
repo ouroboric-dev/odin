@@ -77,7 +77,7 @@ func (r *Run) WriteText(w io.Writer) {
 		line(w, "retries:", "%d sessions were retried after a transient failure", r.Retries)
 	}
 	for _, msg := range r.Warnings {
-		line(w, "warning:", "%s", msg)
+		line(w, "warning:", "%s", clean(msg))
 	}
 	if len(r.ByRole) > 0 {
 		fmt.Fprintln(w, "\nby role:")
@@ -99,7 +99,7 @@ func (r *Run) writeGrade(w io.Writer) {
 	case g == nil:
 		line(w, "grade:", "not graded")
 	case g.Refused != "" && g.Suite == "":
-		line(w, "grade:", "refused: %s", g.Refused)
+		line(w, "grade:", "refused: %s", clean(g.Refused))
 	default:
 		line(w, "grade:", "reward %.4f (suite %s of %s): fail-to-pass %d/%d, pass-to-pass %d/%d; escaped defects %d%s",
 			g.Reward, g.Suite, g.Task, g.FailToPass.Passed, g.FailToPass.Total, g.PassToPass.Passed, g.PassToPass.Total, g.EscapedDefects, given(g))
@@ -205,11 +205,11 @@ func num(n int64) string {
 	return s
 }
 
-// clean makes text an agent may have written safe to print: one line, and no control character, which a
+// clean makes text an agent may have written safe to print: one line, and no control or format character, which a
 // terminal would act on.
 func clean(s string) string {
 	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return ' '
 		}
 		return r
