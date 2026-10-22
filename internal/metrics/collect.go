@@ -74,6 +74,10 @@ func Collect(dir string) (*Run, error) {
 	if err := r.measure(state, events); err != nil {
 		return nil, err
 	}
+	r.routing(events)
+	if err := r.grade(dir, state, events); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 

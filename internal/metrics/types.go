@@ -85,4 +85,6 @@ type Run struct {
 	Review        Review        `json:"review"`
 	Findings      Findings      `json:"findings"`
 	Interventions Interventions `json:"interventions"`
+	Grade         *Grade        `json:"grade,omitempty"`
+	Routing       Routing       `json:"routing"`
 }

@@ -113,3 +113,11 @@ func TestUsageThatDisagreesWithRunJSONIsReportedAsAWarning(t *testing.T) {
 		t.Errorf("Warnings = %v, want one that names run.json", r.Warnings)
 	}
 }
+
+func TestSessionsOfTheScriptedAdapterAreNotUnpriced(t *testing.T) {
+	f := newFake(t)
+	f.log(0, gungnir.Event{Name: gungnir.EventRunStarted}).log(1, session("a", "implementer", "scripted", "none", 100, 10, 2, 0, false))
+	if r := mustCollect(t, f.done()); r.Usage.Unpriced != 0 || r.Usage.Sessions != 1 {
+		t.Errorf("Usage = %+v; a scripted session has no price to miss", r.Usage)
+	}
+}
