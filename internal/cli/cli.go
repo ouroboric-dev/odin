@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -42,6 +43,7 @@ const usage = `usage:
   ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
   ygg report  <run-id> [--commit] [--project <dir>]
   ygg board   [--project <dir>] | --all [--projects <file>]
+  ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <mode>]   (started by the Harbor adapter)
   ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
   ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -51,14 +53,19 @@ exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 
 
 // Main runs one ygg command and returns its exit code.
 func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return MainWithInput(ctx, args, os.Stdin, stdout, stderr)
+}
+
+// MainWithInput is Main with the standard input given, for the one command that reads it: ygg bridge.
+func MainWithInput(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return ExitRefused
 	}
-	c := &command{ctx: ctx, out: stdout, err: stderr}
+	c := &command{ctx: ctx, in: stdin, out: stdout, err: stderr}
 	cmds := map[string]func([]string) int{
 		"run": c.run, "resume": c.resume, "approve": c.approve, "reject": c.reject,
-		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics, "report": c.report, "board": c.board,
+		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics, "report": c.report, "board": c.board, "bridge": c.bridge,
 	}
 	f, ok := cmds[args[0]]
 	if !ok {
@@ -70,6 +77,7 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 type command struct {
 	ctx      context.Context
+	in       io.Reader
 	out, err io.Writer
 }
 

@@ -26,6 +26,7 @@ ygg metrics <run-id|first..last> [--json] [--project <dir>]
 ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
 ygg report  <run-id> [--commit] [--project <dir>]
 ygg board   [--project <dir>] | --all [--projects <file>]
+ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <mode>]
 ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -69,6 +70,13 @@ and Done, in the plan's order, each with its leaf and, for a blocked task or one
 `.factory/features.json` and the run that file names, and writes nothing. `ygg board --all` shows the board of every project
 in the operator's local list, `$XDG_CONFIG_HOME/ouroboric/projects.yaml` (or `~/.config/ouroboric/projects.yaml`, or the file
 `--projects` names): `projects:` and a list of absolute paths. A path that is not a project umbrella refuses the whole list.
+
+`ygg bridge` is the factory's side of the Harbor bridge (`bench/harbor`). The Harbor adapter starts it and sends the brief
+on standard input as one JSON line. It makes a scratch project, runs the graph on the brief, copies the committed
+product to the task environment's working folder through the adapter (`upload_dir`), asks for a self-check, reports the
+cost so far and says `done`. Standard output carries the bridge and nothing else; the run's own output goes to standard
+error. A Harbor run has no one to approve a gate: a run that stops is handed over as it is, and the exit code is the
+run's. The config's `budget.per_run.usd` must not be above the task's budget when a role bills per token.
 
 `ygg deps bump` runs the package manager and the checks in the sandbox of `factory.yaml`. Without a `sandbox:`
 section it refuses (exit 2) unless you pass `--host`, which runs the bump on the host with the full network and

@@ -164,6 +164,11 @@ one of its gates or failed. The operator's list of projects for `ygg board --all
 `ygg status --watch` is the live view of spec §10.3: it prints the status block again until the run stops running, with the
 node that runs now (`metrics.Current`, the end of the ledger, read while another process writes it).
 
+`ygg bridge` (packages `internal/bridge` and `internal/cli`) is Yggdrasil's side of the Harbor bridge: the start line,
+then `upload_dir`, `selfcheck`, `spend` and `done` requests, one at a time, each answered with its id. A reply for another
+id, a refusal and a line over 1 MiB are errors. The run, its checks and its sandboxes are the same as for `ygg run`; the
+Harbor verifier, not Odin's grader, scores the product.
+
 ## Depends on
 
 - Gungnir's interfaces, Gleipnir (adapters, the sandbox, the check runner) and Jormungandr (the loop).
