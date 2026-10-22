@@ -40,7 +40,7 @@ func TestStatusWatchPrintsAgainEveryIntervalUntilTheRunStopsRunning(t *testing.T
 	if n := strings.Count(out, "run:      "+id); n < 3 {
 		t.Errorf("the watch printed the status %d times, want at least 3 before the run ended:\n%s", n, out)
 	}
-	if !strings.HasSuffix(strings.TrimSpace(out), "$0.0000") && !strings.Contains(out[strings.LastIndex(out, "run:      "+id):], "status:   done") {
+	if !strings.Contains(out[strings.LastIndex(out, "run:      "+id):], "status:   done") {
 		t.Errorf("the last block does not show the run as done:\n%s", out)
 	}
 }

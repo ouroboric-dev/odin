@@ -70,12 +70,13 @@ being written and does not check its chain: `ygg metrics` is the evidence.
 and Done, in the plan's order, each with its leaf and, for a blocked task or one that needs you, the reason. It reads
 `.factory/features.json` and the run that file names, and writes nothing. `ygg board --all` shows the board of every project
 in the operator's local list, `$XDG_CONFIG_HOME/ouroboric/projects.yaml` (or `~/.config/ouroboric/projects.yaml`, or the file
-`--projects` names): `projects:` and a list of absolute paths. A path that is not a project umbrella refuses the whole list.
+`--projects` names): `projects:` and a list of absolute paths. A path that is not a project umbrella, or one project whose board cannot be read, refuses the whole list.
+`--projects` without `--all` is refused.
 
 `ygg bridge` is the factory's side of the Harbor bridge (`bench/harbor`). The Harbor adapter starts it and sends the brief
-on standard input as one JSON line. It makes a scratch project, runs the graph on the brief, copies the committed
-product to the task environment's working folder through the adapter (`upload_dir`), asks for a self-check, reports the
-cost so far and says `done`. Standard output carries the bridge and nothing else; the run's own output goes to standard
+on standard input as one JSON line. It makes a scratch project (and names its folder on standard error), runs the graph on the brief, reports the cost
+so far (`spend`), copies the committed product to the task environment's working folder through the adapter
+(`upload_dir`), asks for a self-check (`selfcheck`) and says `done`. Standard output carries the bridge and nothing else; the run's own output goes to standard
 error. A Harbor run has no one to approve a gate: a run that stops is handed over as it is, and the exit code is the
 run's. The config's `budget.per_run.usd` must not be above the task's budget when a role bills per token.
 

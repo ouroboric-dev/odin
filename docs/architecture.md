@@ -161,13 +161,13 @@ the interventions with their notes, and the loops' records in `run.json`. With `
 `ygg board` (package `internal/tracker`) is the local tracker of spec §10.4: it projects `.factory/features.json` and the
 run it names into the `Board` of Gungnir's `Tracker` interface. A task that is doing is in progress while its implementer
 works, verifying once the checks and reviewers judge it or its loop has passed, and in needs you when the run stopped at
-one of its gates or failed. The operator's list of projects for `ygg board --all` is local configuration (`projects.yaml` in the config folder), never part of a tree.
+one of its gates, is paused, failed, or ended with the task still doing. The operator's list of projects for `ygg board --all` is local configuration (`projects.yaml` in the config folder), never part of a tree.
 
 `ygg status --watch` is the live view of spec §10.3: it prints the status block again until the run stops running, with the
 node that runs now (`metrics.Current`, the end of the ledger, read while another process writes it).
 
 `ygg bridge` (packages `internal/bridge` and `internal/cli`) is Yggdrasil's side of the Harbor bridge: the start line,
-then `upload_dir`, `selfcheck`, `spend` and `done` requests, one at a time, each answered with its id. A reply for another
+then `spend`, `upload_dir`, `selfcheck` and `done` requests, one at a time, each answered with its id. A reply for another
 id, a refusal and a line over 1 MiB are errors. The run, its checks and its sandboxes are the same as for `ygg run`; the
 Harbor verifier, not Odin's grader, scores the product.
 

@@ -288,10 +288,10 @@ func (c *command) advance(r *run.Run) int {
 		return ExitStopped
 	case run.StatusPaused:
 		fmt.Fprintf(c.err, "Run %s paused: %v\nNothing is lost. Once the provider's quota is back, run: ygg resume %s\n"+
-			"A resume starts the node again from its last checkpoint.\n", id, out.Err, id)
+			"A resume starts the node again from its last checkpoint.\n", id, metrics.Clean(fmt.Sprint(out.Err)), id)
 		return ExitPaused
 	default:
-		fmt.Fprintf(c.err, "Run %s failed: %v\n%s", id, out.Err, resumeHint(id))
+		fmt.Fprintf(c.err, "Run %s failed: %s\n%s", id, metrics.Clean(fmt.Sprint(out.Err)), resumeHint(id))
 		return ExitFailed
 	}
 }
@@ -396,10 +396,10 @@ func (c *command) printStatus(project, id string) (*run.State, int) {
 		}
 	}
 	if s.Paused != nil {
-		fmt.Fprintf(c.out, "paused:   at %s since %s: %s\n", s.Paused.Node, s.Paused.Since.Format(time.RFC3339), s.Paused.Reason)
+		fmt.Fprintf(c.out, "paused:   at %s since %s: %s\n", s.Paused.Node, s.Paused.Since.Format(time.RFC3339), oneLine(s.Paused.Reason))
 	}
 	if s.Error != "" {
-		fmt.Fprintf(c.out, "error:    %s\n", s.Error)
+		fmt.Fprintf(c.out, "error:    %s\n", oneLine(s.Error))
 	}
 	u := s.Usage
 	fmt.Fprintf(c.out, "usage:    %d tokens in, %d out, %d from cache; %d turns; $%.4f\n",
@@ -411,12 +411,18 @@ func (c *command) printStatus(project, id string) (*run.State, int) {
 	return s, ExitDone
 }
 
+// oneLine makes agent text safe to print: its first line only, with no control character (as tracker's oneLine).
+func oneLine(s string) string {
+	first, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return metrics.Clean(first)
+}
+
 // blockedTasks lists the tasks the run gave up, one line each, with why.
 func blockedTasks(s *run.State) []string {
 	var out []string
 	for _, f := range s.Features {
 		if f.Status == schema.TaskBlocked {
-			out = append(out, fmt.Sprintf("%s: %s\n", f.ID, f.Why))
+			out = append(out, fmt.Sprintf("%s: %s\n", oneLine(f.ID), oneLine(f.Why)))
 		}
 	}
 	return out

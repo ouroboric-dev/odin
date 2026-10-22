@@ -30,6 +30,12 @@ type harbor struct {
 
 func runBridge(t *testing.T, start string, args ...string) *harbor {
 	t.Helper()
+	return runBridgeWithDetail(t, "PASS port 3000 answered", start, args...)
+}
+
+// runBridgeWithDetail is runBridge with the detail the adapter's self-check answers.
+func runBridgeWithDetail(t *testing.T, detail, start string, args ...string) *harbor {
+	t.Helper()
 	h := &harbor{uploaded: t.TempDir()}
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
@@ -60,7 +66,7 @@ func runBridge(t *testing.T, start string, args ...string) *harbor {
 				reply["ok"], reply["error"] = false, err.Error()
 			}
 		case "selfcheck", "done":
-			reply["passed"], reply["detail"] = true, "PASS port 3000 answered"
+			reply["passed"], reply["detail"] = true, detail
 		}
 		b, _ := json.Marshal(reply)
 		fmt.Fprintln(inW, string(b))
@@ -315,5 +321,37 @@ func TestAStoppedBridgeNeverExitsAsDoneOrRefusedOrDoneWithGivenUpTasks(t *testin
 		if got := stoppedCode(code); got != want {
 			t.Errorf("stoppedCode(%d) = %d; want %d", code, got, want)
 		}
+	}
+}
+
+// A Harbor teardown can SIGKILL the bridge: the folder it works in must be findable afterwards.
+func TestBridgeNamesItsWorkFolderOnStandardErrorAtTheStart(t *testing.T) {
+	_, config := project(t, "script.yaml", "mode: unattended\ngates:\n  design: auto\n")
+	work := filepath.Join(t.TempDir(), "work")
+	h := runBridge(t, bridgeStart("100"), "--config", config, "--graph", toyRealm(t), "--work", work)
+	if !strings.Contains(h.stderr, "bridge: working in "+work+"\n") {
+		t.Errorf("stderr does not name the work folder:\n%s", h.stderr)
+	}
+	for _, l := range h.stdout {
+		if strings.Contains(l, "working in") {
+			t.Errorf("standard output must hold only requests: %q", l)
+		}
+	}
+	// With no --work, the temporary folder is named too.
+	h = runBridge(t, bridgeStart("100"), "--config", config, "--graph", toyRealm(t))
+	if !strings.Contains(h.stderr, "bridge: working in "+os.TempDir()) || !strings.Contains(h.stderr, "ygg-bridge-") {
+		t.Errorf("stderr does not name the temporary work folder:\n%s", h.stderr)
+	}
+}
+
+// The adapter's self-check detail is data from another program: no control character reaches the terminal.
+func TestBridgeCleansTheAdaptersSelfCheckDetail(t *testing.T) {
+	_, config := project(t, "script.yaml", "mode: unattended\ngates:\n  design: auto\n")
+	h := runBridgeWithDetail(t, "bad\x1b[2J\u202eevil\nsecond", bridgeStart("100"), "--config", config, "--graph", toyRealm(t), "--work", filepath.Join(t.TempDir(), "w"))
+	if !strings.Contains(h.stderr, "self-check: passed=true bad [2J evil second\n") {
+		t.Errorf("the detail was not cleaned:\n%q", h.stderr)
+	}
+	if strings.ContainsAny(h.stderr, "\x1b\u202e") {
+		t.Errorf("stderr holds a control character:\n%q", h.stderr)
 	}
 }

@@ -91,3 +91,11 @@ func TestYggBoardAllQuotesAControlCharacterInAPath(t *testing.T) {
 		t.Errorf("exit %d, stdout %q, stderr %q; want a refusal with the path quoted and no raw control character", code, out, errOut)
 	}
 }
+
+func TestYggBoardRefusesProjectsWithoutAll(t *testing.T) {
+	dir, _ := project(t, "script.yaml", "")
+	code, out, errOut := ygg(t, "board", "--project", dir, "--projects", filepath.Join(t.TempDir(), "projects.yaml"))
+	if code != ExitRefused || !strings.Contains(errOut, "--projects") || !strings.Contains(errOut, "--all") {
+		t.Errorf("exit %d, want %d and a message naming --projects and --all:\n%s%s", code, ExitRefused, out, errOut)
+	}
+}

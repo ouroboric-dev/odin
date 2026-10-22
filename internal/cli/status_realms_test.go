@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
@@ -113,6 +114,39 @@ func TestStatusListsAnOverruledFindingWithBothSides(t *testing.T) {
 		"curl showed it is defined", "check unit ran in attempt 2 and passed (logs/build-2-unit.log)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// A blocked task's reason, a pause's reason and a run's error are agent text: status prints each on one line,
+// with no control character.
+func TestStatusCleansAgentTextOnOneLine(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t)); code != ExitStopped {
+		t.Fatalf("run: exit %d: %s", code, errOut)
+	}
+	id := runID(t, dir)
+	st, err := run.LoadState(run.Dir(dir, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostile := "bad\x1b[2J\u202eevil\nsecond line"
+	st.Features = []schema.FeatureRecord{{Feature: schema.Feature{ID: "p-T2"}, Status: schema.TaskBlocked, Why: hostile}}
+	st.Paused = &run.Pause{Node: "n", Since: time.Now(), Reason: hostile}
+	st.Error = hostile
+	if err := st.Save(run.Dir(dir, id)); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := ygg(t, "status", id, "--project", dir)
+	if code != ExitDone {
+		t.Fatalf("status: exit %d: %s", code, errOut)
+	}
+	if strings.ContainsAny(out, "\x1b\u202e") || strings.Contains(out, "second line") {
+		t.Errorf("status prints agent text raw or on a second line:\n%q", out)
+	}
+	for _, want := range []string{"blocked:  p-T2: bad [2J evil\n", "error:    bad [2J evil\n", ": bad [2J evil\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status lacks %q:\n%q", want, out)
 		}
 	}
 }

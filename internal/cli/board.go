@@ -23,6 +23,9 @@ func (c *command) board(args []string) int {
 	if !ok {
 		return ExitRefused
 	}
+	if !all && list != "" {
+		return c.refuse(fmt.Errorf("--projects names the list of --all; give --all with it"))
+	}
 	if all {
 		if f.set["project"] {
 			return c.refuse(fmt.Errorf("--all shows the projects of the local list; it takes no --project"))

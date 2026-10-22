@@ -14,6 +14,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/bridge"
 	"github.com/ouroboric-dev/odin/internal/git"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -63,6 +64,7 @@ func (c *command) bridge(args []string) int {
 	} else if err := os.Mkdir(work, 0o755); err != nil {
 		return c.refuse(fmt.Errorf("--work must be a folder that does not exist yet: %w", err))
 	}
+	fmt.Fprintf(c.err, "bridge: working in %s\n", work)
 	project, brief := filepath.Join(work, "project"), filepath.Join(work, "brief.md")
 	if err := newProject(c.ctx, project); err != nil {
 		return c.refuse(err)
@@ -125,14 +127,14 @@ func (c *command) bridge(args []string) int {
 	if ch, err := conn.Selfcheck(); err != nil {
 		fmt.Fprintf(c.err, "bridge: %v\n", err)
 	} else {
-		fmt.Fprintf(c.err, "bridge: the adapter's self-check: passed=%v %s\n", ch.Passed, ch.Detail)
+		fmt.Fprintf(c.err, "bridge: the adapter's self-check: passed=%v %s\n", ch.Passed, metrics.Clean(ch.Detail))
 	}
 	ch, err := conn.Done()
 	if err != nil {
 		fmt.Fprintf(c.err, "bridge: %v\n", err)
 		return max(code, ExitFailed)
 	}
-	fmt.Fprintf(c.err, "bridge: done; the adapter's final self-check: passed=%v %s\n", ch.Passed, ch.Detail)
+	fmt.Fprintf(c.err, "bridge: done; the adapter's final self-check: passed=%v %s\n", ch.Passed, metrics.Clean(ch.Detail))
 	return code
 }
 
