@@ -22,6 +22,7 @@ ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
 ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
 ygg status  <run-id> [--project <dir>]
 ygg grade   <run-id> [--task <id>] [--project <dir>]
+ygg metrics <run-id|first..last> [--json] [--project <dir>]
 ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -35,6 +36,14 @@ The factory ships no defaults, so a config without them runs nothing.
 When any role bills a paid API (an OpenCode role), the caps also count dollars, and they count what the API billed. The
 cost figure of a Claude Code session is what it would cost on the API; the subscription charges nothing for it, so it does
 not count against `usd`. `ygg status` and `ygg metrics` show both.
+
+`ygg metrics` reads a run's ledger, `run.json` and `score.json` and prints the figures of spec §10.2: tokens, turns and
+cost (with what an adapter only estimated, and sessions that came back with tokens and no cost), the time the factory
+worked with the approval waits and the stopped time taken out, the first-pass rate and the average attempts of the loops,
+the reviewer veto rate, findings, interventions, blocked tasks, the hidden score and the escaped defects, and what the
+routing indexes scored. A rate over nothing says `n/a`. It checks the ledger's hash chain first and refuses a ledger that
+was changed. `first..last` lists every run of the project from one id to the other, with a total line. `--json` prints the
+same figures for a tool. It writes nothing.
 
 `ygg deps bump` runs the package manager and the checks in the sandbox of `factory.yaml`. Without a `sandbox:`
 section it refuses (exit 2) unless you pass `--host`, which runs the bump on the host with the full network and

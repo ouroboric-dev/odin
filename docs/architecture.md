@@ -136,6 +136,17 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Writes the hash-chained ledger and serves the `ygg` CLI.
 - Holds routing (spec §8) and observability (spec §10) as packages.
 
+## Metrics
+
+`ygg metrics` (package `internal/metrics`) reads a run's folder and writes nothing. It verifies the ledger's hash chain
+against the anchor in `run.json` and refuses a ledger that does not verify. It reads `run.json` for the few fields it
+needs and ignores the rest, so a run written by another build of ygg stays readable. Session lines add up to the usage
+(the run's own totals repeat them and are not counted); the sum is checked against `run.json` and a difference is a
+warning. The time between a `gate_pending` and its decision is an approval wait; the time from a failure, a pause or a
+killed process to the next `run_resumed` is stopped time; neither is the factory's. Grading after `run_finished` is
+grade time. A finding line says whether a check or a reviewer raised it (`ygg.finding.origin`), a dispute that could not
+be used is a `dispute_ignored` line, and every run records the build of ygg that wrote it (`ygg.factory.version`).
+
 ## Depends on
 
 - Gungnir's interfaces, Gleipnir (adapters, the sandbox, the check runner) and Jormungandr (the loop).

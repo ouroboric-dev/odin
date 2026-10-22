@@ -37,6 +37,7 @@ const usage = `usage:
   ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
   ygg status  <run-id> [--project <dir>]
   ygg grade   <run-id> [--task <id>] [--project <dir>]
+  ygg metrics <run-id|first..last> [--json] [--project <dir>]
   ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
   ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -53,7 +54,7 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	c := &command{ctx: ctx, out: stdout, err: stderr}
 	cmds := map[string]func([]string) int{
 		"run": c.run, "resume": c.resume, "approve": c.approve, "reject": c.reject,
-		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps,
+		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics,
 	}
 	f, ok := cmds[args[0]]
 	if !ok {
@@ -72,7 +73,7 @@ type command struct {
 type flags struct {
 	project, config, graph, realm, brief, mode, note, reason, root, task, canary string
 	realms, rollout                                                              []string        // sandbox build: every --realm given; deps bump: every --rollout given
-	all, host                                                                    bool            // sandbox build: --all; deps bump: --host
+	all, host, json                                                              bool            // sandbox build: --all; deps bump: --host; metrics: --json
 	set                                                                          map[string]bool // the flags given
 }
 
