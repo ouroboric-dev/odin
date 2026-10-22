@@ -43,6 +43,7 @@ func Collect(dir string) (*Run, error) {
 	if len(events) == 0 {
 		return r, nil
 	}
+	r.clock(events)
 	taskUsage := map[string]Usage{}
 	for _, e := range events {
 		switch e.Name {

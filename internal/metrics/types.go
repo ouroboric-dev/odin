@@ -4,7 +4,21 @@
 // ledger whose hash chain checked out, so a ledger that was changed gives no numbers at all.
 package metrics
 
-import ()
+import (
+	"strconv"
+	"time"
+)
+
+// Duration is a time.Duration that is written in JSON as whole milliseconds, which the field names promise.
+type Duration time.Duration
+
+// MarshalJSON writes d as milliseconds.
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return []byte(strconv.FormatInt(time.Duration(d).Milliseconds(), 10)), nil
+}
+
+// Round is d to the second, for a table.
+func (d Duration) Round() time.Duration { return time.Duration(d).Round(time.Second) }
 
 // Usage is what sessions used. Cost is the sum of the sessions' own cost fields.
 type Usage struct {
@@ -31,6 +45,15 @@ func (u *Usage) add(o Usage) {
 	u.Unpriced += o.Unpriced
 }
 
+// Time is the run's clock. Elapsed runs from the first line to the run's end, or to the last line of a run that
+// has not ended. Active is what is left when the approval waits and the time the run was stopped are taken out.
+type Time struct {
+	Elapsed      Duration `json:"elapsed_ms"`
+	Active       Duration `json:"active_ms"`
+	ApprovalWait Duration `json:"approval_wait_ms"` // from gate_pending to the decision
+	Stopped      Duration `json:"stopped_ms"`       // from a failure, a pause or a killed process to the resume
+}
+
 // Setting is the agent and model of a role.
 type Setting struct {
 	Agent string `json:"agent"`
@@ -49,6 +72,7 @@ type Run struct {
 	BriefSHA256  string             `json:"brief_sha256,omitempty"`
 	Roles        map[string]Setting `json:"roles"`
 	Realms       map[string]string  `json:"realms"` // realm name: version
+	Time         Time               `json:"time"`
 	Usage        Usage              `json:"usage"`
 	ByRole       map[string]Usage   `json:"by_role"` // "role adapter model": what its sessions used
 	Retries      int                `json:"retries"`
