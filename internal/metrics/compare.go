@@ -105,6 +105,10 @@ func (c *Comparison) differences() {
 		c.Comparable = false
 		c.Reasons = append(c.Reasons, "the briefs differ: these are two different tasks")
 	}
+	if a.Mode != b.Mode {
+		c.Comparable = false
+		c.Reasons = append(c.Reasons, "the modes differ ("+a.Mode+" and "+b.Mode+"): interventions and the score are not measured the same way")
+	}
 }
 
 func (c *Comparison) rows() {
@@ -206,8 +210,12 @@ func (c *Comparison) WriteText(w io.Writer) {
 		}
 		fmt.Fprintf(w, "%-24s %12.*f %12.*f %+10.*f\n", r.Name, r.Dec, r.A, r.Dec, r.B, r.Dec, r.D)
 	}
-	v := c.Verdict()
 	fmt.Fprintln(w)
+	if !c.Comparable {
+		fmt.Fprintln(w, "verdict: not judged: the runs are not comparable")
+		return
+	}
+	v := c.Verdict()
 	line(w, "improved:", "%s", orNone(strings.Join(v.Improved, ", ")))
 	line(w, "worse:", "%s", orNone(strings.Join(v.Worse, ", ")))
 	switch {

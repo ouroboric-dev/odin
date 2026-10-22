@@ -134,3 +134,36 @@ func contains(s []string, x string) bool {
 	}
 	return false
 }
+
+// A comparison across modes is not comparable: interventions and the score are not measured the same way.
+func TestAComparisonAcrossModesIsNotComparable(t *testing.T) {
+	b := variant()
+	b.Mode = "unattended"
+	c := Compare(sample(), b)
+	if c.Comparable {
+		t.Fatalf("Comparable = true for two modes; want false")
+	}
+	if got := strings.Join(c.Reasons, "; "); !strings.Contains(got, "the modes differ (key-points and unattended): interventions and the score are not measured the same way") {
+		t.Errorf("Reasons = %q; want the mode reason", got)
+	}
+}
+
+// A pair that is not comparable keeps its header and rows, and gets no verdict.
+func TestNotComparableTextHasNoVerdict(t *testing.T) {
+	b := variant()
+	b.BriefSHA256 = strings.Repeat("e2", 32)
+	var w bytes.Buffer
+	Compare(sample(), b).WriteText(&w)
+	out := w.String()
+	if !strings.Contains(out, "comparable:   NO") || !strings.Contains(out, "first pass (%)") || !strings.Contains(out, "cost at API prices (usd)") {
+		t.Errorf("the text lacks the header or the rows:\n%s", out)
+	}
+	if !strings.Contains(out, "verdict: not judged: the runs are not comparable") {
+		t.Errorf("the text lacks the no-verdict line:\n%s", out)
+	}
+	for _, banned := range []string{"improved:", "held"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("the text of a not-comparable pair contains %q:\n%s", banned, out)
+		}
+	}
+}
