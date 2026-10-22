@@ -25,6 +25,7 @@ ygg grade   <run-id> [--task <id>] [--project <dir>]
 ygg metrics <run-id|first..last> [--json] [--project <dir>]
 ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
 ygg report  <run-id> [--commit] [--project <dir>]
+ygg board   [--project <dir>]
 ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
@@ -57,6 +58,10 @@ factory change counts only if it did (design doc §2.3, criterion 7).
 intervention with its note, the loops that gave up, and each finding a dispute overruled with both sides. It names the
 ledger line it was read from, and the same run always gives the same bytes. Text an agent wrote is quoted, so it cannot
 open a heading or end a block. `--commit` also commits a copy as `docs/runs/<run-id>.md`, because a project ignores `.factory/`.
+
+`ygg board` shows the project's tasks by column, as a terminal board: Ready, In progress, Verifying, Blocked, Needs you
+and Done, in the plan's order, each with its leaf and, for a blocked task or one that needs you, the reason. It reads
+`.factory/features.json` and the run that file names, and writes nothing.
 
 `ygg deps bump` runs the package manager and the checks in the sandbox of `factory.yaml`. Without a `sandbox:`
 section it refuses (exit 2) unless you pass `--host`, which runs the bump on the host with the full network and

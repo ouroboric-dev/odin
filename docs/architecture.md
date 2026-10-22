@@ -156,6 +156,11 @@ scores are not on one scale. Metrics with no direction, such as the reviewer vet
 the interventions with their notes, and the loops' records in `run.json`. With `--commit` a copy is committed as
 `docs/runs/<run-id>.md`, because a project ignores `.factory/`.
 
+`ygg board` (package `internal/tracker`) is the local tracker of spec §10.4: it projects `.factory/features.json` and the
+run it names into the `Board` of Gungnir's `Tracker` interface. A task that is doing is in progress while its implementer
+works, verifying once the checks and reviewers judge it or its loop has passed, and in needs you when the run stopped at
+one of its gates or failed.
+
 ## Depends on
 
 - Gungnir's interfaces, Gleipnir (adapters, the sandbox, the check runner) and Jormungandr (the loop).
