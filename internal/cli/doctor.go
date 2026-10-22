@@ -375,10 +375,56 @@ func (c *command) checkSandbox(project string, f *schema.Factory, report func(le
 		}
 	}
 	report("OK", "sandboxes", fmt.Sprintf("%d container(s) of ygg runs", len(left)))
+	c.checkPods(d, project, report)
 	if f.Grader != nil {
 		c.checkGraders(d, project, report)
 	}
 	return settled
+}
+
+// checkPods finds the empty pods that compose left when a sandbox went (backlog B-138) and removes the ones
+// no live run holds. A pod has no label, so it is tied to a run by its project name starting with the
+// run's prefix: a pod of a run or bump that a live ygg holds is left, since a sandbox that is still
+// starting has an empty pod for a moment. Nothing is said when there is no empty pod. A pod that can't
+// be removed is a warning, not an error: it does no harm.
+func (c *command) checkPods(d *sandbox.Driver, project string, report func(level, what, msg string)) {
+	left, err := d.PodLeftovers(c.ctx)
+	if err != nil {
+		report("ERROR", "pods", err.Error())
+		return
+	}
+	if len(left) == 0 {
+		return
+	}
+	ids := slices.Concat(dirNames(filepath.Join(project, ".factory", "runs")), dirNames(filepath.Join(project, ".factory", "deps")))
+	for _, l := range left {
+		i := slices.IndexFunc(ids, func(id string) bool { return strings.HasPrefix(l.Project, sandbox.RunPrefix(id)) })
+		if i < 0 {
+			report("WARN", "pods", fmt.Sprintf("pod %s belongs to another project; doctor in that project removes it", l.Pod))
+			continue
+		}
+		id := ids[i]
+		if isBump(project, id) && bumpRunning(project) || !isBump(project, id) && run.Locked(run.Dir(project, id)) {
+			continue // a live ygg owns it
+		}
+		if err := d.RemovePod(c.ctx, l); err != nil {
+			report("WARN", "pods", fmt.Sprintf("couldn't remove %s of run %s: %v", l.Pod, id, err))
+		} else {
+			report("WARN", "pods", fmt.Sprintf("run %s left the empty pod %s (%s); removed it", id, l.Pod, l.State))
+		}
+	}
+	report("OK", "pods", fmt.Sprintf("%d empty pod(s) of ygg runs", len(left)))
+}
+
+// dirNames lists the folders in dir, or none when it can't be read.
+func dirNames(dir string) (names []string) {
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names
 }
 
 // checkGrader says how many tasks the grader's folder holds, and that its two folders are there.

@@ -43,7 +43,8 @@ that sets `root: true`. A run works on its
 own branch, `ygg/<run-id>`, in each leaf its graph names, and commits a checkpoint after every node.
 `--graph` names a graph pack, from `graphs.dir` in `factory.yaml` or as a path; the first run pins it in
 `umbrella.yaml`, and each leaf's realm comes from its own pin. A leaf the project lacks is created from the
-template of its realm. `ygg doctor --root <dir>` checks a tree without a project.
+template of its realm. `ygg doctor --root <dir>` checks a tree without a project. With a `sandbox:` section it
+also stops the containers and removes the empty pods that a killed `ygg` left, and counts them.
 
 ## Docs
 

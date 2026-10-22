@@ -29,7 +29,7 @@ func engineStub(t *testing.T, results, graderPS string) string {
 	log, res, ps := filepath.Join(work, "calls.log"), filepath.Join(work, "report.json"), filepath.Join(work, "ps.json")
 	os.WriteFile(res, []byte(results), 0o644)
 	os.WriteFile(ps, []byte(graderPS), 0o644)
-	podman := "#!/bin/sh\necho \"podman $*\" >> " + log + "\ncase \"$1\" in\n  info) echo \"true 5.0.0\" ;;\n  image) exit 0 ;;\n" +
+	podman := "#!/bin/sh\necho \"podman $*\" >> " + log + "\ncase \"$1\" in\n  info) echo \"true 5.0.0\" ;;\n  image) exit 0 ;;\n  pod) echo '[]' ;;\n" +
 		"  ps) case \"$*\" in *ygg.grader*) cat " + ps + " ;; *) echo '[]' ;; esac ;;\n" +
 		"  run) key=; for a in \"$@\"; do case \"$a\" in YGG_SCORE_KEY=*) key=${a#YGG_SCORE_KEY=} ;; esac; done\n" +
 		"    echo 'starting the app'; echo \"ygg-results/v1 $key $(cat " + res + ")\" ;;\nesac\nexit 0\n"

@@ -36,6 +36,11 @@ case "$1" in
       *) echo c1 ;;
     esac ;;
   rm) [ -f "$d/fail-rm" ] && exit 1 ;;
+  pod)
+    case "$2" in
+      ls) answer pods "[]" ;;
+      rm) [ -f "$d/fail-pod-rm" ] && echo "pod is busy" >&2 && exit 1 ;;
+    esac ;;
   network) [ "$2" = exists ] && exit 1 ;;
   image) case "$2 $3" in
       "exists localhost/ygg-stack-"*) [ -f "$d/built-$(echo "$3" | tr '/:' '__')" ] || exit 1 ;;
@@ -126,6 +131,97 @@ func TestDoctorLeavesWhatALiveRunOrAnotherProjectOwns(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(log); strings.Contains(string(got), "podman rm") {
 		t.Errorf("doctor stopped a container a live run or another project owns:\n%s", got)
+	}
+}
+
+// podJSON lists empty pods in the shape of podman pod ls, one per name.
+func podJSON(names ...string) string {
+	var rows []string
+	for _, n := range names {
+		rows = append(rows, `{"Name":"`+n+`","Status":"Created","Containers":[]}`)
+	}
+	return "[" + strings.Join(rows, ",") + "]"
+}
+
+// podOf is the name of the pod compose made for a sandbox of a run.
+func podOf(id string) string { return "pod_" + sandbox.RunPrefix(id) + "reposapp00112233" }
+
+// stoppedRun makes a run of the project that no ygg holds and returns its id.
+func stoppedRun(t *testing.T, dir, plain string) string {
+	t.Helper()
+	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", plain, "--graph", toyRealm(t)); code != ExitStopped {
+		t.Fatalf("run: exit %d: %s", code, errOut)
+	}
+	return runID(t, dir)
+}
+
+func TestDoctorRemovesTheEmptyPodsOfRunsNoYggHolds(t *testing.T) {
+	log := stubEngine(t)
+	dir, plain := project(t, "script.yaml", "")
+	config := withSandbox(t, plain)
+	id := stoppedRun(t, dir, plain)
+	stubSays(t, log, "pods", podJSON(podOf(id)))
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	for _, want := range []string{"WARN  pods: run " + id + " left the empty pod " + podOf(id) + " (Created); removed it", "OK    pods: 1 empty pod(s) of ygg runs"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor's output lacks %q:\n%s", want, out)
+		}
+	}
+	if code != ExitDone {
+		t.Errorf("exit %d: a pod that doctor removed isn't an error", code)
+	}
+	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "podman pod rm "+podOf(id)) {
+		t.Errorf("doctor never removed the pod:\n%s", got)
+	}
+}
+
+func TestDoctorLeavesThePodOfALiveRunAndOfAnotherProject(t *testing.T) {
+	log := stubEngine(t)
+	dir, plain := project(t, "script.yaml", "")
+	config := withSandbox(t, plain)
+	id := stoppedRun(t, dir, plain)
+	release, err := lock.Take(filepath.Join(run.Dir(dir, id), "lock")) // a live ygg holds the run
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	stubSays(t, log, "pods", podJSON(podOf(id), podOf("20250101-000000-abcdef")))
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	if code != ExitDone {
+		t.Errorf("exit %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "pod "+podOf("20250101-000000-abcdef")+" belongs to another project") || !strings.Contains(out, "OK    pods: 2 empty pod(s)") {
+		t.Errorf("doctor's output:\n%s", out)
+	}
+	if got, _ := os.ReadFile(log); strings.Contains(string(got), "pod rm") {
+		t.Errorf("doctor removed a pod a live run or another project owns:\n%s", got)
+	}
+}
+
+func TestDoctorReportsAPodItCannotRemoveAndGoesOn(t *testing.T) {
+	log := stubEngine(t)
+	dir, plain := project(t, "script.yaml", "")
+	config := withSandbox(t, plain)
+	id := stoppedRun(t, dir, plain)
+	stubSays(t, log, "pods", podJSON(podOf(id)))
+	stubSays(t, log, "fail-pod-rm", "")
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	if code != ExitDone {
+		t.Errorf("exit %d: a pod that can't be removed isn't a doctor failure:\n%s", code, out)
+	}
+	for _, want := range []string{"WARN  pods: couldn't remove " + podOf(id) + " of run " + id + ": ", "pod is busy", "OK    pods: 1 empty pod(s)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor's output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDoctorSaysNothingOfPodsWhenThereAreNone(t *testing.T) {
+	stubEngine(t)
+	dir, plain := project(t, "script.yaml", "")
+	_, out, _ := ygg(t, "doctor", "--project", dir, "--config", withSandbox(t, plain))
+	if strings.Contains(out, "pods") {
+		t.Errorf("doctor's output:\n%s", out)
 	}
 }
 
