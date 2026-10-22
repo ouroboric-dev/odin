@@ -13,6 +13,8 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 ## Responsibilities
 
 - Loads the graph pack and `factory.yaml`.
+- Counts the budget caps. The dollar caps count `Usage.BilledUSD`, which the engine sets for a session of a paid adapter
+  (`billed`), and not the session's cost figure: a subscription's sessions have a figure and bill nothing.
 - Walks the graph and runs exec, agent, loop, gate and grade nodes; checkpoints runs and resumes them. A
   loop node is Jormungandr's loop with Odin's steps: sessions, checks, ledger lines and `run.json`.
 - Loads the graph pack and the realm leaves (change realm-leaf-naming, Voluspa): `--graph` names the

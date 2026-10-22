@@ -32,6 +32,9 @@ used up), 5 done with tasks given up (unattended).
 
 `factory.yaml` must set both budget caps, `per_run` and `per_day`, each with `tokens` and `turns`.
 The factory ships no defaults, so a config without them runs nothing.
+When any role bills a paid API (an OpenCode role), the caps also count dollars, and they count what the API billed. The
+cost figure of a Claude Code session is what it would cost on the API; the subscription charges nothing for it, so it does
+not count against `usd`. `ygg status` and `ygg metrics` show both.
 
 `ygg deps bump` runs the package manager and the checks in the sandbox of `factory.yaml`. Without a `sandbox:`
 section it refuses (exit 2) unless you pass `--host`, which runs the bump on the host with the full network and

@@ -36,3 +36,14 @@ func TestTheDocsNameEveryCommand(t *testing.T) {
 		}
 	}
 }
+
+// The architecture page says what the dollar caps count.
+func TestTheDocsSayWhatTheDollarCapsCount(t *testing.T) {
+	arch, err := os.ReadFile(filepath.Join("..", "..", "docs", "architecture.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(arch), "Usage.BilledUSD") {
+		t.Error("docs/architecture.md does not mention Usage.BilledUSD")
+	}
+}

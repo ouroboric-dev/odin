@@ -393,7 +393,7 @@ func describeCaps(cfg *schema.Factory, runUse, dayUse gungnir.Usage) string {
 	one := func(c schema.Cap, u gungnir.Usage) string {
 		out := fmt.Sprintf("%d of %d tokens, %d of %d turns", u.CapTokens(), c.Tokens, u.Turns, c.Turns)
 		if cfg.PaysPerToken() {
-			out += fmt.Sprintf(", $%.4f of $%.4f", u.CostUSD, c.USD)
+			out += fmt.Sprintf(", $%.4f billed of $%.4f", u.BilledUSD, c.USD)
 		}
 		return out
 	}
