@@ -14,6 +14,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -52,7 +53,10 @@ func place(t schema.FeatureRecord, st *run.State) (gungnir.Column, string) {
 	case schema.TaskDone:
 		return gungnir.ColumnDone, ""
 	case schema.TaskBlocked:
-		return gungnir.ColumnBlocked, oneLine(t.Why)
+		if why := oneLine(t.Why); why != "" {
+			return gungnir.ColumnBlocked, why
+		}
+		return gungnir.ColumnBlocked, "no reason recorded"
 	case schema.TaskTodo:
 		return gungnir.ColumnReady, ""
 	}
@@ -61,9 +65,11 @@ func place(t schema.FeatureRecord, st *run.State) (gungnir.Column, string) {
 	}
 	mine := func(node string) bool { return strings.HasPrefix(node, t.Slug()+"-") }
 	switch st.Status {
+	case run.StatusDone:
+		return gungnir.ColumnNeedsYou, "the run ended with this task still doing"
 	case run.StatusStopped:
 		if mine(st.Pending) {
-			return gungnir.ColumnNeedsYou, fmt.Sprintf("waiting at %s (%s)", st.Pending, st.PendingGate)
+			return gungnir.ColumnNeedsYou, fmt.Sprintf("waiting at %s (%s)", oneLine(st.Pending), oneLine(string(st.PendingGate)))
 		}
 	case run.StatusFailed:
 		return gungnir.ColumnNeedsYou, "run failed: " + oneLine(st.Error)
@@ -80,14 +86,22 @@ func place(t schema.FeatureRecord, st *run.State) (gungnir.Column, string) {
 	return gungnir.ColumnInProgress, ""
 }
 
+// oneLine is the first line of agent text, with every control and format character made a space. The text
+// is cut at the first line break before it is cleaned, so a break cannot start a new line on the board.
 func oneLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.Join(strings.Fields(line), " ")
+	if i := strings.IndexFunc(s, isLineBreak); i >= 0 {
+		s = s[:i]
+	}
+	return metrics.Clean(s)
+}
+
+func isLineBreak(r rune) bool {
+	return r == '\n' || r == '\r' || r == '\u0085' || r == '\u2028' || r == '\u2029'
 }
 
 // WriteBoard writes a board as text: each column with its count and its cards in the plan's order.
 func WriteBoard(w io.Writer, b gungnir.Board) {
-	fmt.Fprintf(w, "%s (%s)\n", b.Project, b.Summary())
+	fmt.Fprintf(w, "%s (%s)\n", metrics.Clean(b.Project), b.Summary())
 	for _, col := range gungnir.Columns() {
 		n := b.Counts()[col]
 		fmt.Fprintf(w, "\n%s (%d)\n", col.Title(), n)
@@ -95,7 +109,7 @@ func WriteBoard(w io.Writer, b gungnir.Board) {
 			if c.Column != col {
 				continue
 			}
-			line := fmt.Sprintf("  %-16s %-12s %s", c.Task, c.Leaf, c.Title)
+			line := fmt.Sprintf("  %-16s %-12s %s", metrics.Clean(c.Task), metrics.Clean(c.Leaf), metrics.Clean(c.Title))
 			if c.Why != "" {
 				line += "  [" + clip(c.Why, maxWhy) + "]"
 			}

@@ -158,3 +158,110 @@ func TestALongReasonIsCutOnTheBoardAndKeptOnTheCard(t *testing.T) {
 		t.Errorf("the reason must be cut on the board with an ellipsis and whole on the card:\n%s", w.String())
 	}
 }
+
+// assertPlain checks that the text board prints none of the characters an agent's text must not put on a
+// terminal, and that the card of id is one line.
+func assertPlain(t *testing.T, out, id string) {
+	t.Helper()
+	for _, bad := range []string{"\x1b", "\u202e", "\u200b", "\x07", "\r"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("the board prints %q:\n%q", bad, out)
+		}
+	}
+	n := 0
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, id) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%s is on %d lines, want 1:\n%s", id, n, out)
+	}
+}
+
+func TestAgentTextIsCleanedOnTheBoardAndTheCard(t *testing.T) {
+	hostile := "\x1b[31mred\u202e \u200bpart\x07 one\r# x"
+	cases := map[string]func(*run.State){
+		"blocked reason": nil,
+		"failed error": func(s *run.State) {
+			s.Status, s.Error = run.StatusFailed, "node g-t1-implement: "+hostile
+			s.Loops["g-t1-implement"] = &run.LoopRecord{State: jormungandr.State{Attempt: 1, Limit: 3, Phase: jormungandr.PhaseImplement}}
+		},
+		"pause reason": func(s *run.State) {
+			s.Status, s.Paused = run.StatusPaused, &run.Pause{Node: "g-t1-implement", Reason: hostile}
+			s.Loops["g-t1-implement"] = &run.LoopRecord{State: jormungandr.State{Attempt: 1, Limit: 3, Phase: jormungandr.PhaseImplement}}
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			status := schema.TaskDoing
+			if mutate == nil {
+				status = schema.TaskBlocked
+			}
+			dir := project(t, []schema.FeatureRecord{task("g-T1", "repos/api", status, hostile)}, mutate)
+			b, err := Local{Project: dir}.Board(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var w bytes.Buffer
+			WriteBoard(&w, b)
+			assertPlain(t, w.String(), "g-T1")
+			if c := column(t, b, "g-T1"); strings.ContainsAny(c.Why, "\x1b\u202e\u200b\x07\r") {
+				t.Errorf("card Why = %q", c.Why)
+			}
+		})
+	}
+}
+
+func TestTitleAndLeafAreCleanedOnTheBoard(t *testing.T) {
+	rec := task("g-T1", "repos/\x1b\u202eapi", schema.TaskTodo, "")
+	rec.Title = "a \x1b\u202e title"
+	dir := project(t, []schema.FeatureRecord{rec}, nil)
+	b, err := Local{Project: dir}.Board(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w bytes.Buffer
+	WriteBoard(&w, b)
+	assertPlain(t, w.String(), "g-T1")
+}
+
+func TestAWaitingTaskNamesItsGateCleanly(t *testing.T) {
+	dir := project(t, []schema.FeatureRecord{task("g-T7", "repos/api", schema.TaskDoing, "")}, func(s *run.State) {
+		s.Status, s.Pending, s.PendingGate = run.StatusStopped, "g-t7-contract\x1b-gate", gungnir.GatePointerContract
+	})
+	b, err := Local{Project: dir}.Board(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w bytes.Buffer
+	WriteBoard(&w, b)
+	assertPlain(t, w.String(), "g-T7")
+}
+
+func TestATaskOfAnEndedRunIsNeedsYou(t *testing.T) {
+	dir := project(t, []schema.FeatureRecord{task("g-T1", "repos/api", schema.TaskDoing, "")}, func(s *run.State) {
+		s.Status = run.StatusDone
+	})
+	b, err := Local{Project: dir}.Board(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := column(t, b, "g-T1")
+	if c.Column != gungnir.ColumnNeedsYou || c.Why != "the run ended with this task still doing" {
+		t.Errorf("card = %+v; want needs-you with the ended-run reason", c)
+	}
+}
+
+func TestABlockedTaskWithNoReasonStillGivesABoard(t *testing.T) {
+	dir := project(t, []schema.FeatureRecord{task("g-T1", "repos/api", schema.TaskBlocked, "  ")}, nil)
+	b, err := Local{Project: dir}.Board(context.Background())
+	if err != nil {
+		t.Fatalf("Board() refused the board: %v", err)
+	}
+	var w bytes.Buffer
+	WriteBoard(&w, b)
+	if !strings.Contains(w.String(), "no reason recorded") {
+		t.Errorf("the board lacks the fallback reason:\n%s", w.String())
+	}
+}
