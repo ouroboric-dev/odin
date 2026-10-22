@@ -20,7 +20,8 @@ type Now struct {
 }
 
 // Current reads the end of a run's ledger. The live view reads a ledger another process is writing, so it does
-// not check the hash chain, ignores a last line that is still being written, and is not evidence: ygg metrics is.
+// not check the hash chain, ignores a last line that is still being written, skips a line it cannot read, and is
+// not evidence: ygg metrics is. The strings it returns are cleaned, because the ledger may hold text an agent wrote.
 func Current(dir string) (Now, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "ledger.jsonl"))
 	if err != nil {
@@ -38,7 +39,7 @@ func Current(dir string) (Now, error) {
 		}
 		var e gungnir.Event
 		if err := json.Unmarshal(line, &e); err != nil {
-			return Now{}, err
+			continue
 		}
 		switch e.Name {
 		case gungnir.EventNodeStarted:
@@ -49,5 +50,6 @@ func Current(dir string) (Now, error) {
 			}
 		}
 	}
+	now.Node, now.Role = Clean(now.Node), Clean(now.Role)
 	return now, nil
 }
