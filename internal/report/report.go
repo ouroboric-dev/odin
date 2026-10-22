@@ -28,7 +28,7 @@ func Write(w io.Writer, m *metrics.Run, st *run.State) error {
 		b.WriteString("None.\n\n")
 	}
 	for _, t := range m.BlockedTasks {
-		fmt.Fprintf(&b, "- %s: %s\n", t.Task, oneLine(t.Why))
+		fmt.Fprintf(&b, "- %s: %s\n", inline(t.Task), inline(t.Why))
 	}
 	if len(m.BlockedTasks) > 0 {
 		b.WriteString("\n")
@@ -57,7 +57,7 @@ func Write(w io.Writer, m *metrics.Run, st *run.State) error {
 				b.WriteString("## Loops that gave up\n\n")
 				gave = true
 			}
-			fmt.Fprintf(&b, "- %s: %s. %s\n", id, oneLine(e.Reason), oneLine(e.Detail))
+			fmt.Fprintf(&b, "- %s: %s. %s\n", inline(id), inline(e.Reason), inline(e.Detail))
 		}
 	}
 	if gave {
@@ -71,8 +71,8 @@ func Write(w io.Writer, m *metrics.Run, st *run.State) error {
 				b.WriteString("## Findings a dispute overruled\n\nEach is the implementer's word, backed by one check. Read both sides.\n\n")
 				overruled = true
 			}
-			fmt.Fprintf(&b, "### %s in %s\n\n%s, from %s, at %s. Settled by the check `%s`.\n\nReviewer's claim:\n\n%s\n\nImplementer's evidence:\n\n%s\n\n",
-				o.ID, id, o.Severity, o.Source, oneLine(o.Location), oneLine(o.OverruledBy), quote(o.Claim), quote(o.Proof))
+			fmt.Fprintf(&b, "### %s in %s\n\n%s, from %s, at %s. Settled by the check %s.\n\nReviewer's claim:\n\n%s\n\nImplementer's evidence:\n\n%s\n\n",
+				inline(o.ID), inline(id), inline(string(o.Severity)), inline(o.Source), inline(o.Location), code(o.OverruledBy), quote(o.Claim), quote(o.Proof))
 		}
 	}
 	_, err := io.WriteString(w, b.String())
@@ -80,20 +80,61 @@ func Write(w io.Writer, m *metrics.Run, st *run.State) error {
 }
 
 // quote puts text an agent wrote inside a block quote, line by line, so it cannot open a heading, a table or
-// a fence of the report.
+// a fence of the report. Every line break CommonMark knows ends a line, and each line is cleaned and escaped.
 func quote(s string) string {
+	s = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\u0085", "\n", "\u2028", "\n", "\u2029", "\n").Replace(s)
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	for i, l := range lines {
-		lines[i] = "> " + l
+		lines[i] = strings.TrimSpace("> " + inline(l))
 	}
 	return strings.Join(lines, "\n")
 }
 
-// cell makes text fit in one table cell.
-func cell(s string) string {
-	return strings.ReplaceAll(oneLine(s), "|", "\\|")
+// cell makes text fit in one table cell: inline escapes the pipe too.
+func cell(s string) string { return inline(s) }
+
+// oneLine makes text one line with no control or format character.
+func oneLine(s string) string { return metrics.Clean(s) }
+
+// inline makes text an agent wrote safe in the middle of a line: clean, then every character that can start
+// Markdown syntax (a link, an image, HTML, emphasis, an entity, a table edge) is escaped. A character that only
+// means something at the start of a line (a list marker, a setext underline) is escaped there.
+func inline(s string) string {
+	s = metrics.Clean(s)
+	var b strings.Builder
+	digits := true
+	for i, r := range s {
+		switch {
+		case strings.ContainsRune("\\`*_{}[]<>()#!|~&", r):
+			b.WriteByte('\\')
+		case i == 0 && strings.ContainsRune("+-=", r):
+			b.WriteByte('\\')
+		case r == '.' && i > 0 && digits:
+			b.WriteByte('\\')
+		}
+		if r < '0' || r > '9' {
+			digits = false
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
-func oneLine(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+// code puts text in a code span whose fence is one backtick longer than any run of them in the text.
+func code(s string) string {
+	s = metrics.Clean(s)
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+		s = " " + s + " "
+	}
+	return fence + s + fence
 }

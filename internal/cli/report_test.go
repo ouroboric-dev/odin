@@ -38,6 +38,9 @@ func TestYggReportCommitCopiesTheReportIntoTheProjectAndCommitsOnlyIt(t *testing
 	dir, config := project(t, "script.yaml", "mode: key-points\n")
 	id, _ := walk(t, dir, config)
 	os.WriteFile(filepath.Join(dir, "unrelated.txt"), []byte("not mine"), 0o644)
+	if _, err := git.Run(context.Background(), dir, "add", "unrelated.txt"); err != nil {
+		t.Fatal(err)
+	}
 	if code, out, errOut := ygg(t, "report", id, "--commit", "--project", dir); code != ExitDone {
 		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
 	}
@@ -45,9 +48,17 @@ func TestYggReportCommitCopiesTheReportIntoTheProjectAndCommitsOnlyIt(t *testing
 	if err != nil || !strings.HasPrefix(string(copy), "# Run "+id) {
 		t.Fatalf("docs/runs/%s.md: %v", id, err)
 	}
-	files, _ := git.Run(context.Background(), dir, "show", "--name-only", "--format=%s", "HEAD")
-	if !strings.HasPrefix(files, "Report of run "+id) || !strings.Contains(files, "docs/runs/"+id+".md") || strings.Contains(files, "unrelated.txt") {
-		t.Errorf("the last commit is %q; want only the report", files)
+	subject, _ := git.Run(context.Background(), dir, "log", "-1", "--format=%s", "HEAD")
+	if !strings.HasPrefix(subject, "Report of run "+id) {
+		t.Errorf("the last commit is %q", subject)
+	}
+	files, _ := git.Run(context.Background(), dir, "show", "--name-only", "--format=", "HEAD")
+	if strings.TrimSpace(files) != "docs/runs/"+id+".md" {
+		t.Errorf("the last commit holds %q; want only docs/runs/%s.md", files, id)
+	}
+	staged, _ := git.Run(context.Background(), dir, "diff", "--cached", "--name-only")
+	if strings.TrimSpace(staged) != "unrelated.txt" {
+		t.Errorf("staged after the command: %q; want unrelated.txt still staged and not committed", staged)
 	}
 }
 

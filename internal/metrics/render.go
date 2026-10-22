@@ -205,9 +205,9 @@ func num(n int64) string {
 	return s
 }
 
-// clean makes text an agent may have written safe to print: one line, and no control or format character, which a
+// Clean makes text an agent may have written safe to print: one line, and no control or format character, which a
 // terminal would act on.
-func clean(s string) string {
+func Clean(s string) string {
 	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return ' '
@@ -215,3 +215,5 @@ func clean(s string) string {
 		return r
 	}, s)), " ")
 }
+
+func clean(s string) string { return Clean(s) }
