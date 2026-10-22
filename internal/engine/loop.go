@@ -312,14 +312,13 @@ func logNames(path, test string) (bool, error) {
 func (l *loopSteps) Record(attempt int, changes []jormungandr.Change) error {
 	for _, c := range changes {
 		if c.Kind == jormungandr.DisputeIgnored {
-			// No event of the closed list fits a dispute that could not be used; loop_attempt carries it.
-			if err := l.r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: l.n.ID, Attempt: attempt, Result: c.Reason}); err != nil {
+			if err := l.r.Log(gungnir.Event{Name: gungnir.EventDisputeIgnored, Node: l.n.ID, Attempt: attempt, Note: firstLine(c.Reason)}); err != nil {
 				return err
 			}
 			continue
 		}
 		ev := gungnir.Event{Node: l.n.ID, Attempt: attempt, FindingID: c.Finding.ID, FindingSource: c.Finding.Source,
-			FindingSeverity: string(c.Finding.Severity), Note: firstLine(c.Finding.Location + ": " + c.Finding.Claim)}
+			FindingSeverity: string(c.Finding.Severity), FindingOrigin: l.origin(c.Finding.Source), Note: firstLine(c.Finding.Location + ": " + c.Finding.Claim)}
 		switch c.Kind {
 		case jormungandr.Raised:
 			ev.Name = gungnir.EventFindingRaised
@@ -359,4 +358,12 @@ func firstLine(s string) string {
 		return string([]rune(line)[:200]) + "…"
 	}
 	return line
+}
+
+// origin says whether a finding came from one of the loop's reviewers or from a check of its ladder.
+func (l *loopSteps) origin(source string) gungnir.FindingOrigin {
+	if slices.ContainsFunc(l.n.Reviewers, func(r schema.Reviewer) bool { return r.ID == source }) {
+		return gungnir.OriginReview
+	}
+	return gungnir.OriginCheck
 }

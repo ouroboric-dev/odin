@@ -67,7 +67,7 @@ func (m *Meter) Near(frac float64) []gungnir.CapError {
 			{Scope: s.scope, Dimension: gungnir.CapTurns, Used: float64(s.use.Turns), Limit: float64(s.cap.Turns)},
 		}
 		if m.USD {
-			dims = append(dims, gungnir.CapError{Scope: s.scope, Dimension: gungnir.CapUSD, Used: s.use.CostUSD, Limit: s.cap.USD})
+			dims = append(dims, gungnir.CapError{Scope: s.scope, Dimension: gungnir.CapUSD, Used: s.use.BilledUSD, Limit: s.cap.USD})
 		}
 		for _, d := range dims {
 			if d.Limit > 0 && d.Used >= frac*d.Limit && d.Used < d.Limit {

@@ -38,7 +38,7 @@ func TestTheMeterStopsAtTheRunsCapThenTheDays(t *testing.T) {
 }
 
 func TestTheDollarCapCountsOnlyForAPaidAPI(t *testing.T) {
-	run := &gungnir.Usage{CostUSD: 5}
+	run := &gungnir.Usage{CostUSD: 5, BilledUSD: 5}
 	m, _ := meter(t, run, false)
 	if hit := m.Check(); hit != nil {
 		t.Errorf("Check() = %v; a subscription's dollars are only a figure", hit)
@@ -83,7 +83,7 @@ func TestTheTurnsLeftAreTheLesserOfTheRunsAndTheDays(t *testing.T) {
 }
 
 func TestNearListsTheCapsOverEightyPercentAndNotYetReached(t *testing.T) {
-	run := &gungnir.Usage{InTok: 850, Turns: 10, CostUSD: 4.5}
+	run := &gungnir.Usage{InTok: 850, Turns: 10, CostUSD: 4.5, BilledUSD: 4.5}
 	m, _ := meter(t, run, true)
 	var got []string
 	for _, n := range m.Near(0.8) {
@@ -95,5 +95,22 @@ func TestNearListsTheCapsOverEightyPercentAndNotYetReached(t *testing.T) {
 	m.USD = false
 	if n := m.Near(0.8); len(n) != 1 || n[0].Dimension != gungnir.CapTokens {
 		t.Errorf("Near() = %+v without dollars", n)
+	}
+}
+
+// A config with a subscription role and a paid role counts dollars. The subscription's sessions have a cost
+// figure (what they would cost on the API) and bill nothing, so only what the paid role was billed counts.
+func TestTheDollarCapStopsOnWhatWasBilledNotOnASubscriptionsEstimate(t *testing.T) {
+	run := &gungnir.Usage{CostUSD: 4.5, CostEstimated: true, BilledUSD: 0.5}
+	m, _ := meter(t, run, true)
+	if hit := m.Check(); hit != nil {
+		t.Errorf("Check() = %v; $4.50 of cost figure and $0.50 billed is under a $5 cap", hit)
+	}
+	if near := m.Near(0.8); len(near) != 0 && near[0].Dimension == gungnir.CapUSD {
+		t.Errorf("Near() = %v; the estimate must not warn of a dollar cap", near)
+	}
+	run.BilledUSD = 5
+	if hit := m.Check(); hit == nil || hit.Dimension != gungnir.CapUSD || hit.Used != 5 {
+		t.Errorf("Check() = %v; want the dollar cap, with the billed $5 as what was used", hit)
 	}
 }

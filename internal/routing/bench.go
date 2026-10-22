@@ -253,3 +253,7 @@ func (g grepBaseline) Answer(q Question) ([]string, bool) {
 	}
 	return out, true
 }
+
+// Measure is what a shipped index scored on its bench, for the ledger: the index's right-first score, the grep
+// baseline's on the same questions, and the pack's bar.
+type Measure struct{ Bench, Baseline, Threshold float64 }

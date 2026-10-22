@@ -13,6 +13,8 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 ## Responsibilities
 
 - Loads the graph pack and `factory.yaml`.
+- Counts the budget caps. The dollar caps count `Usage.BilledUSD`, which the engine sets for a session of a paid adapter
+  (`billed`), and not the session's cost figure: a subscription's sessions have a figure and bill nothing.
 - Walks the graph and runs exec, agent, loop, gate and grade nodes; checkpoints runs and resumes them. A
   loop node is Jormungandr's loop with Odin's steps: sessions, checks, ledger lines and `run.json`.
 - Loads the graph pack and the realm leaves (change realm-leaf-naming, Voluspa): `--graph` names the
@@ -133,6 +135,26 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Does every git operation, from the host (spec §6.3).
 - Writes the hash-chained ledger and serves the `ygg` CLI.
 - Holds routing (spec §8) and observability (spec §10) as packages.
+
+## Metrics
+
+`ygg metrics` (package `internal/metrics`) reads a run's folder and writes nothing. It verifies the ledger's hash chain
+against the anchor in `run.json` and refuses a ledger that does not verify. It reads `run.json` for the few fields it
+needs and ignores the rest, so a run written by another build of ygg stays readable. Session lines add up to the usage
+(the run's own totals repeat them and are not counted); the sum is checked against `run.json` and a difference is a
+warning. The time between a `gate_pending` and its decision is an approval wait; the time from a failure, a pause or a
+killed process to the next `run_resumed` is stopped time; neither is the factory's. Grading after `run_finished` is
+grade time. A finding line says whether a check or a reviewer raised it (`ygg.finding.origin`), a dispute that could not
+be used is a `dispute_ignored` line, and every run records the build of ygg that wrote it (`ygg.factory.version`).
+
+`ygg metrics --compare <runA> <runB>` lays two runs side by side: what differed in the setup, the metrics with the delta
+B minus A, and a verdict for success criterion 7 (the metrics that improved, the ones that got worse, and whether the hidden
+score held). Runs of another brief, task version or suite are marked not comparable, with the reason, because their
+scores are not on one scale. Metrics with no direction, such as the reviewer veto rate, are shown and never judged.
+
+`ygg report` (package `internal/report`) renders the run report of spec §10.3 as Markdown from the same checked figures,
+the interventions with their notes, and the loops' records in `run.json`. With `--commit` a copy is committed as
+`docs/runs/<run-id>.md`, because a project ignores `.factory/`.
 
 ## Depends on
 

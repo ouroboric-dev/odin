@@ -32,6 +32,7 @@ func shipRouting(r *run.Run, n schema.Node, attempt int, parent tree.Node) error
 		return &nodeFailure{fmt.Errorf("routing: %w", err)}
 	}
 	note := ""
+	var measured *routing.Measure
 	if len(res.Skipped) > 0 {
 		note = fmt.Sprintf("left out: %d (first: %s)", len(res.Skipped), res.Skipped[0])
 	}
@@ -50,11 +51,16 @@ func shipRouting(r *run.Run, n schema.Node, attempt int, parent tree.Node) error
 			return &nodeFailure{fmt.Errorf("the routing index does not ship: %s; wrong or unanswered: %v", score, rep.Misses)}
 		}
 		note = strings.TrimSpace(note + " " + score)
+		measured = &routing.Measure{Bench: rep.Score, Baseline: base.Score, Threshold: rp.Threshold}
 	}
 	x, i := routing.Counts(res.Edges)
 	built := func(kind string) error {
-		return r.Log(gungnir.Event{Name: gungnir.EventRoutingIndexBuilt, Node: n.ID, Attempt: attempt, Task: n.Task,
-			IndexKind: kind, Edges: len(res.Edges), Extracted: x, Inferred: i, Note: note})
+		ev := gungnir.Event{Name: gungnir.EventRoutingIndexBuilt, Node: n.ID, Attempt: attempt, Task: n.Task,
+			IndexKind: kind, Edges: len(res.Edges), Extracted: x, Inferred: i, Note: note}
+		if measured != nil {
+			ev.RoutingBench, ev.RoutingBaseline, ev.RoutingThreshold = &measured.Bench, &measured.Baseline, &measured.Threshold
+		}
+		return r.Log(ev)
 	}
 	if wiring {
 		if err := routing.WriteWiring(parent.Dir, res.Edges); err != nil {

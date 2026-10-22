@@ -121,3 +121,15 @@ func TestTheDefaultFolderFollowsXDGThenHome(t *testing.T) {
 		t.Error("no home and no XDG_STATE_HOME: DefaultDir() = nil error")
 	}
 }
+
+func TestAnEntryWithANegativeBilledUSDStopsTheCount(t *testing.T) {
+	j := journal(t, noon)
+	e := entry("20261016-090000-aaaaaa", 100, 1)
+	e.Usage.BilledUSD = -1
+	if err := j.Append(e); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Day(noon); err == nil {
+		t.Error("a line with a negative billed_usd was counted")
+	}
+}
