@@ -69,7 +69,7 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   and keeps a note that is not blank in `State.Decisions`, as `{gate, note}` in the order given, only when the
   stopped node is a gate: a note at an escalation, `policy-violation` or `shrink-guard` stays on the
   `gate_approved` event. A second approval of the same gate, after a `back_to` return past it, replaces the
-  gate's note (a blank one drops it). `decisionsBlock`
+  gate's note; a blank one keeps it, since the earlier decision still holds. `decisionsBlock`
   (`internal/engine/decisions.go`) writes "The product owner's decisions" after the brief in the prompt of an
   agent, a scratch agent, an implementer and each reviewer. A rejection that goes back past gates drops their
   notes; a resume keeps them from `run.json`.

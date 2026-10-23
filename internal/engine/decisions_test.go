@@ -235,7 +235,8 @@ func TestANoteIsOneLine(t *testing.T) {
 }
 
 // A back_to return past a gate (land or move back to implement) meets the gate again: its second approval
-// replaces the first one's note, and one with no note drops it, so no stale or second note is left.
+// replaces the first one's note, so no stale or second note is left. One with no note restates nothing,
+// and the earlier decision still holds.
 func TestASecondApprovalOfAGateReplacesItsNote(t *testing.T) {
 	s := &run.State{}
 	keepDecision(s, "design-gate", "Warm.")
@@ -246,8 +247,8 @@ func TestASecondApprovalOfAGateReplacesItsNote(t *testing.T) {
 		t.Errorf("decisions = %+v, want %+v", s.Decisions, want)
 	}
 	keepDecision(s, "design-gate", " ")
-	if !slices.Equal(s.Decisions, want[:1]) {
-		t.Errorf("after an approval with no note: decisions = %+v, want %+v", s.Decisions, want[:1])
+	if !slices.Equal(s.Decisions, want) {
+		t.Errorf("after an approval with no note: decisions = %+v, want %+v", s.Decisions, want)
 	}
 }
 

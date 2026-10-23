@@ -51,10 +51,11 @@ func checkNote(note string) error {
 
 // keepDecision keeps note as the product owner's decision at gate, when it is not blank. It replaces the
 // note an earlier approval of the same gate gave: a back_to return past the gate (land or move back to
-// implement) meets it again, and only its latest approval holds. A blank note drops the earlier one.
+// implement) meets it again, and its latest note holds. A blank note restates nothing, so the earlier
+// decision still holds.
 func keepDecision(s *run.State, gate, note string) {
-	s.Decisions = slices.DeleteFunc(s.Decisions, func(d run.Decision) bool { return d.Gate == gate })
 	if note = strings.TrimSpace(note); note != "" {
+		s.Decisions = slices.DeleteFunc(s.Decisions, func(d run.Decision) bool { return d.Gate == gate })
 		s.Decisions = append(s.Decisions, run.Decision{Gate: gate, Note: note})
 	}
 }
