@@ -18,6 +18,8 @@ import (
 	"strings"
 
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/realm"
+	"github.com/ouroboric-dev/odin/internal/services"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -81,10 +83,8 @@ func Wiring(dir string, packs map[string]*schema.Pack) (*Result, error) {
 		realm, ver := c.Realm, c.RealmVersion
 		if realm != "" {
 			w.add(l, "uses-realm", "realm:"+realm+"@"+ver, Extracted, schema.UmbrellaFile)
-			if p := packs[realm]; p != nil {
-				for _, s := range slices.Sorted(mapKeys(p.Services)) {
-					w.add(l, "needs", "service:"+s, Extracted, "realm:"+realm+"/pack.yaml")
-				}
+			if packs[realm] != nil {
+				w.needs(u, packs, l, "realm:"+realm+"/pack.yaml")
 			}
 		}
 		if m := w.goModule(l); m != "" {
@@ -106,6 +106,45 @@ func Wiring(dir string, packs map[string]*schema.Pack) (*Result, error) {
 	}
 	slices.SortFunc(res.Contracts, func(a, b Contract) int { return strings.Compare(a.Path, b.Path) })
 	return res, nil
+}
+
+// needs adds an edge from the leaf to each service its realm's sandbox starts, as services.For names them: the
+// runtime realm's provider of each need of the leaf's realm, and the services the realm's pack names itself.
+// The leaves it consumes are left out: their realms' needs are their own edges. A need with no provider gives
+// no edge, and is reported.
+func (w *wiring) needs(u *schema.Umbrella, packs map[string]*schema.Pack, leaf, source string) {
+	svcs, err := services.For(nil, []string{leaf}, packLoader{u, packs})
+	if err != nil {
+		w.skip("%s: %v", source, err)
+		return
+	}
+	for _, s := range svcs {
+		w.add(leaf, "needs", "service:"+s.Name, Extracted, source)
+	}
+}
+
+// packLoader is the services.Loader of the wiring: the packs of the realms the umbrella pins, by name.
+type packLoader struct {
+	u     *schema.Umbrella
+	packs map[string]*schema.Pack
+}
+
+func (l packLoader) Leaf(repo string) (*realm.Realm, error) {
+	c := l.u.Children[repo]
+	if p := l.packs[c.Realm]; p != nil {
+		return &realm.Realm{Name: c.Realm, Version: c.RealmVersion, Pack: p}, nil
+	}
+	return nil, fmt.Errorf("the realm %s of the leaf %s is not loaded", c.Realm, repo)
+}
+
+func (l packLoader) Runtime() (*realm.Realm, error) {
+	if l.u.Runtime == "" {
+		return nil, nil
+	}
+	if p := l.packs[l.u.Runtime]; p != nil {
+		return &realm.Realm{Name: l.u.Runtime, Version: l.u.RuntimeVersion, Pack: p}, nil
+	}
+	return nil, fmt.Errorf("the runtime realm %s is not loaded", l.u.Runtime)
 }
 
 func mapKeys[V any](m map[string]V) func(func(string) bool) {

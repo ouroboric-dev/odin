@@ -162,7 +162,7 @@
       ],
       "inferred": []
     },
-    "service:seaweedfs": {
+    "service:s3": {
       "extracted": [
         "api",
         "web",

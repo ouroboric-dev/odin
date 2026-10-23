@@ -3,10 +3,12 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -320,5 +322,43 @@ func TestSandboxBuildStopsWhenTheFactoryLayerFailsToBuild(t *testing.T) {
 		if strings.Contains(line, "golang:") {
 			t.Errorf("the realm's stack was pulled after the factory layer failed: %s", line)
 		}
+	}
+}
+
+// The runtime realm names no stack and starts the services the build realms' leaves need: ygg sandbox build --all
+// pulls its service images, which a sandbox never pulls itself, and still lists it as a realm with no stack.
+func TestSandboxBuildPullsTheRuntimesServices(t *testing.T) {
+	log := stubEngine(t)
+	store, config := realmsStore(t)
+	const (
+		pg18 = "docker.io/library/postgres:18.1@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+		s3   = "docker.io/chrislusf/seaweedfs:4.45@sha256:fc9f76fa993ad69966ffeb2f65d0318fcae39c6f8e20cf68ef7b3a5cb97769e5"
+	)
+	pack := "name: niflheim-local\nversion: 0.1.0\nservices:\n  postgres:\n    image: " + pg18 + "\n    ports: [5432]\n" +
+		"  s3:\n    image: " + s3 + "\n    ports: [8333]\nprovides:\n  postgres: postgres\n  s3: s3\n"
+	if err := os.MkdirAll(filepath.Join(store, "niflheim-local"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "niflheim-local", "pack.yaml"), []byte(pack), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, images, skipped, err := stacksToBuild(&schema.Factory{Realms: &schema.Realms{Dir: store}}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{pg18, s3} {
+		if !slices.Contains(images, want) {
+			t.Errorf("the images to pull are %v; they lack the runtime realm's %s", images, want)
+		}
+	}
+	if !slices.ContainsFunc(skipped, func(s string) bool { return strings.Contains(s, "niflheim-local names no sandbox stack") }) {
+		t.Errorf("skipped = %v; want niflheim-local listed as a realm with no stack", skipped)
+	}
+	code, out, errOut := ygg(t, "sandbox", "build", "--config", config, "--all")
+	if code != ExitDone || !strings.Contains(out, "Pulling the service image "+s3) {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	if b, _ := os.ReadFile(log); !strings.Contains(string(b), "pull ") || !strings.Contains(string(b), s3) {
+		t.Errorf("the engine was not asked to pull %s:\n%s", s3, b)
 	}
 }

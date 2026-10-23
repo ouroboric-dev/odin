@@ -35,7 +35,7 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   commit of its own when every leaf is there); a later leaves file names the same pin or none. A build
   realm's pack lists the services its leaves need (`needs`: `postgres`, `s3`). A need with no provider, or
   any need in a project with no runtime realm, stops the run before any leaf is created or any leaf
-  sandbox starts (`run.Setup.CheckNeeds`, where acceptance is checked: at prepare and in `init`); the
+  sandbox starts (`run.Setup.CheckNeeds`, with the message of `services.Provider`, where acceptance is checked: at prepare and in `init`); the
   `tasks` node that reads the leaves file (`ready`) checks it too, and fails without going back to the
   planner. The message names the need, the realm, and `runtime` in `docs/leaves.yaml`.
 - Runs the stages before the code: a scratch agent works in a workspace of its own (the brief, copies
@@ -60,14 +60,18 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve` accepts the
   implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
   implementer's evidence and the check run.
-- Starts each leaf's sandbox on its realm's stack, with the services of its realm and of the leaves it
-  consumes (spec §6.1, §9.2). A realm's stack is an image pinned by digest or one that `ygg sandbox build`
+- Starts each leaf's sandbox on its realm's stack, with the services `services.For` gives the leaf (spec
+  §6.1, §9.2, §9.4): for its realm and the realm of each leaf it consumes, the runtime realm's provider of
+  each need, under the name it has in the runtime realm's pack, and the services an older pack names itself.
+  `For` takes the umbrella and a loader of realms and reads no run's state, so a command with no run
+  can use it too. The wiring's `needs` edges come from it too. `ygg sandbox build --all` pulls the
+  service images of a realm with no stack, the runtime realm's. A realm's stack is an image pinned by digest or one that `ygg sandbox build`
   builds from the realm's own build context (change realm-content); the tag is a hash of the context.
   `ygg sandbox build` builds each stack with the factory layer on top of it.
 - Runs a pointer move's acceptance checks, when the run has a sandbox, in a sandbox that holds a snapshot
   of the project: the committed files of the umbrella and of each leaf, at the commits they are on, in a
   plain folder with no git directory. Each leaf realm that defines the check runs it, in realm-name
-  order, on its acceptance stack and with the services of every leaf's realm, in a snapshot of its own at
+  order, on its acceptance stack and with the services `services.For` gives every leaf of the project, in a snapshot of its own at
   `snapshot/<node>/<realm>`; the first failure is the move's, and a project where no realm has the check is
   refused. What a leaf's working copy holds beyond its
   commits never reaches it.

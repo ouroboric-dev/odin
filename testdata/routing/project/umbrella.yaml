@@ -3,6 +3,8 @@ owner: fixture
 visibility: private
 graph: software
 graph_version: 0.1.0
+runtime: niflheim-local
+runtime_version: 0.1.0
 children:
   api:
     kind: leaf

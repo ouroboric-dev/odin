@@ -5,7 +5,7 @@
 |---|---|---|---|---|
 | api | holds | contract:api/internal/api.openapi.yaml | extracted | api/internal/api.openapi.yaml |
 | api | needs | service:postgres | extracted | realm:helheim-go/pack.yaml |
-| api | needs | service:seaweedfs | extracted | realm:helheim-go/pack.yaml |
+| api | needs | service:s3 | extracted | realm:helheim-go/pack.yaml |
 | api | pins | go:github.com/go-chi/chi/v5@v5.2.3 | extracted | api/go.sum |
 | api | requires | go:github.com/go-chi/chi/v5 | extracted | api/go.mod |
 | api | uses-realm | realm:helheim-go@0.1.0 | extracted | umbrella.yaml |
@@ -24,7 +24,7 @@
 | worker | imports | api | extracted | worker/cmd/worker/main.go |
 | worker | mentions | web | inferred | worker/README.md |
 | worker | needs | service:postgres | extracted | realm:helheim-go/pack.yaml |
-| worker | needs | service:seaweedfs | extracted | realm:helheim-go/pack.yaml |
+| worker | needs | service:s3 | extracted | realm:helheim-go/pack.yaml |
 | worker | requires | api | extracted | worker/go.mod |
 | worker | uses-realm | realm:helheim-go@0.1.0 | extracted | umbrella.yaml |
 <!-- ygg:wiring:end -->
