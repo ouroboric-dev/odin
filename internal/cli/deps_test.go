@@ -38,6 +38,13 @@ func goMod(v string) string {
 
 func depsProject(t *testing.T, stack string) (dir, config string) {
 	t.Helper()
+	return depsProjectWith(t, stack, "", false)
+}
+
+// depsProjectWith is depsProject with more lines in the leaves' realm pack (needs: [...]) and, when runtime is
+// true, an umbrella that pins the runtime realm niflheim-local, which provides postgres and s3.
+func depsProjectWith(t *testing.T, stack, packExtra string, runtime bool) (dir, config string) {
+	t.Helper()
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo+depsFakeGoExtra), 0o755); err != nil {
 		t.Fatal(err)
@@ -48,15 +55,26 @@ func depsProject(t *testing.T, stack string) (dir, config string) {
 	if stack != "" {
 		pack += "sandbox:\n  stack: " + stack + "\n  egress: [proxy.golang.org]\n"
 	}
-	if err := os.MkdirAll(filepath.Join(store, "helheim-go"), 0o755); err != nil {
-		t.Fatal(err)
+	pack += packExtra
+	realms := map[string]string{"helheim-go": pack}
+	var rt treetest.Pin
+	if runtime {
+		realms["niflheim-local"] = "name: niflheim-local\nversion: 0.1.0\nservices:\n  postgres:\n    image: " + pgImage + "\n    ports: [5432]\n" +
+			"  s3:\n    image: docker.io/chrislusf/seaweedfs:4.45@sha256:fc9f76fa993ad69966ffeb2f65d0318fcae39c6f8e20cf68ef7b3a5cb97769e5\n    ports: [8333]\n" +
+			"provides:\n  postgres: postgres\n  s3: s3\n"
+		rt = treetest.Pin{Realm: "niflheim-local", Version: "0.1.0"}
 	}
-	if err := os.WriteFile(filepath.Join(store, "helheim-go", "pack.yaml"), []byte(pack), 0o644); err != nil {
-		t.Fatal(err)
+	for name, body := range realms {
+		if err := os.MkdirAll(filepath.Join(store, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(store, name, "pack.yaml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	pin := treetest.Pin{Realm: "helheim-go", Version: "0.1.0"}
 	leaf := treetest.Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, Leaf: true, Pin: pin}
-	dir = treetest.Build(t, treetest.Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, GraphPin: pin,
+	dir = treetest.Build(t, treetest.Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate, GraphPin: pin, RuntimePin: rt,
 		Children: map[string]treetest.Node{"repos/api": leaf, "repos/web": leaf, "repos/old": leaf}})
 	for name, v := range map[string]string{"api": "0.41.0", "web": "0.41.0", "old": "0.43.0"} {
 		ns, err := tree.Resolve(ctx, dir, "repos/"+name) // checks the leaf out
@@ -382,5 +400,56 @@ func TestDepsBumpWhoseSandboxDoesNotStartIsNotReportedUnfinished(t *testing.T) {
 	}
 	if got, err := deps.FindUnfinished(dir); err != nil || len(got) != 0 {
 		t.Errorf("found %+v, %v", got, err)
+	}
+}
+
+// depsServices runs a bump of repos/api in a sandbox whose driver is a fake, and returns the fake, the exit
+// code, the error output and how many drivers started.
+func depsServices(t *testing.T, dir, config string) (fake *sandboxfake.Sandbox, code int, errOut string, started int) {
+	t.Helper()
+	fake = &sandboxfake.Sandbox{}
+	old := newDepsSandbox
+	newDepsSandbox = func(engine string, cfg sandbox.Config, work string) (gungnir.Sandbox, error) {
+		started++
+		return fake, nil
+	}
+	t.Cleanup(func() { newDepsSandbox = old })
+	code, _, errOut = ygg(t, "deps", "bump", "golang.org/x/text", "0.42.0", "--project", dir, "--config", config, "--canary", "repos/api")
+	return fake, code, errOut, started
+}
+
+func TestDepsSandboxGetsTheRuntimesServices(t *testing.T) {
+	dir, config := depsProjectWith(t, goStack, "needs: [postgres, s3]\n", true)
+	fake, code, errOut, _ := depsServices(t, dir, config)
+	if code != ExitDone || len(fake.Ups) != 1 {
+		t.Fatalf("exit %d, %d sandboxes:\n%s", code, len(fake.Ups), errOut)
+	}
+	var got []string
+	for _, v := range fake.Ups[0].Services {
+		got = append(got, v.Name+"="+v.Image)
+	}
+	want := "postgres=" + pgImage + ",s3=docker.io/chrislusf/seaweedfs:4.45@sha256:fc9f76fa993ad69966ffeb2f65d0318fcae39c6f8e20cf68ef7b3a5cb97769e5"
+	if strings.Join(got, ",") != want {
+		t.Errorf("the sandbox started with the services %v; want the runtime realm's postgres and s3", got)
+	}
+}
+
+func TestDepsRefusesAnUnmetNeed(t *testing.T) {
+	dir, config := depsProjectWith(t, goStack, "needs: [postgres, s3]\n", false)
+	_, code, errOut, started := depsServices(t, dir, config)
+	if code != ExitRefused || started != 0 || !strings.Contains(errOut, "the realm helheim-go needs postgres") ||
+		!strings.Contains(errOut, "the project pins no runtime realm to provide it") {
+		t.Errorf("exit %d, %d drivers started; want a refusal with the message of services.For:\n%s", code, started, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".factory", "deps")); !os.IsNotExist(err) {
+		t.Errorf("the refusal left the folder of a bump: %v", err)
+	}
+}
+
+func TestDepsSandboxOfALeafThatNeedsNothingHasNoService(t *testing.T) {
+	dir, config := depsProjectWith(t, goStack, "", true) // a runtime realm is pinned, and nothing asks for it
+	fake, code, errOut, _ := depsServices(t, dir, config)
+	if code != ExitDone || len(fake.Ups) != 1 || len(fake.Ups[0].Services) != 0 {
+		t.Errorf("exit %d, sandboxes %+v; want one with no service:\n%s", code, fake.Ups, errOut)
 	}
 }
