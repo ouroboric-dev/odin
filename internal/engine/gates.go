@@ -167,6 +167,9 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 	if err := pending(r, gateID); err != nil {
 		return err
 	}
+	if err := checkNote(note); err != nil {
+		return err
+	}
 	s := r.State
 	n := r.Nodes()[s.Position]
 	if n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation {
@@ -180,6 +183,9 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 	}
 	switch {
 	case n.Kind == schema.KindGate:
+		// The note of a gate is the product owner's decision (spec §7.2); a note at any other stop is about
+		// that stop and stays on the event.
+		keepDecision(s, n.ID, note)
 		s.Position++
 	case n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation:
 		// The operator accepts the work with its findings open. They stay open in the ledger: only their
@@ -272,12 +278,17 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 		s.Position = indexOf(nodes, target)
 		// Every loop from the target up to the gate starts over: the work under a loop that passed changes
 		// when a node before it runs again (review I2).
+		past := map[string]bool{}
 		for _, m := range nodes[s.Position:gate] {
+			if m.Kind == schema.KindGate {
+				past[m.ID] = true
+			}
 			if m.Kind == schema.KindLoop {
 				delete(s.Loops, m.ID)
 			}
 			delete(s.Returns, m.ID) // a rejection is a fresh start: a refusal may go back again
 		}
+		dropDecisions(s, past) // the run meets those gates again
 		if err := replan(r, nodes[s.Position:gate]); err != nil {
 			return err
 		}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 	"github.com/ouroboric-dev/odin/internal/task"
@@ -316,5 +317,130 @@ func TestABriefWhoseTaskIdIsNotATaskIdFailsTheGradeNodeAsARefusal(t *testing.T) 
 	}
 	if text := ledgerText(t, g.r); !strings.Contains(text, `"event":"grade_refused"`) || !strings.Contains(text, `"event":"node_failed"`) {
 		t.Errorf("the ledger:\n%s", text)
+	}
+}
+
+// brokenReleaser is a Releaser that fails until Err is nil, and then makes a one-file release.
+type brokenReleaser struct {
+	Err   error
+	Calls int
+	Dir   string // where the releases are made
+}
+
+func (b *brokenReleaser) Key() string { return "broken" }
+
+func (b *brokenReleaser) Build(_ context.Context, spec run.ReleaseSpec) (string, error) {
+	leaves := spec.Leaves
+	b.Calls++
+	if b.Err != nil {
+		return "", b.Err
+	}
+	dir, err := os.MkdirTemp(b.Dir, "release")
+	if err != nil {
+		return "", err
+	}
+	for _, l := range leaves {
+		os.MkdirAll(filepath.Join(dir, l), 0o755)
+		os.WriteFile(filepath.Join(dir, l, "run.sh"), []byte("#!/bin/sh\n"), 0o755)
+	}
+	return dir, nil
+}
+
+// leakyReleaser makes a release and leaves its sandbox recorded as up, as a releaser whose sandbox did not stop.
+type leakyReleaser struct {
+	brokenReleaser
+	r *run.Run
+}
+
+func (l *leakyReleaser) Build(ctx context.Context, spec run.ReleaseSpec) (string, error) {
+	l.r.State.Sandboxes = map[string]gungnir.Env{"snapshot/release/test": {Name: "snapshot/release/test", Container: "c"}}
+	return l.brokenReleaser.Build(ctx, spec)
+}
+
+// The second line behind the releaser's own stop: the grader does not start while a sandbox is recorded as up.
+func TestTheGraderNeverStartsBesideTheReleaseSandbox(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
+	g.r.Releaser = &leakyReleaser{brokenReleaser{Dir: t.TempDir()}, g.r}
+	commitRelease(t, g.r)
+	_, err := Grade(context.Background(), g.r, "")
+	var failed *GradeFailed
+	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "still up") {
+		t.Fatalf("Grade() = %v, want a *GradeFailed for the sandbox left up", err)
+	}
+	if len(g.grader.Specs) != 0 {
+		t.Errorf("the grader started beside a sandbox")
+	}
+}
+
+// A leaf ships a release.sh and the project has no acceptance realm: the grade goes on without a release,
+// and says so in the ledger and to the operator.
+func TestAGradeWithNoAcceptanceRealmSaysThereIsNoRelease(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
+	commitRelease(t, g.r)
+	graded, err := Grade(context.Background(), g.r, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "no release: the project has no acceptance realm"
+	if !strings.HasPrefix(graded.Note, want) || !strings.Contains(graded.Note, "repos/app") {
+		t.Errorf("Graded.Note = %q", graded.Note)
+	}
+	if text := ledgerText(t, g.r); !strings.Contains(text, `"event":"grade_started"`) || !strings.Contains(text, want) {
+		t.Errorf("the ledger lacks the note:\n%s", text)
+	}
+}
+
+// commitRelease commits an executable release.sh to repos/app and records it in the project.
+func commitRelease(t *testing.T, r *run.Run) {
+	t.Helper()
+	l, err := r.Leaf("repos/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.RepoDir("repos/app"), "release.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "release.sh"}, {"commit", "-q", "-m", "release"}} {
+		if _, err := l.Git(context.Background(), args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := git.Repo{GitDir: r.Setup.Project.GitDir, WorkTree: r.Setup.Project.Dir}
+	for _, args := range [][]string{{"add", "repos/app"}, {"commit", "-q", "-m", "bump"}} {
+		if _, err := p.Run(context.Background(), args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestGradeFailsOnARelease(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
+	rel := &brokenReleaser{Err: errors.New("go build: exit 2"), Dir: t.TempDir()}
+	g.r.Releaser = rel
+	commitRelease(t, g.r)
+	_, err := Grade(context.Background(), g.r, "")
+	var failed *GradeFailed
+	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "repos/app") || !strings.Contains(err.Error(), "exit 2") {
+		t.Fatalf("Grade() = %v, want a *GradeFailed that names repos/app", err)
+	}
+	if _, err := os.Stat(filepath.Join(g.r.Dir, "score.json")); err == nil {
+		t.Error("a failed release has a score")
+	}
+	if len(g.grader.Specs) != 0 {
+		t.Errorf("the grader ran %d times on a project without its release", len(g.grader.Specs))
+	}
+	rel.Err = nil
+	if _, err := Grade(context.Background(), g.r, ""); err != nil {
+		t.Fatalf("the second Grade() = %v", err)
+	}
+	if len(g.grader.Specs) != 1 || rel.Calls != 2 {
+		t.Errorf("grader calls %d, releaser calls %d; want 1 and 2", len(g.grader.Specs), rel.Calls)
+	}
+	found := false
+	for _, f := range g.grader.Apps[0] {
+		found = found || f == ".ygg/release/repos/app/run.sh"
+	}
+	if !found {
+		t.Errorf("the graded /app lacks the release: %v", g.grader.Apps[0])
 	}
 }

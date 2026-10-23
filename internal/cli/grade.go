@@ -41,6 +41,9 @@ func (c *command) grade(args []string) int {
 		fmt.Fprintf(c.err, "ygg: run %s: %v\n", r.State.ID, err)
 		return ExitFailed
 	}
+	if g.Note != "" {
+		fmt.Fprintf(c.err, "ygg: %s\n", g.Note)
+	}
 	s := g.Score
 	fmt.Fprintf(c.out, "Graded run %s: %s %s against suite %s.\nreward:        %.4f\nfail-to-pass:  %d/%d\npass-to-pass:  %d/%d\nscore:         %s\n",
 		r.State.ID, s.Task, s.TaskVersion, s.Suite, s.Reward, s.FailToPass.Passed, s.FailToPass.Total, s.PassToPass.Passed, s.PassToPass.Total, g.Path)

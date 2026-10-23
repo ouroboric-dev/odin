@@ -120,6 +120,12 @@ func (r *Run) ScratchRunner(ctx context.Context, node string) (gungnir.Runner, e
 // is started the first time, on rl's acceptance stack with the services of every leaf's realm, and is recorded under its own name (snapshot/<node>/<realm>)
 // so that Advance, a resume and doctor stop it like a leaf's (change realm-content).
 func (r *Run) SnapshotRunner(ctx context.Context, node string, rl *realm.Realm, revs map[string]string) (gungnir.Runner, error) {
+	return r.snapshotRunner(ctx, node, rl, revs, true)
+}
+
+// snapshotRunner is SnapshotRunner; withServices false starts the sandbox with no service, for a snapshot
+// whose commands run no part of the product (the release's build).
+func (r *Run) snapshotRunner(ctx context.Context, node string, rl *realm.Realm, revs map[string]string, withServices bool) (gungnir.Runner, error) {
 	if r.Sandbox == nil {
 		return nil, nil
 	}
@@ -137,6 +143,9 @@ func (r *Run) SnapshotRunner(ctx context.Context, node string, rl *realm.Realm, 
 	stack, egress, services, err := r.Setup.SnapshotSandbox(rl)
 	if err != nil {
 		return nil, err
+	}
+	if !withServices {
+		services = nil
 	}
 	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: key, Parent: r.Dir, Leaf: dir, Scratch: true,
 		Egress: egress, Stack: stack, Services: services})

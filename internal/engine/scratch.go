@@ -50,6 +50,7 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	if r.Setup.BriefText != "" {
 		text += "\n\n## Brief\n\n" + r.Setup.BriefText
 	}
+	text = withDecisions(text, s)
 	if reason := s.Reasons[n.ID]; reason != "" {
 		text += "\n\n## Rejected at the approval point\n\n" + reason + "\n"
 	}

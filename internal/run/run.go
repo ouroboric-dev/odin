@@ -50,6 +50,7 @@ type Hooks struct {
 	Libs       *skills.Libraries
 	NewSandbox NewSandbox
 	NewGrader  NewGrader
+	Releaser   Releaser // builds the releases of the export; nil adds none
 	Now        func() time.Time
 	Backoff    *jormungandr.Backoff
 	Sleep      func(ctx context.Context, d time.Duration) error
@@ -75,6 +76,7 @@ type Setup struct {
 	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
 	newSandbox   NewSandbox
 	newGrader    NewGrader
+	releaser     Releaser
 	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
 	Backoff      jormungandr.Backoff
 	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
@@ -178,7 +180,7 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if err := s.prepareBudget(o.Hooks); err != nil {
 		return nil, err
 	}
-	s.newSandbox, s.newGrader = o.Hooks.NewSandbox, o.Hooks.NewGrader
+	s.newSandbox, s.newGrader, s.releaser = o.Hooks.NewSandbox, o.Hooks.NewGrader, o.Hooks.Releaser
 	if err := s.prepareSandbox(s.initAhead(o.Resume)); err != nil {
 		return nil, err
 	}
@@ -623,6 +625,7 @@ type Run struct {
 	SetAside []string        // the notes of Saved from the set-aside of a session whose spend the journal couldn't take, for its gate (review I4)
 	Sandbox  gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
 	Grader   Grader          // runs the hidden suite; nil unless the config has a grader and a sandbox section
+	Releaser Releaser        // builds the releases of the export; nil adds none
 	nodes    []schema.Node   // the nodes of the run, with foreach nodes expanded; see Nodes
 }
 
@@ -936,6 +939,7 @@ func Start(ctx context.Context, o Options) (*Run, error) {
 		os.RemoveAll(dir)
 		return nil, err
 	}
+	r.Releaser = setup.releaser
 	if err := r.openGrader(setup.newGrader); err != nil {
 		r.Close()
 		os.RemoveAll(dir)
@@ -1207,6 +1211,7 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 		l.Close()
 		return nil, err
 	}
+	r.Releaser = setup.releaser
 	if err := r.openGrader(setup.newGrader); err != nil {
 		l.Close()
 		return nil, err

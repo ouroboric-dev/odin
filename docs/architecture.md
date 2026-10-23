@@ -64,6 +64,15 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve` accepts the
   implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
   implementer's evidence and the check run.
+- Gives the note of a gate approval to every later session (spec §7.2, finding F1). `Approve` refuses a note
+  with a control character (the rule of `ygg-proof-run.sh`) or a line or paragraph separator (U+2028, U+2029),
+  and keeps a note that is not blank in `State.Decisions`, as `{gate, note}` in the order given, only when the
+  stopped node is a gate: a note at an escalation, `policy-violation` or `shrink-guard` stays on the
+  `gate_approved` event. A second approval of the same gate, after a `back_to` return past it, replaces the
+  gate's note; a blank one keeps it, since the earlier decision still holds. `decisionsBlock`
+  (`internal/engine/decisions.go`) writes "The product owner's decisions" after the brief in the prompt of an
+  agent, a scratch agent, an implementer and each reviewer. A rejection that goes back past gates drops their
+  notes; a resume keeps them from `run.json`.
 - Starts each leaf's sandbox on its realm's stack, with the services `services.For` gives the leaf (spec
   §6.1, §9.2, §9.4): for its realm and the realm of each leaf it consumes, the runtime realm's provider of
   each need, under the name it has in the runtime realm's pack, and the services an older pack names itself.
@@ -91,7 +100,8 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   any project, and stops the run at the hard approval point `budget-cap` before a session would start
   over a cap (spec §7.4). Pauses the run when the provider's quota is used up (spec §12).
 - Grades a build (spec §11, change benchmark-split). The `grade` node is the last node of a graph. It stops
-  every sandbox first, exports the committed files of the project as `/app`, and runs the hidden suite of the
+  every sandbox first, exports the committed files of the project as `/app` (with, for each leaf that holds an
+  executable `release.sh`, its release at `.ygg/release/<leaf path>/`, see below), and runs the hidden suite of the
   task in a container of Gleipnir's `Grade`: no network, `/app` read and write, `/tests` read only, one empty
   folder for the suite's own logs, and no other mount. It checks the task first (`task.toml`, the hash of
   `instruction.md`, the suite version, the retired mark, the suite's `manifest.json`) and refuses with
@@ -107,6 +117,31 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   never sees the suite folder, `score.json` or the container's output. `ygg grade <run-id>` grades a done
   run that has no grade node, or grades again; `--task` names the task when the brief of the run is not the
   `instruction.md` of a task.
+- Adds the release to the export. A `Releaser` builds the release of each leaf with an executable `release.sh`,
+  and Odin copies it to `.ygg/release/<leaf path>/` (for example `.ygg/release/repos/api/`) in the export only: a
+  release is never committed to the project or a leaf. `ygg grade` and `ygg bridge` build it in the project's
+  acceptance sandbox: the acceptance stack of the realm that defines an acceptance check the graph runs
+  (midgard-react's, which holds Node and Go), over a snapshot of the exported commits (`snapshot/release/<realm>`
+  in the run folder), with the registries of every leaf's realm, no agent, no secret and no service: no build
+  needs Postgres or S3, and a sandbox with services did not stop on the real engine. Odin runs each leaf's
+  `release.sh` in the leaf with `OUT` set to an empty folder of the snapshot and no other variable, after writing
+  the toolchain's versions (`go version`, `node --version`, each when the sandbox has it) to the log, then stops
+  the sandbox, whether the release was made or not, so the grader never starts beside it. One sandbox builds
+  every leaf's release, so a leaf's `release.sh` can write into another leaf's release folder: a known cost of
+  sharing the sandbox, which the bounds and the file-type checks do not catch. The whole release has the
+  grader's timeout (`grader.timeout`; 20 minutes with no grader section). Odin copies the release out itself, so
+  every file of the export is the host user's, and gives the snapshot's folders back to the host user, so that a
+  later export can empty them (B-139). A project with no acceptance realm, or a run with no sandbox, exports no
+  release; when a leaf ships a `release.sh` all the same, `ygg grade` and `ygg bridge` print
+  `no release: the project has no acceptance realm …` (or `no release: the run has no sandbox …` for a run
+  with no sandbox) to standard error, and the grade's `grade_started` event carries it as its note. The copy is
+  bounded on its own: 128 MiB a file and 512 MiB in all, with no symlink, device or other special file, and no
+  symlink on the path from the release's folder down to a leaf's (`.ygg`, `.ygg/release`, `repos`, …), which
+  Odin checks before it makes a leaf's `OUT` and before it copies. A release that fails, times out or breaks a bound fails the export, which is left empty, and so
+  the grade (`GradeFailed`). The build's output, and the failure after it, go to `release.log` (`0600`, at most 4
+  MiB) beside `grade.log`. A release is kept in the run folder (`release/`) under the commits it was built from
+  and the releaser's key (the acceptance realm, its version and hash, and its acceptance image), so a second
+  export of the same commits by the same releaser does not build it again.
 - Limits the grading container with `grader.memory` and `grader.cpus`. `grader.memory: none` and
   `grader.cpus: 0` ask for no limit, for an engine that cannot apply one; `ygg doctor` warns when either is
   set, because only the timeout then holds a suite that hangs. `ygg doctor` also finds the grader containers

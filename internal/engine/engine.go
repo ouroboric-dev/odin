@@ -230,6 +230,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if r.Setup.BriefText != "" {
 		text += "\n\n## Brief\n\n" + r.Setup.BriefText
 	}
+	text = withDecisions(text, s)
 	if block := taskBlock(r, n); block != "" {
 		text += "\n\n" + block
 	}
