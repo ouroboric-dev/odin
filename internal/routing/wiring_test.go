@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,8 +15,9 @@ const fixture = "../../testdata/routing/project"
 
 func packs() map[string]*schema.Pack {
 	return map[string]*schema.Pack{
-		"helheim-go":    {Name: "helheim-go", Services: map[string]schema.PackService{"postgres": {}, "seaweedfs": {}}},
-		"midgard-react": {Name: "midgard-react"},
+		"helheim-go":     {Name: "helheim-go", Services: map[string]schema.PackService{"postgres": {}}, Needs: []string{"s3"}},
+		"midgard-react":  {Name: "midgard-react"},
+		"niflheim-local": {Name: "niflheim-local", Services: map[string]schema.PackService{"s3": {}}, Provides: map[string]string{"s3": "s3"}},
 	}
 }
 
@@ -224,5 +226,77 @@ func TestTheWiringIndexTakesALeafsRealmFromItsOwnPinOnly(t *testing.T) {
 		if e.From == "web" && (e.Kind == "uses-realm" || e.Kind == "needs") {
 			t.Errorf("web pins no realm, and has the edge %+v", e)
 		}
+	}
+}
+
+// A leaf's needs edges go to the services its sandbox starts: the runtime realm's provider of each need of the
+// leaf's realm, by the provider's name, and the services the realm's pack still names itself.
+func TestWiringNeedsEdges(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "p")
+	if err := os.CopyFS(dir, os.DirFS(fixture)); err != nil {
+		t.Fatal(err)
+	}
+	ps := map[string]*schema.Pack{
+		"helheim-go":    {Name: "helheim-go", Needs: []string{"postgres", "s3"}},
+		"midgard-react": {Name: "midgard-react"},
+		"niflheim-local": {Name: "niflheim-local", Services: map[string]schema.PackService{"postgres": {}, "s3": {}, "mail": {}},
+			Provides: map[string]string{"postgres": "postgres", "s3": "s3"}},
+	}
+	res, err := Wiring(dir, ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []string{"service:postgres", "service:s3"} {
+		e := find(res.Edges, "api", "needs", to)
+		if e == nil || e.Tag != Extracted || e.Source != "realm:helheim-go/pack.yaml" {
+			t.Errorf("api -needs-> %s is %+v; want it extracted from realm:helheim-go/pack.yaml", to, e)
+		}
+	}
+	for _, e := range res.Edges {
+		if e.Kind == "needs" && (e.From == "web" || e.To == "service:mail") {
+			t.Errorf("the edge %+v is no service a sandbox of the leaf starts", e)
+		}
+	}
+	// With no runtime realm to provide them, the needs give no edge, and the wiring says what it left out.
+	u, err := schema.LoadUmbrella(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Runtime, u.RuntimeVersion = "", ""
+	if err := u.Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	if res, err = Wiring(dir, ps); err != nil {
+		t.Fatal(err)
+	}
+	if e := find(res.Edges, "api", "needs", "service:s3"); e != nil {
+		t.Errorf("a need with no provider has the edge %+v", e)
+	}
+	if !slices.ContainsFunc(res.Skipped, func(s string) bool { return strings.Contains(s, "the realm helheim-go needs postgres") }) {
+		t.Errorf("skipped = %v; want the need with no provider reported", res.Skipped)
+	}
+}
+
+// An older pack that names its own service and has a need no runtime realm provides still gets the edge to its
+// own service; the unmet need is reported.
+func TestWiringNeedsEdgesKeepAnOwnServiceWhenANeedIsUnmet(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "p")
+	if err := os.CopyFS(dir, os.DirFS(fixture)); err != nil {
+		t.Fatal(err)
+	}
+	ps := map[string]*schema.Pack{
+		"helheim-go":     {Name: "helheim-go", Needs: []string{"s3"}, Services: map[string]schema.PackService{"postgres": {}}},
+		"midgard-react":  {Name: "midgard-react"},
+		"niflheim-local": {Name: "niflheim-local"},
+	}
+	res, err := Wiring(dir, ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := find(res.Edges, "api", "needs", "service:postgres"); e == nil || e.Source != "realm:helheim-go/pack.yaml" {
+		t.Errorf("api -needs-> service:postgres is %+v; want the pack's own service", e)
+	}
+	if !slices.ContainsFunc(res.Skipped, func(s string) bool { return strings.Contains(s, "the realm helheim-go needs s3") }) {
+		t.Errorf("skipped = %v; want the unmet need reported", res.Skipped)
 	}
 }

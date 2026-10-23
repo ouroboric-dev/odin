@@ -108,7 +108,12 @@ func TestSandboxBuildAllBuildsEachStackOnceAndSkipsRealmsWithNone(t *testing.T) 
 func TestSandboxBuildNeedsARealmOrAllAndAStoreForNames(t *testing.T) {
 	stubEngine(t)
 	store, config := realmsStore(t)
-	_ = store
+	if err := os.MkdirAll(filepath.Join(store, "bare"), 0o755); err != nil { // no stack and no service
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "bare", "pack.yaml"), []byte("name: bare\nversion: 0.1.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	_, noStore := project(t, "script.yaml", "")
 	noStore = withSandbox(t, noStore)
 	for name, args := range map[string][]string{
@@ -117,7 +122,7 @@ func TestSandboxBuildNeedsARealmOrAllAndAStoreForNames(t *testing.T) {
 		"a name the store lacks":      {"sandbox", "build", "--config", config, "--realm", "nowhere"},
 		"a name with no store":        {"sandbox", "build", "--config", noStore, "--realm", "midgard-react"},
 		"all with no store":           {"sandbox", "build", "--config", noStore, "--all"},
-		"a named realm with no stack": {"sandbox", "build", "--config", config, "--realm", "asgard"},
+		"a named realm with no stack": {"sandbox", "build", "--config", config, "--realm", "bare"},
 	} {
 		if code, _, _ := ygg(t, args...); code != ExitRefused {
 			t.Errorf("%s: exit %d, want %d", name, code, ExitRefused)

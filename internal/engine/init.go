@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -42,7 +43,7 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	}
 	// The realms are loaded and the leaves file is checked against them before the run takes the realms
 	// or anything is created.
-	set, err := r.PlanRealms(spec.Pins())
+	set, runtime, leafRealms, err := planLeafRealms(r, spec)
 	if err != nil {
 		return &nodeFailure{err}
 	}
@@ -50,18 +51,24 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 		return &nodeFailure{err}
 	}
 	// Acceptance checks run over the leaves' realms, so a move that asks for one needs a realm of the leaves
-	// to define it, and a stack to run it on, before any leaf is created (change voluspa).
-	var leafRealms []*realm.Realm
-	for _, p := range spec.Paths() {
-		leafRealms = append(leafRealms, set.Realms[spec.Leaves[p].Realm])
-	}
+	// to define it, and a stack to run it on, before any leaf is created (change voluspa). The needs of the
+	// leaves' realms need a runtime realm that provides them (spec §6.1).
 	if err := r.Setup.CheckAcceptance(leafRealms); err != nil {
 		return &nodeFailure{err}
 	}
-	if err := r.AddRealms(spec.Pins()); err != nil {
+	if err := r.Setup.CheckNeedsWith(runtime, leafRealms); err != nil {
+		return &nodeFailure{err}
+	}
+	if err := r.AddRealms(leavesPins(spec)); err != nil {
 		return &nodeFailure{err}
 	}
 	if err := ignoreFactory(ctx, r.Project); err != nil {
+		return &nodeFailure{err}
+	}
+	if err := pinRuntime(ctx, r, spec); err != nil {
+		return &nodeFailure{err}
+	}
+	if err := writeProductStart(ctx, r.Project, runtime); err != nil {
 		return &nodeFailure{err}
 	}
 	var created, kept []string
@@ -80,39 +87,169 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	return r.Log(gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Result: r.State.Summaries[n.ID]})
 }
 
+// leavesPins are the realm pins of a leaves file: each leaf's, and its runtime pin.
+func leavesPins(spec *schema.Leaves) []schema.Pin {
+	pins := spec.Pins()
+	if p, ok := spec.RuntimePin(); ok {
+		pins = append(pins, p)
+	}
+	return pins
+}
+
+// planLeafRealms loads, and records nothing of, the realms a leaves file names: the set the run would have, the
+// runtime realm the project would have (the file's, else the one the umbrella records, or nil), and the realm of
+// each leaf of the file, in path order. A runtime pin other than the one the project records is refused: a
+// project pins one runtime realm, and once recorded a leaves file names it or none (spec §9.4).
+func planLeafRealms(r *run.Run, spec *schema.Leaves) (*realm.Set, *realm.Realm, []*realm.Realm, error) {
+	if pin, ok := spec.RuntimePin(); ok {
+		if have, recorded := r.Setup.Project.Umbrella.RuntimePin(); recorded && (have.Realm != pin.Realm || have.Version != pin.Version) {
+			return nil, nil, nil, fmt.Errorf("the leaves file pins the runtime realm %s %s, and the project records %s %s (runtime in %s): a project pins one runtime realm, so a leaves file names that pin or none",
+				pin.Realm, pin.Version, have.Realm, have.Version, schema.UmbrellaFile)
+		}
+	}
+	set, runtime, err := r.PlanRealms(leavesPins(spec))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var leaves []*realm.Realm
+	for _, p := range spec.Paths() {
+		leaves = append(leaves, set.Realms[spec.Leaves[p].Realm])
+	}
+	return set, runtime, leaves, nil
+}
+
+// pinRuntime records the runtime realm the leaves file pins in the project's umbrella.yaml (runtime and
+// runtime_version), when the project records none yet (spec §9.4). The commit that records the first leaf init
+// creates records the pin too; with no leaf to create, the pin gets a commit of its own. A pin the umbrella has
+// already adds nothing, so a resumed init adds no commit. The operator's own uncommitted edit of umbrella.yaml is
+// not Odin's to commit.
+func pinRuntime(ctx context.Context, r *run.Run, spec *schema.Leaves) error {
+	pin, ok := spec.RuntimePin()
+	u := r.Setup.Project.Umbrella
+	if !ok || u.Runtime != "" {
+		return nil
+	}
+	if st, err := git.Run(ctx, r.Project, "status", "--porcelain", "--", schema.UmbrellaFile); err != nil || st != "" {
+		return fmt.Errorf("%s has changes that are not committed, so init can't pin the runtime realm %s %s in it: commit or discard them first (%v)",
+			filepath.Join(r.Project, schema.UmbrellaFile), pin.Realm, pin.Version, err)
+	}
+	u.Runtime, u.RuntimeVersion = pin.Realm, pin.Version
+	for _, p := range spec.Paths() {
+		if _, has := u.Children[p]; !has {
+			return nil // the commit that creates this leaf records the pin
+		}
+	}
+	if err := u.Save(r.Project); err != nil {
+		return err
+	}
+	_, err := git.Run(ctx, r.Project, "commit", "-q", "-m", fmt.Sprintf("ygg init: pin the runtime realm %s %s", pin.Realm, pin.Version), "--", schema.UmbrellaFile)
+	return err
+}
+
 // factoryIgnore is the line the project's .gitignore needs, so the run folders under .factory/ do not
 // show in its status (backlog B-073).
 const factoryIgnore = ".factory/"
 
-// ignoreFactory makes the project's .gitignore name .factory/ and commits that. It creates the file
+// ignoreFactory makes the project's .gitignore name .factory/ and commits that.
+func ignoreFactory(ctx context.Context, project string) error {
+	return ignoreLine(ctx, project, factoryIgnore)
+}
+
+// ignoreLine makes the project's .gitignore hold the line and commits that. It creates the file
 // when the project has none, adds the line to one that lacks it, and leaves one that has it alone, so
 // a resumed init adds nothing twice. It refuses when the file has changes that are not committed.
-func ignoreFactory(ctx context.Context, project string) error {
+func ignoreLine(ctx context.Context, project, line string) error {
 	path := filepath.Join(project, ".gitignore")
 	// The operator's own uncommitted edit of .gitignore is not Odin's to commit.
-	if st, err := git.Run(ctx, project, "status", "--porcelain", "--", ".gitignore"); err != nil || st != "" {
-		return fmt.Errorf("%s has changes that are not committed, so init can't add %s to it: commit or discard them first (%v)", path, factoryIgnore, err)
+	st, err := git.Run(ctx, project, "status", "--porcelain", "--", ".gitignore")
+	if err != nil {
+		return err
+	}
+	if st != "" {
+		return fmt.Errorf("%s has changes that are not committed, so init can't add %s to it: commit or discard them first", path, line)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if strings.TrimSpace(line) == factoryIgnore {
+	for _, have := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(have) == line {
 			return nil
 		}
 	}
 	if len(b) > 0 && b[len(b)-1] != '\n' {
 		b = append(b, '\n')
 	}
-	if err := os.WriteFile(path, append(b, factoryIgnore+"\n"...), 0o644); err != nil {
+	if err := os.WriteFile(path, append(b, line+"\n"...), 0o644); err != nil {
 		return err
 	}
 	if _, err := git.Run(ctx, project, "add", "--", ".gitignore"); err != nil {
 		return err
 	}
-	_, err = git.Run(ctx, project, "commit", "-q", "-m", "ygg init: ignore "+factoryIgnore, "--", ".gitignore")
+	_, err = git.Run(ctx, project, "commit", "-q", "-m", "ygg init: ignore "+line, "--", ".gitignore")
 	return err
+}
+
+// productStartFile is where the project keeps the runtime realm's product start, at its root, and dataIgnore
+// is the line its .gitignore needs: the product's data folder is not source.
+const (
+	productStartFile = "start.sh"
+	dataIgnore       = ".data/"
+)
+
+// writeProductStart writes the runtime realm's product start script as start.sh at the project's root, mode
+// 0755, and commits it; it adds .data/ to the project's .gitignore. A project with no runtime realm, or whose
+// runtime realm names no product start, keeps its own start.sh. A start.sh that is already the realm's, with
+// the mode, adds no commit, so a resumed init adds nothing; one that differs gets the realm's in a new commit
+// that says so. The mode is set by hand, since a file Odin writes through the remote loses it (B-128).
+func writeProductStart(ctx context.Context, project string, runtime *realm.Realm) error {
+	if runtime == nil || runtime.Pack.Product == nil {
+		return nil
+	}
+	want, err := os.ReadFile(filepath.Join(runtime.Dir, runtime.Pack.Product.Start))
+	if err != nil {
+		return fmt.Errorf("the runtime realm %s names the product start %s, and its folder has no such file: %w", runtime.Name, runtime.Pack.Product.Start, err)
+	}
+	path := filepath.Join(project, productStartFile)
+	if err := noSymlinks(project, path); err != nil {
+		return fmt.Errorf("init can't write the runtime realm's product start: %w", err)
+	}
+	have, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	exists := err == nil
+	st, _ := os.Stat(path)
+	same := exists && bytes.Equal(have, want) && st.Mode().Perm() == 0o755
+	changes, err := git.Run(ctx, project, "status", "--porcelain", "--", productStartFile)
+	if err != nil {
+		return err
+	}
+	if same && changes == "" { // the realm's file, tracked as it is
+		return ignoreLine(ctx, project, dataIgnore)
+	}
+	if !same && changes != "" {
+		return fmt.Errorf("%s has changes that are not committed, so init can't write the runtime realm's product start to it: commit or discard them first", path)
+	}
+	if !same { // else the file is the realm's already, untracked or not committed as it is, and only needs its commit
+		if err := os.WriteFile(path, want, 0o755); err != nil {
+			return err
+		}
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		return err
+	}
+	msg := fmt.Sprintf("ygg init: write %s, the product start of the runtime realm %s %s", productStartFile, runtime.Name, runtime.Version)
+	if exists && !same {
+		msg = fmt.Sprintf("ygg init: replace %s with the product start of the runtime realm %s %s", productStartFile, runtime.Name, runtime.Version)
+	}
+	if _, err := git.Run(ctx, project, "add", "--", productStartFile); err != nil {
+		return err
+	}
+	if _, err := git.Run(ctx, project, "commit", "-q", "-m", msg, "--", productStartFile); err != nil {
+		return err
+	}
+	return ignoreLine(ctx, project, dataIgnore)
 }
 
 // maxLeavesFile is the biggest leaves file Odin reads: a few leaves, each a few lines.

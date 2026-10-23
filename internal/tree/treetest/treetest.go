@@ -24,6 +24,7 @@ type Node struct {
 	Plain      []string        // submodules that are not nodes, such as shared assets an umbrella vendors
 	Pin        Pin             // a leaf's realm leaf, and its version
 	GraphPin   Pin             // an umbrella's graph pack and its version (Realm holds the graph's name)
+	RuntimePin Pin             // an umbrella's runtime realm and its version
 	Consumes   []string        // a leaf: the sibling leaves it calls
 }
 
@@ -85,7 +86,7 @@ func build(t *testing.T, ctx context.Context, remotes, name string, n Node, root
 		write(t, filepath.Join(dir, "README.md"), "# "+name+"\n")
 	} else {
 		u := schema.Umbrella{Root: root, Owner: n.Owner, Visibility: n.Visibility, Graph: n.GraphPin.Realm, GraphVersion: n.GraphPin.Version,
-			Children: map[string]schema.Child{}}
+			Runtime: n.RuntimePin.Realm, RuntimeVersion: n.RuntimePin.Version, Children: map[string]schema.Child{}}
 		for path, c := range n.Children {
 			kind := schema.ChildUmbrella
 			if c.Leaf {

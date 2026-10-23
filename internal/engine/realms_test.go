@@ -27,6 +27,7 @@ type realmsSetup struct {
 	mode, nodes, script, roles, budget string
 	realms                             []realmFiles
 	leaves                             map[string]string
+	runtime                            string // the realm the project pins as its runtime realm, at its version; "" pins none
 	hooks                              run.Hooks
 	project                            *string              // when set, tryRealms stores the project's folder here, so a test can look at it after a refused Start
 	sandbox                            *sandboxfake.Sandbox // when set, the config has a sandbox section and the fake runs the leaves' commands
@@ -79,6 +80,9 @@ func tryRealms(t *testing.T, o realmsSetup) (*run.Run, error) {
 			pin = treetest.Pin{Realm: name, Version: version[name]}
 		}
 		root.Children[path] = treetest.Node{Owner: "ouroboric-dev", Visibility: "private", Leaf: true, Pin: pin}
+	}
+	if o.runtime != "" {
+		root.RuntimePin = treetest.Pin{Realm: o.runtime, Version: version[o.runtime]}
 	}
 	project := treetest.Build(t, root)
 	if o.project != nil {

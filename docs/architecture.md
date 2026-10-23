@@ -28,6 +28,20 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   a run could read, and a resume refuses a pack or a realm that changed. A run of schema `ygg.run/v2`,
   which a realm led, is refused by `resume` and `status`; `ygg doctor` reports it as a WARN, and its
   folder can go. A pack or realm that is a subfolder of a repo is hashed from its committed files.
+- Loads the project's runtime realm (change gallery-runtime, spec §9.4): a realm with no leaf that names
+  services and the needs they provide (`provides`), pinned once per project as `runtime` and
+  `runtime_version` in `umbrella.yaml`. The spec stage names it under `runtime` in `docs/leaves.yaml`, and
+  `init` loads it and records the pin in the commit that records the first leaf it creates (or in a
+  commit of its own when every leaf is there); a later leaves file names the same pin or none. A build
+  realm's pack lists the services its leaves need (`needs`: `postgres`, `s3`). A need with no provider, or
+  any need in a project with no runtime realm, stops the run before any leaf is created or any leaf
+  sandbox starts (`run.Setup.CheckNeeds`, with the message of `services.Provider`, where acceptance is
+  checked: at prepare and in `init`); the `tasks` node that reads the leaves file (`ready`) checks it too,
+  and fails without going back to the planner. The message names the need, the realm, and `runtime` in `docs/leaves.yaml`.
+  A runtime realm's pack may name a product start (`product.start`, a file of the realm). `init` then writes
+  it as `start.sh` at the project's root, mode 0755, in a commit of its own, and adds `.data/` to the
+  project's `.gitignore`; a `start.sh` that differs is replaced in a new commit, one that matches adds none,
+  and a project with no product start keeps its own `start.sh`.
 - Runs the stages before the code: a scratch agent works in a workspace of its own (the brief, copies
   of what it reads, an `out/` folder); `publish` copies its documents into the project and commits them,
   after checking they are documents and hold no secret; `tasks` reads `tasks.md`, applies the Definition
@@ -50,17 +64,21 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve` accepts the
   implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
   implementer's evidence and the check run.
-- Starts each leaf's sandbox on its realm's stack, with the services of its realm and of the leaves it
-  consumes (spec §6.1, §9.2). A realm's stack is an image pinned by digest or one that `ygg sandbox build`
-  builds from the realm's own build context (change realm-content); the tag is a hash of the context.
+- Starts each leaf's sandbox on its realm's stack, with the services `services.For` gives the leaf (spec
+  §6.1, §9.2, §9.4): for its realm and the realm of each leaf it consumes, the runtime realm's provider of
+  each need, under the name it has in the runtime realm's pack, and the services an older pack names itself.
+  `For` takes the umbrella and a loader of realms and reads no run's state, so a command with no run
+  can use it too, as `ygg deps bump` does. The wiring's `needs` edges come from it too. `ygg sandbox build`
+  (`--all`, or `--realm` for a realm that names services) pulls the service images of a realm with no stack,
+  the runtime realm's. A realm's stack is an image pinned by digest or one that `ygg sandbox build` builds
+  from the realm's own build context (change realm-content); the tag is a hash of the context.
   `ygg sandbox build` builds each stack with the factory layer on top of it.
 - Runs a pointer move's acceptance checks, when the run has a sandbox, in a sandbox that holds a snapshot
   of the project: the committed files of the umbrella and of each leaf, at the commits they are on, in a
   plain folder with no git directory. Each leaf realm that defines the check runs it, in realm-name
-  order, on its acceptance stack and with the services of every leaf's realm, in a snapshot of its own at
-  `snapshot/<node>/<realm>`; the first failure is the move's, and a project where no realm has the check is
-  refused. What a leaf's working copy holds beyond its
-  commits never reaches it.
+  order, on its acceptance stack and with the services `services.For` gives every leaf of the project, in
+  a snapshot of its own at `snapshot/<node>/<realm>`; the first failure is the move's, and a project where
+  no realm has the check is refused. What a leaf's working copy holds beyond its commits never reaches it.
 - Reads the design-conformance verdict (`out/conformance.json` of a scratch reviewer that reviews another
   scratch agent's output, which it finds as `reviewed/`) and gives it to the spec gate: a deviation stops the
   gate in every mode, with the proposed amendment in the gate file; a verdict that cannot be read is asked

@@ -21,6 +21,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/lock"
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/run"
+	"github.com/ouroboric-dev/odin/internal/services"
 	"github.com/ouroboric-dev/odin/internal/tree"
 )
 
@@ -174,9 +175,12 @@ func (c *command) deps(args []string) int {
 type depsPlace struct {
 	parent, leaf tree.Node
 	realm        *realm.Realm
+	services     []gungnir.Service // what services.For gives the leaf; none when factory.yaml has no sandbox section
 }
 
-// depsProduct finds the leaf dir names in the project, and the realm the project pins for it.
+// depsProduct finds the leaf dir names in the project, the realm the project pins for it, and, when factory.yaml
+// has a sandbox section, the services its sandbox starts: the same services.For gives a run's sandbox, from the
+// realms the umbrella pins. A need with no provider is an error here, before any sandbox starts.
 func (c *command) depsProduct(cfg *schema.Factory, root, projectPath string, project tree.Node, dir string) (deps.Product, depsPlace, error) {
 	abs := dir
 	if !filepath.IsAbs(dir) { // a relative path is from the project, so repos/api works from anywhere
@@ -195,7 +199,8 @@ func (c *command) depsProduct(cfg *schema.Factory, root, projectPath string, pro
 	if name == "" || cfg.Realms == nil {
 		return deps.Product{}, depsPlace{}, fmt.Errorf("%s pins no realm, or factory.yaml has no realms section: the bump cannot tell which checks to run", rel)
 	}
-	rdir, err := (&realm.Store{Dir: cfg.Realms.Dir, Kind: "realm"}).Find(name)
+	store := &realm.Store{Dir: cfg.Realms.Dir, Kind: "realm"}
+	rdir, err := store.Find(name)
 	if err != nil {
 		return deps.Product{}, depsPlace{}, err
 	}
@@ -217,8 +222,61 @@ func (c *command) depsProduct(cfg *schema.Factory, root, projectPath string, pro
 	if dirty != "" {
 		return deps.Product{}, depsPlace{}, fmt.Errorf("%s has uncommitted changes in its manifest or lock file; commit or stash them first, so that git is the way back:\n%s", rel, dirty)
 	}
+	var svcs []gungnir.Service
+	if cfg.Sandbox != nil {
+		if svcs, err = services.For(project.Umbrella, []string{rel}, depsLoader{u: project.Umbrella, store: store, leaf: r, repo: rel}); err != nil {
+			return deps.Product{}, depsPlace{}, fmt.Errorf("%s: %w", rel, err)
+		}
+	}
 	p := deps.Product{Name: rel, Dir: ns[len(ns)-1].Dir, Realm: r.Name, Checks: r.Pack.Checks}
-	return p, depsPlace{parent: ns[len(ns)-2], leaf: ns[len(ns)-1], realm: r}, nil
+	return p, depsPlace{parent: ns[len(ns)-2], leaf: ns[len(ns)-1], realm: r, services: svcs}, nil
+}
+
+// depsLoader is the services.Loader of ygg deps: the realms the project's umbrella pins, found in the realm
+// store. leaf is the realm already loaded for the product at repo.
+type depsLoader struct {
+	u     *schema.Umbrella
+	store *realm.Store
+	leaf  *realm.Realm
+	repo  string
+}
+
+func (l depsLoader) Leaf(repo string) (*realm.Realm, error) {
+	c := l.u.Children[repo]
+	if repo == l.repo {
+		return l.checked(l.leaf, repo, c.RealmVersion)
+	}
+	return l.load(c.Realm, c.RealmVersion, repo, "the leaf "+repo)
+}
+
+func (l depsLoader) Runtime() (*realm.Realm, error) {
+	if l.u.Runtime == "" {
+		return nil, nil
+	}
+	return l.load(l.u.Runtime, l.u.RuntimeVersion, "runtime", "the project")
+}
+
+func (l depsLoader) load(name, version, where, whose string) (*realm.Realm, error) {
+	if name == "" {
+		return nil, fmt.Errorf("%s pins no realm", whose)
+	}
+	dir, err := l.store.Find(name)
+	if err != nil {
+		return nil, err
+	}
+	r, err := realm.Load(dir)
+	if err != nil {
+		return nil, err
+	}
+	return l.checked(r, where, version)
+}
+
+// checked refuses a realm of another version than the pin at where, as a run does.
+func (l depsLoader) checked(r *realm.Realm, where, version string) (*realm.Realm, error) {
+	if version != "" && r.Version != version {
+		return nil, fmt.Errorf("the realm store holds %s %s, but %s pins %s", r.Name, r.Version, where, version)
+	}
+	return r, nil
 }
 
 // depsOpener runs a product's commands in its sandbox, or on the host when factory.yaml has no sandbox.
@@ -246,7 +304,7 @@ func (o *depsOpener) Open(ctx context.Context, p deps.Product) (gungnir.Runner, 
 		return nil, nil, fmt.Errorf("the realm %s of %s names no sandbox stack in its pack.yaml, and factory.yaml has a sandbox section", pl.realm.Name, p.Name)
 	}
 	env, err := o.sb.Up(ctx, gungnir.SandboxSpec{Run: o.id, Name: p.Name, Parent: pl.parent.Dir, Leaf: pl.leaf.Dir, GitDir: pl.leaf.GitDir,
-		Egress: pl.realm.Pack.Sandbox.Egress, Stack: pl.realm.Stack, Services: pl.realm.Pack.ServiceList()})
+		Egress: pl.realm.Pack.Sandbox.Egress, Stack: pl.realm.Stack, Services: pl.services})
 	if err != nil {
 		return nil, nil, err
 	}

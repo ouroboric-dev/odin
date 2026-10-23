@@ -9,4 +9,4 @@ questions:
   - { id: a-chi-bump-reaches, kind: reached-by, about: "go:github.com/go-chi/chi/v5", answer: [api, web, worker] }
   - { id: the-contract-reaches-leaves, kind: contract-readers, about: api/internal/api.openapi.yaml, answer: [web, worker] }
   - { id: which-react-does-web-pin, kind: pin, about: web, arg: "npm:react", answer: ["19.3.0"] }
-  - { id: what-does-the-api-need, kind: services, about: api, answer: [postgres, seaweedfs] }
+  - { id: what-does-the-api-need, kind: services, about: api, answer: [postgres, s3] }

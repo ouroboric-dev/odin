@@ -1,8 +1,8 @@
 package run
 
 import (
+	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -15,6 +15,7 @@ import (
 	"github.com/ouroboric-dev/havamal"
 	"github.com/ouroboric-dev/odin/internal/agents"
 	"github.com/ouroboric-dev/odin/internal/realm"
+	"github.com/ouroboric-dev/odin/internal/services"
 )
 
 // SandboxSetup is what Prepare works out for a run whose leaves run in sandboxes (spec §6): where
@@ -28,8 +29,10 @@ type SandboxSetup struct {
 	Hosts  []string // the model APIs of the roles the graph uses: every sandbox of the run opens them, and a scratch session opens nothing else
 }
 
-// prepareSandbox sets up the sandbox of a run, and refuses a graph that would run outside it.
-func (s *Setup) prepareSandbox() error {
+// prepareSandbox sets up the sandbox of a run, and refuses a graph that would run outside it. With initAhead, a
+// need with no provider is init's to refuse: the runtime realm it pins may provide it, and it refuses before
+// any leaf sandbox starts.
+func (s *Setup) prepareSandbox(initAhead bool) error {
 	if s.Config.Sandbox == nil {
 		return nil
 	}
@@ -52,7 +55,8 @@ func (s *Setup) prepareSandbox() error {
 	// A leaf of another realm starts on that realm's stack, so every leaf of the run must have one
 	// before anything starts, not when its sandbox comes up.
 	for _, p := range s.Leaves() {
-		if _, _, _, err := s.SandboxFor(p); err != nil {
+		var unmet *services.Unmet // with init ahead, an unmet need is init's to refuse: it may pin the provider (T07)
+		if _, _, _, err := s.SandboxFor(p); err != nil && !(initAhead && errors.As(err, &unmet)) {
 			return err
 		}
 	}
@@ -66,9 +70,10 @@ func sortedUnique(in []string) []string {
 }
 
 // SandboxFor says what the sandbox of the leaf at repo starts: the stack layer and the registries of the
-// realm that provides the leaf, and the services of that realm and of each leaf it consumes (spec §6.1,
-// §9.2, change realm-leaf-naming). The model APIs of the run's roles are open in every sandbox.
-func (s *Setup) SandboxFor(repo string) (stack string, egress []string, services []gungnir.Service, err error) {
+// realm that provides the leaf, and the services services.For gives the leaf: the runtime realm's provider of
+// each need of that realm and of the realm of each leaf it consumes (spec §6.1, §9.2, §9.4, change
+// realm-leaf-naming). The model APIs of the run's roles are open in every sandbox.
+func (s *Setup) SandboxFor(repo string) (stack string, egress []string, svcs []gungnir.Service, err error) {
 	r, err := s.RealmOf(repo)
 	if err != nil {
 		return "", nil, nil, err
@@ -76,50 +81,17 @@ func (s *Setup) SandboxFor(repo string) (stack string, egress []string, services
 	if r.Pack.Sandbox == nil || r.Stack == "" {
 		return "", nil, nil, fmt.Errorf("the leaf %s is provided by the realm %s, which names no sandbox stack in its pack.yaml, and %s has a sandbox section", repo, r.Name, s.ConfigPath)
 	}
-	var set serviceSet
-	if err := set.add(repo, r); err != nil {
+	if svcs, err = services.For(s.Project.Umbrella, []string{repo}, setupLoader{s}); err != nil {
 		return "", nil, nil, err
 	}
-	if u := s.Project.Umbrella; u != nil {
-		for _, c := range u.Children[repo].Consumes {
-			cr, err := s.RealmOf(c)
-			if err != nil {
-				return "", nil, nil, err
-			}
-			if err := set.add(repo, cr); err != nil {
-				return "", nil, nil, err
-			}
-		}
-	}
-	services = set.list
-	slices.SortFunc(services, func(a, b gungnir.Service) int { return strings.Compare(a.Name, b.Name) })
-	return r.Stack, sortedUnique(slices.Concat(r.Pack.Sandbox.Egress, s.Sandbox.Hosts)), services, nil
+	return r.Stack, sortedUnique(slices.Concat(r.Pack.Sandbox.Egress, s.Sandbox.Hosts)), svcs, nil
 }
 
-// serviceSet collects the services of several realms for one sandbox. Two realms may offer the same service
-// only if they offer it exactly alike.
-type serviceSet struct {
-	list   []gungnir.Service
-	owners map[string]string // service name: the realm that offers it
-}
+// setupLoader is the services.Loader of a run: the realms it loaded.
+type setupLoader struct{ s *Setup }
 
-// add adds the services of realm from to the sandbox of where (a leaf, or the snapshot).
-func (ss *serviceSet) add(where string, from *realm.Realm) error {
-	if ss.owners == nil {
-		ss.owners = map[string]string{}
-	}
-	for _, v := range from.Pack.ServiceList() {
-		i := slices.IndexFunc(ss.list, func(x gungnir.Service) bool { return x.Name == v.Name })
-		switch {
-		case i < 0:
-			ss.list = append(ss.list, v)
-			ss.owners[v.Name] = from.Name
-		case !sameService(ss.list[i], v):
-			return fmt.Errorf("the sandbox of %s would start two different services named %s: the realm %s offers one and the realm %s another", where, v.Name, ss.owners[v.Name], from.Name)
-		}
-	}
-	return nil
-}
+func (l setupLoader) Leaf(repo string) (*realm.Realm, error) { return l.s.RealmOf(repo) }
+func (l setupLoader) Runtime() (*realm.Realm, error)         { return l.s.Runtime, nil }
 
 // projectLeaves are the leaves the sandbox of a snapshot holds: those the run works in and those the
 // project's umbrella records, sorted.
@@ -210,10 +182,10 @@ func (s *Setup) CheckAcceptance(extra []*realm.Realm) error {
 }
 
 // SnapshotSandbox says what the sandbox that holds a snapshot of the project starts, for the acceptance
-// checks of realm rl (change voluspa): rl's acceptance stack, the services of the realm of every leaf of
-// the project, since the checks run the whole product, and the registries of those realms. Never wider
-// than the leaves' own realms give.
-func (s *Setup) SnapshotSandbox(rl *realm.Realm) (stack string, egress []string, services []gungnir.Service, err error) {
+// checks of realm rl (change voluspa): rl's acceptance stack, the services services.For gives every leaf of
+// the project, since the checks run the whole product, and the registries of those leaves' realms. Never
+// wider than the leaves' realms and the runtime realm give.
+func (s *Setup) SnapshotSandbox(rl *realm.Realm) (stack string, egress []string, svcs []gungnir.Service, err error) {
 	if rl.Acceptance == "" {
 		return "", nil, nil, fmt.Errorf("the realm %s names no acceptance stack, so there is no sandbox for a snapshot of the project (sandbox.acceptance in its pack.yaml)", rl.Name)
 	}
@@ -221,21 +193,41 @@ func (s *Setup) SnapshotSandbox(rl *realm.Realm) (stack string, egress []string,
 	if err != nil {
 		return "", nil, nil, err
 	}
-	var set serviceSet
 	for _, r := range leaves {
-		if err := set.add("the snapshot", r); err != nil {
-			return "", nil, nil, err
-		}
 		if r.Pack.Sandbox != nil {
 			egress = append(egress, r.Pack.Sandbox.Egress...)
 		}
 	}
-	slices.SortFunc(set.list, func(a, b gungnir.Service) int { return strings.Compare(a.Name, b.Name) })
-	return rl.Acceptance, sortedUnique(egress), set.list, nil
+	if svcs, err = services.For(s.Project.Umbrella, sortedUnique(slices.Concat(s.projectLeaves(), s.Create)), setupLoader{s}); err != nil {
+		return "", nil, nil, fmt.Errorf("the snapshot of the project: %w", err)
+	}
+	return rl.Acceptance, sortedUnique(egress), svcs, nil
 }
 
-func sameService(a, b gungnir.Service) bool {
-	return a.Image == b.Image && maps.Equal(a.Env, b.Env) && slices.Equal(a.Ports, b.Ports) && slices.Equal(a.Command, b.Command)
+// CheckNeeds refuses, before any leaf is created or any leaf sandbox starts, a need of a realm of the project's
+// leaves that the project's runtime realm does not provide, or any need in a project that pins no runtime realm
+// (spec §6.1, §9.4). extra are the realms of the leaves init is about to create. Every unmet need is listed, on one line with the first problem leading, since a stage failure shows the first line only.
+func (s *Setup) CheckNeeds(extra []*realm.Realm) error { return s.CheckNeedsWith(s.Runtime, extra) }
+
+// CheckNeedsWith is CheckNeeds with runtime as the project's runtime realm: the one a leaves file pins, before
+// init records it. runtime is nil when there is none.
+func (s *Setup) CheckNeedsWith(runtime *realm.Realm, extra []*realm.Realm) error {
+	realms, err := s.leafRealms(extra)
+	if err != nil {
+		return err
+	}
+	var problems []string
+	for _, r := range realms {
+		for _, need := range r.Pack.Needs {
+			if _, err := services.Provider(runtime, r, need); err != nil {
+				problems = append(problems, err.Error())
+			}
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%s (no leaf is created and no leaf sandbox starts)", strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 // prepareSkills opens the libraries and records the skills the graph names (spec §5.1). A node that
