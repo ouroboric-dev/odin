@@ -93,6 +93,7 @@ func useSandboxReleaser(t *testing.T, r *Run) *sandboxReleaser {
 func TestReleaseRunsInTheAcceptanceSandbox(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "fake-key-of-the-test") // a credential in Odin's own environment
 	r, fake := releaseSandboxRun(t, true)
+	fakeToolchain(t)
 	if rel := useSandboxReleaser(t, r); rel == nil || rel.timeout != defaultReleaseTimeout {
 		t.Fatalf("SandboxReleaser() = %+v; want the acceptance sandbox's, with the default timeout when there is no grader section", rel)
 	}
@@ -115,15 +116,34 @@ func TestReleaseRunsInTheAcceptanceSandbox(t *testing.T) {
 		strings.Join(up.Egress, ",") != "proxy.golang.org,registry.npmjs.org,sum.golang.org" {
 		t.Errorf("the release sandbox's spec = %+v", up)
 	}
-	// release.sh ran in each leaf, with OUT and nothing else set, and nothing else ran: no agent session.
-	if len(fake.Execs) != 2 {
-		t.Fatalf("%d commands ran in the sandbox, want release.sh in each of the two leaves: %+v", len(fake.Execs), fake.Execs)
+	// No build needs a service, though the api leaf's realm has postgres and seaweedfs: the release sandbox
+	// starts none (the founder's decision, 2026-10-23), while the acceptance run's snapshot sandbox keeps them.
+	if len(up.Services) != 0 {
+		t.Errorf("the release sandbox starts services: %+v", up.Services)
+	}
+	if _, err := r.SnapshotRunner(ctx, "move", webRealm(t, r), nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fake.Ups); n != 2 || len(fake.Ups[1].Services) != 2 {
+		t.Errorf("the acceptance run's snapshot sandbox: %d ups, %+v", n, fake.Ups[n-1].Services)
+	}
+	if err := r.DownSandboxes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fake.Ups = fake.Ups[:1]
+	// In each leaf, the toolchain's versions, then release.sh, with OUT and nothing else set, and nothing
+	// else ran: no agent session.
+	if len(fake.Execs) != 4 {
+		t.Fatalf("%d commands ran in the sandbox, want two in each of the two leaves: %+v", len(fake.Execs), fake.Execs)
 	}
 	for i, leaf := range []string{"repos/api", "repos/app"} {
-		c := fake.Execs[i]
+		probe, c := fake.Execs[2*i], fake.Execs[2*i+1]
+		if probe.Argv[0] != "sh" || probe.Dir != leaf || len(probe.Env) != 0 {
+			t.Errorf("command %d = %+v; want the toolchain's versions, in %s, with no variable", 2*i, probe, leaf)
+		}
 		want := filepath.Join(up.Leaf, ".ygg", "release", leaf)
 		if !slices.Equal(c.Argv, []string{"./release.sh"}) || c.Dir != leaf || len(c.Env) != 1 || c.Env["OUT"] != want {
-			t.Errorf("command %d = %+v; want ./release.sh in %s with OUT=%s alone", i, c, leaf, want)
+			t.Errorf("command %d = %+v; want ./release.sh in %s with OUT=%s alone", 2*i+1, c, leaf, want)
 		}
 	}
 	for _, e := range events(t, r)[before:] {
@@ -156,7 +176,8 @@ func TestReleaseRunsInTheAcceptanceSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"repos/api", "building api", "a warning of api", "repos/app", "building app"} {
+	for _, want := range []string{"== repos/api: release.sh\ngo version go1.99.0 fake\nnode v99.0.0\n", "building api", "a warning of api",
+		"== repos/app: release.sh\ngo version go1.99.0 fake\nnode v99.0.0\n", "building app"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("release.log lacks %q:\n%s", want, b)
 		}
@@ -177,6 +198,19 @@ func TestReleaseRunsInTheAcceptanceSandbox(t *testing.T) {
 	if err := os.RemoveAll(dst); err != nil {
 		t.Errorf("the export cannot be removed: %v", err)
 	}
+}
+
+// fakeToolchain puts a go and a node that print made-up versions first on the PATH the stand-in sandbox
+// runs commands with.
+func fakeToolchain(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	for name, version := range map[string]string{"go": "go version go1.99.0 fake", "node": "v99.0.0"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\necho '"+version+"'\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 // assertOwnAndRemovable fails unless every entry under dir belongs to this user and every folder can be
@@ -277,6 +311,11 @@ func TestNoAcceptanceSandboxNoRelease(t *testing.T) {
 		t.Fatalf("SandboxReleaser() = %v, %v; want none for a project with no acceptance realm", rel, err)
 	}
 	useSandboxReleaser(t, r)
+	// The leaves ship a release.sh, so the missing release is said, not silent.
+	if note, err := r.NoReleaseNote(ctx); err != nil || !strings.HasPrefix(note, "no release: the project has no acceptance realm") ||
+		!strings.Contains(note, "repos/api, repos/app") {
+		t.Errorf("NoReleaseNote() = %q, %v", note, err)
+	}
 	dst := filepath.Join(r.GradeDir(), "app")
 	if err := r.ExportApp(ctx, dst); err != nil {
 		t.Fatalf("ExportApp() = %v", err)
@@ -301,6 +340,9 @@ func TestNoAcceptanceSandboxNoRelease(t *testing.T) {
 func TestTheSandboxReleasersKeyNamesTheRealmAndItsImage(t *testing.T) {
 	r, _ := releaseSandboxRun(t, true)
 	rel := useSandboxReleaser(t, r)
+	if note, err := r.NoReleaseNote(ctx); err != nil || note != "" {
+		t.Errorf("with a releaser: NoReleaseNote() = %q, %v", note, err)
+	}
 	key := rel.Key()
 	for _, want := range []string{"midgard-react", "0.1.0", nodeStack, rel.realm.Hash} {
 		if !strings.Contains(key, want) {

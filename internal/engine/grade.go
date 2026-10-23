@@ -23,6 +23,7 @@ import (
 type Graded struct {
 	Score gungnir.Score
 	Path  string
+	Note  string // why the graded /app holds no release, when a leaf ships a release.sh (run.NoReleaseNote); else ""
 }
 
 // GradeFailed is a grading run that could not finish: the container did not run or timed out, the
@@ -50,6 +51,9 @@ func runGrade(ctx context.Context, r *run.Run, n schema.Node) error {
 	switch {
 	case err == nil:
 		ev.Result = fmt.Sprintf("graded %s: reward %.4f (see score.json in the run folder)", g.Score.Task, g.Score.Reward)
+		if g.Note != "" {
+			ev.Result += "; " + g.Note
+		}
 		if err := r.Log(ev); err != nil {
 			return err
 		}
@@ -116,16 +120,20 @@ func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 	if err != nil {
 		return nil, refused(r, taskID, t.Suite, gungnir.GradeBadTask, "%v", err)
 	}
-	if err := r.Log(gungnir.Event{Name: gungnir.EventGradeStarted, Task: t.ID, Suite: t.Suite, BriefSHA256: t.BriefSHA256, Image: image}); err != nil {
-		return nil, err
-	}
-	started := time.Now().UTC()
-	app, logs := filepath.Join(r.GradeDir(), "app"), filepath.Join(r.GradeDir(), "logs-"+started.Format("20060102-150405.000000"))
 	if r.Releaser == nil { // a test's stand-in stays; otherwise the releases are built in the acceptance sandbox
 		if r.Releaser, err = r.SandboxReleaser(); err != nil {
 			return nil, &GradeFailed{err}
 		}
 	}
+	note, err := r.NoReleaseNote(ctx) // a leaf ships a release.sh, and nothing can build it
+	if err != nil {
+		return nil, &GradeFailed{err}
+	}
+	if err := r.Log(gungnir.Event{Name: gungnir.EventGradeStarted, Task: t.ID, Suite: t.Suite, BriefSHA256: t.BriefSHA256, Image: image, Note: note}); err != nil {
+		return nil, err
+	}
+	started := time.Now().UTC()
+	app, logs := filepath.Join(r.GradeDir(), "app"), filepath.Join(r.GradeDir(), "logs-"+started.Format("20060102-150405.000000"))
 	if err := r.ExportApp(ctx, app); err != nil {
 		return nil, &GradeFailed{err}
 	}
@@ -176,7 +184,7 @@ func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 		FailToPass: fmt.Sprintf("%d/%d", s.FailToPass.Passed, s.FailToPass.Total), PassToPass: fmt.Sprintf("%d/%d", s.PassToPass.Passed, s.PassToPass.Total)}); err != nil {
 		return nil, err
 	}
-	return &Graded{Score: s, Path: path}, r.Save()
+	return &Graded{Score: s, Path: path, Note: note}, r.Save()
 }
 
 // scoreKey is the key of one grading attempt: 16 random bytes as 32 lowercase hex characters.

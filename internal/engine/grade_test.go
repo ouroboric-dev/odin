@@ -372,6 +372,24 @@ func TestTheGraderNeverStartsBesideTheReleaseSandbox(t *testing.T) {
 	}
 }
 
+// A leaf ships a release.sh and the project has no acceptance realm: the grade goes on without a release,
+// and says so in the ledger and to the operator.
+func TestAGradeWithNoAcceptanceRealmSaysThereIsNoRelease(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
+	commitRelease(t, g.r)
+	graded, err := Grade(context.Background(), g.r, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "no release: the project has no acceptance realm"
+	if !strings.HasPrefix(graded.Note, want) || !strings.Contains(graded.Note, "repos/app") {
+		t.Errorf("Graded.Note = %q", graded.Note)
+	}
+	if text := ledgerText(t, g.r); !strings.Contains(text, `"event":"grade_started"`) || !strings.Contains(text, want) {
+		t.Errorf("the ledger lacks the note:\n%s", text)
+	}
+}
+
 // commitRelease commits an executable release.sh to repos/app and records it in the project.
 func commitRelease(t *testing.T, r *run.Run) {
 	t.Helper()

@@ -222,8 +222,17 @@ func (c *command) exportProduct(project, dst string) error {
 		return err
 	}
 	defer r.Close()
-	if r.Releaser, err = r.SandboxReleaser(); err != nil {
+	if r.Releaser == nil {
+		if r.Releaser, err = r.SandboxReleaser(); err != nil {
+			return err
+		}
+	}
+	note, err := r.NoReleaseNote(c.ctx)
+	if err != nil {
 		return err
+	}
+	if note != "" {
+		fmt.Fprintf(c.err, "bridge: %s\n", note)
 	}
 	return r.ExportApp(c.ctx, dst)
 }

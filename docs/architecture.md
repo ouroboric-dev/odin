@@ -120,13 +120,19 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   release is never committed to the project or a leaf. `ygg grade` and `ygg bridge` build it in the project's
   acceptance sandbox: the acceptance stack of the realm that defines an acceptance check the graph runs
   (midgard-react's, which holds Node and Go), over a snapshot of the exported commits (`snapshot/release/<realm>`
-  in the run folder), with the registries of every leaf's realm, no agent and no secret. Odin runs each leaf's
-  `release.sh` in the leaf with `OUT` set to an empty folder of the snapshot and no other variable, then stops the
-  sandbox, whether the release was made or not, so the grader never starts beside it. The whole release has the
+  in the run folder), with the registries of every leaf's realm, no agent, no secret and no service: no build
+  needs Postgres or S3, and a sandbox with services did not stop on the real engine. Odin runs each leaf's
+  `release.sh` in the leaf with `OUT` set to an empty folder of the snapshot and no other variable, after writing
+  the toolchain's versions (`go version`, `node --version`, each when the sandbox has it) to the log, then stops
+  the sandbox, whether the release was made or not, so the grader never starts beside it. One sandbox builds
+  every leaf's release, so a leaf's `release.sh` can write into another leaf's release folder: a known cost of
+  sharing the sandbox, which the bounds and the file-type checks do not catch. The whole release has the
   grader's timeout (`grader.timeout`; 20 minutes with no grader section). Odin copies the release out itself, so
   every file of the export is the host user's, and gives the snapshot's folders back to the host user, so that a
   later export can empty them (B-139). A project with no acceptance realm, or a run with no sandbox, exports no
-  release. The copy is bounded on its own: 128 MiB a file and 512 MiB in all, with no symlink, device or other
+  release; when a leaf ships a `release.sh` all the same, `ygg grade` and `ygg bridge` print
+  `no release: the project has no acceptance realm …` to standard error, and the grade's `grade_started`
+  event carries it as its note. The copy is bounded on its own: 128 MiB a file and 512 MiB in all, with no symlink, device or other
   special file. A release that fails, times out or breaks a bound fails the export, which is left empty, and so
   the grade (`GradeFailed`). The build's output, and the failure after it, go to `release.log` (`0600`, at most 4
   MiB) beside `grade.log`. A release is kept in the run folder (`release/`) under the commits it was built from

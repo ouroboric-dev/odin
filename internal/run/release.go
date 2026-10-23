@@ -79,35 +79,19 @@ func (r *Run) addRelease(ctx context.Context, dst string, sources []snapshot.Sou
 	if r.Releaser == nil {
 		return nil
 	}
-	spec := ReleaseSpec{Snapshot: dst, Revs: map[string]string{}}
-	key := sha256.New()
-	fmt.Fprintf(key, "releaser %q\n", r.Releaser.Key())
-	for _, s := range sources {
-		rev := s.Rev
-		if rev == "" {
-			out, err := s.Repo.Run(ctx, "rev-parse", "HEAD")
-			if err != nil {
-				return err
-			}
-			rev = strings.TrimSpace(out)
-		}
-		fmt.Fprintf(key, "%s %s\n", s.Rel, rev)
-		if s.Rel == "." {
-			continue
-		}
-		spec.Revs[filepath.ToSlash(s.Rel)] = rev
-		out, err := s.Repo.Run(ctx, "ls-tree", rev, "--", releaseScript)
-		if err != nil {
-			return err
-		}
-		if strings.HasPrefix(out, "100755 ") {
-			spec.Leaves = append(spec.Leaves, filepath.ToSlash(s.Rel))
-		}
+	spec, commits, err := releaseSpecOf(ctx, sources)
+	if err != nil {
+		return err
 	}
+	spec.Snapshot = dst
 	if len(spec.Leaves) == 0 {
 		return nil
 	}
-	slices.Sort(spec.Leaves)
+	key := sha256.New()
+	fmt.Fprintf(key, "releaser %q\n", r.Releaser.Key())
+	for _, c := range commits {
+		fmt.Fprintln(key, c)
+	}
 	kept := filepath.Join(r.releaseDir(), hex.EncodeToString(key.Sum(nil))[:32])
 	if _, err := os.Stat(kept); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -123,6 +107,59 @@ func (r *Run) addRelease(ctx context.Context, dst string, sources []snapshot.Sou
 		}
 	}
 	return nil
+}
+
+// releaseSpecOf reads the commit the export holds of each of sources, as "<path> <commit>" lines in the
+// order of sources, and the spec of their release: the commit of every leaf, and the leaves that ship an
+// executable release.sh at it, sorted.
+func releaseSpecOf(ctx context.Context, sources []snapshot.Source) (spec ReleaseSpec, commits []string, err error) {
+	spec.Revs = map[string]string{}
+	for _, s := range sources {
+		rev := s.Rev
+		if rev == "" {
+			out, err := s.Repo.Run(ctx, "rev-parse", "HEAD")
+			if err != nil {
+				return spec, nil, err
+			}
+			rev = strings.TrimSpace(out)
+		}
+		commits = append(commits, s.Rel+" "+rev)
+		if s.Rel == "." {
+			continue
+		}
+		spec.Revs[filepath.ToSlash(s.Rel)] = rev
+		out, err := s.Repo.Run(ctx, "ls-tree", rev, "--", releaseScript)
+		if err != nil {
+			return spec, nil, err
+		}
+		if strings.HasPrefix(out, "100755 ") {
+			spec.Leaves = append(spec.Leaves, filepath.ToSlash(s.Rel))
+		}
+	}
+	slices.Sort(spec.Leaves)
+	return spec, commits, nil
+}
+
+// NoReleaseNote says why the export holds no release when a leaf ships an executable release.sh and the
+// run has no releaser: "no release: the project has no acceptance realm; …". It is "" when there is a
+// releaser or no leaf ships a release.sh. Grade puts it in the ledger and both commands print it.
+func (r *Run) NoReleaseNote(ctx context.Context) (string, error) {
+	if r.Releaser != nil {
+		return "", nil
+	}
+	sources, err := r.snapshotSources(ctx, nil)
+	if err != nil {
+		return "", &SnapshotError{err}
+	}
+	spec, _, err := releaseSpecOf(ctx, sources)
+	if err != nil || len(spec.Leaves) == 0 {
+		return "", err
+	}
+	why := "the project has no acceptance realm"
+	if r.Sandbox == nil {
+		why = "the run has no sandbox"
+	}
+	return fmt.Sprintf("no release: %s, so the export holds no release of %s, which ship an executable release.sh", why, strings.Join(spec.Leaves, ", ")), nil
 }
 
 // maxReleaseLog is the most of a build's output release.log keeps.
@@ -202,8 +239,8 @@ const defaultReleaseTimeout = 20 * time.Minute
 const releaseNode = "release"
 
 // sandboxReleaser builds the releases in the project's acceptance sandbox (spec §11): the sandbox of the
-// acceptance realm's acceptance stack, over a snapshot of the exported commits, with no agent and no
-// secret. It runs each leaf's release.sh in the leaf, with OUT set to an empty folder of the snapshot and
+// acceptance realm's acceptance stack, over a snapshot of the exported commits, with no agent, no secret
+// and no service (the founder's decision, 2026-10-23: no build needs Postgres or S3). It runs each leaf's release.sh in the leaf, with OUT set to an empty folder of the snapshot and
 // nothing else, and stops the sandbox before it returns, whether the release was made or not, so that the
 // grader never starts beside it. Midgard-react's acceptance stack holds Node and the Go toolchain (it builds
 // the API leaf for the acceptance run), and the snapshot sandbox opens the registries of every leaf's
@@ -261,6 +298,12 @@ func (s *sandboxReleaser) Key() string {
 	return fmt.Sprintf("acceptance sandbox of %s %s (%s) on %s", s.realm.Name, s.realm.Version, s.realm.Hash, s.realm.Acceptance)
 }
 
+// toolchainScript prints, for release.log, the version of each toolchain a release.sh may build with, when
+// the sandbox has it. It always exits 0: a missing toolchain is release.sh's failure to report.
+const toolchainScript = `if command -v go >/dev/null 2>&1; then go version; fi
+if command -v node >/dev/null 2>&1; then echo "node $(node --version)"; fi
+true`
+
 func (s *sandboxReleaser) Build(ctx context.Context, spec ReleaseSpec) (dir string, err error) {
 	r := s.r
 	snap := filepath.Join(r.Dir, "snapshot", releaseNode, s.realm.Name)
@@ -280,7 +323,9 @@ func (s *sandboxReleaser) Build(ctx context.Context, spec ReleaseSpec) (dir stri
 		}
 		return err
 	}
-	runner, err := r.SnapshotRunner(bctx, releaseNode, s.realm, spec.Revs)
+	// No service: a build needs none, and a sandbox with services did not stop on the real engine (its
+	// Down failed on a running postgres container), which would refuse every grade with a release.
+	runner, err := r.snapshotRunner(bctx, releaseNode, s.realm, spec.Revs, false)
 	if err != nil {
 		return "", ended(err)
 	}
@@ -294,6 +339,10 @@ func (s *sandboxReleaser) Build(ctx context.Context, spec ReleaseSpec) (dir stri
 			return "", err
 		}
 		fmt.Fprintf(spec.Log, "== %s: release.sh\n", leaf)
+		if _, err := runner.Run(bctx, gungnir.Cmd{Argv: []string{"sh", "-c", toolchainScript}, Dir: filepath.FromSlash(leaf),
+			Stdout: spec.Log, Stderr: spec.Log}); err != nil {
+			return "", fmt.Errorf("%s: %w", leaf, ended(err))
+		}
 		res, err := runner.Run(bctx, gungnir.Cmd{Argv: []string{"./" + releaseScript}, Dir: filepath.FromSlash(leaf),
 			Env:    map[string]string{"OUT": path.Join(env.Workdir, ".ygg", "release", leaf)},
 			Stdout: spec.Log, Stderr: spec.Log})
