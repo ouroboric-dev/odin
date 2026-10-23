@@ -64,6 +64,15 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve` accepts the
   implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
   implementer's evidence and the check run.
+- Puts the task's diff in every task reviewer's prompt (change review-diff). A read-only reviewer has no shell, so
+  it cannot run `git diff`. Odin records the leaf's commit in the loop's record (`LoopRecord.Base`) when the loop
+  starts, keeps it across resumes (a state without it records the leaf's commit when the loop next runs), and
+  `loopSteps.Review` adds a section "The change" after the task block: the files with their line counts, then the
+  patch from the base to the leaf's commit. Host git computes it with hooks, external diff drivers and text
+  conversion off, so nothing in the leaf runs. The patch is filled greedily up to `maxChangeBytes` (200 KB): a file
+  that does not fit is left out whole and named, and later files that fit are shown. A binary file (a NUL byte) is
+  named, not shown. A diff that cannot be computed gives one line and a `loop_attempt` line `change not computed:`;
+  the review goes on. Scratch reviewers outside the loop do not get it.
 - Gives the note of a gate approval to every later session (spec §7.2, finding F1). `Approve` refuses a note
   with a control character (the rule of `ygg-proof-run.sh`) or a line or paragraph separator (U+2028, U+2029),
   and keeps a note that is not blank in `State.Decisions`, as `{gate, note}` in the order given, only when the
