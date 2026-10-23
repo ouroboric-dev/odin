@@ -448,7 +448,7 @@ func (s *Setup) collectRealms(extra []schema.Pin) (*realm.Set, *realm.Realm, err
 		}
 	}
 	if runtime != nil && runtime.Pack.Leaf != nil {
-		return nil, nil, fmt.Errorf("the project's runtime realm would be %s %s, which is a build realm (its pack.yaml names leaf): a runtime realm provides services and no leaf; pin one such as niflheim-local",
+		return nil, nil, fmt.Errorf("the project's runtime realm would be %s %s, which is a build realm (its pack.yaml names leaf): a runtime realm provides services and no leaf; pin a realm whose pack names provides",
 			runtime.Name, runtime.Version)
 	}
 	return set, runtime, nil

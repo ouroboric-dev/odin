@@ -204,7 +204,8 @@ func TestNeedsWithoutAProviderStop(t *testing.T) {
 
 	// A runtime pin in the umbrella that names a build realm (one with a leaf recipe) is refused.
 	build := treetest.Build(t, withRuntime(apiProject(), "helheim-toy", "0.1.0"))
-	if _, err := Start(ctx, Options{Project: build, Config: cfg, Graph: "midgard-react"}); err == nil || !strings.Contains(err.Error(), "helheim-toy") || !strings.Contains(err.Error(), "build realm") {
-		t.Errorf("a build realm as the runtime: Start() = %v", err)
+	if _, err := Start(ctx, Options{Project: build, Config: cfg, Graph: "midgard-react"}); err == nil || !strings.Contains(err.Error(), "helheim-toy") || !strings.Contains(err.Error(), "build realm") ||
+		!strings.Contains(err.Error(), "pin a realm whose pack names provides") || strings.Contains(err.Error(), "niflheim") {
+		t.Errorf("a build realm as the runtime: Start() = %v; want it to say what a runtime realm's pack names, and name no realm of its own", err)
 	}
 }

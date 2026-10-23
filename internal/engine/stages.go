@@ -37,7 +37,7 @@ func runTasks(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Log(gungnir.Event{Name: gungnir.EventNodeStarted, Node: n.ID, Attempt: attempt}); err != nil {
 		return err
 	}
-	fs, source, sum, refusal, err := readPlan(r, n)
+	fs, source, sum, spec, refusal, err := readPlan(r, n)
 	if err != nil {
 		return err
 	}
@@ -51,7 +51,7 @@ func runTasks(ctx context.Context, r *run.Run, n schema.Node) error {
 		}
 		return &nodeFailure{errors.New(refusal)}
 	}
-	if err := checkLeavesNeeds(r, n.Leaves); err != nil {
+	if err := checkLeavesNeeds(r, spec); err != nil {
 		if lerr := r.Log(gungnir.Event{Name: gungnir.EventNodeFailed, Node: n.ID, Attempt: attempt, Result: firstLine(err.Error())}); lerr != nil {
 			return lerr
 		}
@@ -70,11 +70,12 @@ func runTasks(ctx context.Context, r *run.Run, n schema.Node) error {
 }
 
 // readPlan finds the one tasks.md that n.From names, reads it, and applies the Definition of Ready. A plan
-// that can't be read or isn't ready gives a refusal, in words for the planner; err is Odin's own failure.
-func readPlan(r *run.Run, n schema.Node) (fs []schema.Feature, source, sum, refusal string, err error) {
+// that can't be read or isn't ready gives a refusal, in words for the planner; err is Odin's own failure. spec
+// is the leaves file the node points at, parsed, and nil when it points at none.
+func readPlan(r *run.Run, n schema.Node) (fs []schema.Feature, source, sum string, spec *schema.Leaves, refusal string, err error) {
 	matches, err := filepath.Glob(filepath.Join(r.Project, filepath.FromSlash(n.From)))
 	if err != nil {
-		return nil, "", "", fmt.Sprintf("tasks: %q is not a path pattern: %v", n.From, err), nil
+		return nil, "", "", nil, fmt.Sprintf("tasks: %q is not a path pattern: %v", n.From, err), nil
 	}
 	var files []string
 	for _, m := range matches {
@@ -85,56 +86,48 @@ func readPlan(r *run.Run, n schema.Node) (fs []schema.Feature, source, sum, refu
 	}
 	switch {
 	case len(files) == 0:
-		return nil, "", "", fmt.Sprintf("there is no tasks file at %s, so there is no plan to build. Write the plan's tasks.md there.", n.From), nil
+		return nil, "", "", nil, fmt.Sprintf("there is no tasks file at %s, so there is no plan to build. Write the plan's tasks.md there.", n.From), nil
 	case len(files) > 1:
-		return nil, "", "", fmt.Sprintf("%d files match %s, and a plan has exactly one tasks.md: keep one.", len(files), n.From), nil
+		return nil, "", "", nil, fmt.Sprintf("%d files match %s, and a plan has exactly one tasks.md: keep one.", len(files), n.From), nil
 	}
 	f, err := os.Open(files[0])
 	if err != nil {
-		return nil, "", "", "", err
+		return nil, "", "", nil, "", err
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, schema.MaxTasksFile+1))
 	if err != nil {
-		return nil, "", "", "", err
+		return nil, "", "", nil, "", err
 	}
 	source, err = filepath.Rel(r.Project, files[0])
 	if err != nil {
-		return nil, "", "", "", err
+		return nil, "", "", nil, "", err
 	}
 	source = filepath.ToSlash(source)
 	if fs, err = schema.ParseTasks(source, data); err != nil {
-		return nil, "", "", err.Error(), nil
+		return nil, "", "", nil, err.Error(), nil
 	}
-	leaves, refusal, err := planLeaves(r, n)
+	leaves, spec, refusal, err := planLeaves(r, n)
 	if err != nil || refusal != "" {
-		return nil, "", "", refusal, err
+		return nil, "", "", nil, refusal, err
 	}
 	if err := schema.CheckReady(fs, leaves); err != nil {
-		return nil, "", "", err.Error(), nil
+		return nil, "", "", nil, err.Error(), nil
 	}
 	if fs, err = schema.ReadyOrder(fs); err != nil {
-		return nil, "", "", err.Error(), nil
+		return nil, "", "", nil, err.Error(), nil
 	}
 	h := sha256.Sum256(data)
-	return fs, source, hex.EncodeToString(h[:]), "", nil
+	return fs, source, hex.EncodeToString(h[:]), spec, "", nil
 }
 
-// checkLeavesNeeds checks the needs of the realms of the leaves file at rel (none when rel is ""), with the
+// checkLeavesNeeds checks the needs of the realms of the leaves file spec (none when spec is nil), with the
 // runtime realm the file pins or the project records. The realms are loaded from the realm store as init loads
 // them, and nothing is recorded: init, after this node, takes them. Realms that can't be loaded, or pins that
 // disagree, are not this node's to refuse: init refuses them, with every problem, before it creates anything.
-func checkLeavesNeeds(r *run.Run, rel string) error {
-	if rel == "" {
+func checkLeavesNeeds(r *run.Run, spec *schema.Leaves) error {
+	if spec == nil {
 		return nil
-	}
-	data, err := readLeavesFile(r, rel)
-	if err != nil {
-		return fmt.Errorf("the leaves file %s can't be read: %w", rel, err)
-	}
-	spec, err := schema.ParseLeaves(rel, data)
-	if err != nil {
-		return err
 	}
 	_, runtime, leafRealms, err := planLeafRealms(r, spec)
 	if err != nil {
@@ -144,8 +137,9 @@ func checkLeavesNeeds(r *run.Run, rel string) error {
 }
 
 // planLeaves returns the leaves a task may work in: those the project has, and those the spec stage named
-// in the leaves file the node points at, which init has not created yet.
-func planLeaves(r *run.Run, n schema.Node) (leaves []string, refusal string, err error) {
+// in the leaves file the node points at, which init has not created yet. spec is that file, parsed: nil when
+// the node points at none.
+func planLeaves(r *run.Run, n schema.Node) (leaves []string, spec *schema.Leaves, refusal string, err error) {
 	leaves = []string{} // never nil: no leaf at all is a list a layer is checked against, not no check
 	if u := r.Setup.Project.Umbrella; u != nil {
 		for _, p := range u.Paths() {
@@ -157,16 +151,17 @@ func planLeaves(r *run.Run, n schema.Node) (leaves []string, refusal string, err
 	if n.Leaves != "" {
 		data, rerr := readLeavesFile(r, n.Leaves)
 		if rerr != nil {
-			return nil, fmt.Sprintf("the leaves file %s can't be read (%v), so the tasks' leaves can't be checked. The spec stage names the product's leaves there.", n.Leaves, rerr), nil
+			return nil, nil, fmt.Sprintf("the leaves file %s can't be read (%v), so the tasks' leaves can't be checked. The spec stage names the product's leaves there.", n.Leaves, rerr), nil
 		}
 		l, perr := schema.ParseLeaves(n.Leaves, data)
 		if perr != nil {
-			return nil, perr.Error(), nil
+			return nil, nil, perr.Error(), nil
 		}
 		leaves = append(leaves, l.Paths()...)
+		spec = l
 	}
 	slices.Sort(leaves)
-	return slices.Compact(leaves), "", nil
+	return slices.Compact(leaves), spec, "", nil
 }
 
 // writeFeatures writes features.json from the run's record of the tasks.

@@ -282,7 +282,7 @@ func TestTheLeavesFileIsARegularFileWithinTheLimitForInitAndForTheTasksNode(t *t
 	check := func(name, want string) {
 		t.Helper()
 		_, ierr := readLeaves(r, initNode)
-		_, refusal, perr := planLeaves(r, tasksNode)
+		_, _, refusal, perr := planLeaves(r, tasksNode)
 		if want == "" {
 			if ierr != nil || refusal != "" || perr != nil {
 				t.Errorf("%s: init: %v; tasks: %q, %v", name, ierr, refusal, perr)
