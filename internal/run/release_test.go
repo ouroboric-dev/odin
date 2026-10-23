@@ -334,3 +334,43 @@ func sparse(t *testing.T, path string, size int64) {
 		t.Fatal(err)
 	}
 }
+
+// linkReleaser makes a release whose path to the leaf folder passes through a symlink: <out>/repos is a
+// relative link to a folder outside the release that holds api/host-secret.txt.
+type linkReleaser struct{ Parent string }
+
+func (l linkReleaser) Key() string { return "link" }
+
+func (l linkReleaser) Build(context.Context, ReleaseSpec) (string, error) {
+	out, outside := filepath.Join(l.Parent, "out"), filepath.Join(l.Parent, "outside")
+	if err := os.MkdirAll(filepath.Join(outside, "api"), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(outside, "api", "host-secret.txt"), []byte("of the host\n"), 0o644); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		return "", err
+	}
+	return out, os.Symlink(filepath.Join("..", "outside"), filepath.Join(out, "repos"))
+}
+
+// A link anywhere on the path from the release's folder down to a leaf's would take the copy outside the
+// release: it is refused, and it is named, before anything is copied.
+func TestALinkOnTheReleasesPathIsRefused(t *testing.T) {
+	r, _ := releaseRun(t)
+	r.Releaser = linkReleaser{Parent: t.TempDir()}
+	commitInLeaf(t, r, "repos/api", "release.sh", "#!/bin/sh\n", 0o755)
+	dst := filepath.Join(r.GradeDir(), "app")
+	err := r.ExportApp(ctx, dst)
+	var re *ReleaseError
+	if !errors.As(err, &re) || !strings.Contains(err.Error(), "repos is a symlink") {
+		t.Fatalf("ExportApp() = %v, want a *ReleaseError that names the link", err)
+	}
+	if files := filesOf(t, dst); len(files) != 0 {
+		t.Errorf("the export holds %v", files)
+	}
+	if es, _ := os.ReadDir(r.releaseDir()); len(es) != 0 {
+		t.Errorf("a release is kept: %v", es)
+	}
+}

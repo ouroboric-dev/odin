@@ -217,6 +217,10 @@ func (r *Run) buildRelease(ctx context.Context, spec ReleaseSpec, kept string) (
 	}
 	var total int64
 	for _, leaf := range spec.Leaves {
+		if err := noLinkOnPath(out, leaf); err != nil {
+			os.RemoveAll(tmp)
+			return fmt.Errorf("%s: %w", leaf, err)
+		}
 		if err := copyRelease(filepath.Join(out, filepath.FromSlash(leaf)), filepath.Join(tmp, filepath.FromSlash(leaf)), &total); err != nil {
 			os.RemoveAll(tmp)
 			return fmt.Errorf("%s: %w", leaf, err)
@@ -354,6 +358,10 @@ func (s *sandboxReleaser) Build(ctx context.Context, spec ReleaseSpec) (dir stri
 		return "", err
 	}
 	for _, leaf := range spec.Leaves {
+		// An earlier leaf's release.sh may have put a link on this leaf's path; MkdirAll would follow it.
+		if err := noLinkOnPath(snap, path.Join(".ygg", "release", leaf)); err != nil {
+			return "", fmt.Errorf("%s: %w", leaf, err)
+		}
 		if err := os.MkdirAll(filepath.Join(out, filepath.FromSlash(leaf)), 0o755); err != nil {
 			return "", err
 		}
@@ -370,6 +378,12 @@ func (s *sandboxReleaser) Build(ctx context.Context, spec ReleaseSpec) (dir stri
 			return "", fmt.Errorf("%s: %w", leaf, ended(err))
 		case res.ExitCode != 0:
 			return "", fmt.Errorf("%s: release.sh exited %d (its output is in release.log)", leaf, res.ExitCode)
+		}
+	}
+	// out itself is under .ygg in the snapshot, which a release.sh can replace by a link.
+	for _, leaf := range spec.Leaves {
+		if err := noLinkOnPath(snap, path.Join(".ygg", "release", leaf)); err != nil {
+			return "", fmt.Errorf("%s: %w", leaf, err)
 		}
 	}
 	return out, nil
@@ -404,6 +418,32 @@ func giveBack(dir string) error {
 		}
 		return nil
 	})
+}
+
+// noLinkOnPath refuses a symlink at root or at any folder on the slash-separated path rel below it, the
+// last one included: the host would follow it, and copy files from outside the release. A part that does
+// not exist ends the check; the copy then says that the release is missing.
+func noLinkOnPath(root, rel string) error {
+	p := root
+	for i, part := range append([]string{""}, strings.Split(rel, "/")...) {
+		if i > 0 {
+			p = filepath.Join(p, part)
+		}
+		info, err := os.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			name := filepath.ToSlash(strings.Join(strings.Split(rel, "/")[:i], "/"))
+			if name == "" {
+				name = "the release's folder"
+			}
+			return fmt.Errorf("%s is a symlink; the path to a release holds only folders", name)
+		}
+	}
+	return nil
 }
 
 // copyRelease copies the folder from to to. Only regular files and folders are copied: a symlink, a device

@@ -305,6 +305,29 @@ func TestReleaseSandboxStopsBeforeTheGrader(t *testing.T) {
 	}
 }
 
+// One sandbox builds every leaf's release, so an earlier leaf's release.sh can put a link where a later
+// leaf's OUT goes. Odin refuses it before it makes OUT, and no release.sh writes through it.
+func TestALinkOnALaterLeafsOutIsRefused(t *testing.T) {
+	r, fake := releaseSandboxRun(t, true)
+	outside := t.TempDir()
+	commitInLeaf(t, r, "repos/api", "release.sh", "#!/bin/sh\nset -eu\nmkdir -p \"$OUT\"\nln -s "+outside+" \"$OUT/../app\"\n", 0o755)
+	useSandboxReleaser(t, r)
+	dst := filepath.Join(r.GradeDir(), "app")
+	err := r.ExportApp(ctx, dst)
+	if err == nil || !strings.Contains(err.Error(), ".ygg/release/repos/app is a symlink") {
+		t.Fatalf("ExportApp() = %v, want a refusal that names the link", err)
+	}
+	if es, _ := os.ReadDir(outside); len(es) != 0 {
+		t.Errorf("a release.sh wrote through the link: %v", es)
+	}
+	if files := filesOf(t, dst); len(files) != 0 {
+		t.Errorf("the export holds %v", files)
+	}
+	if len(fake.Downs) != 1 || r.NoSandboxesLeft() != nil {
+		t.Errorf("the release sandbox did not stop: %+v", fake.Downs)
+	}
+}
+
 func TestNoAcceptanceSandboxNoRelease(t *testing.T) {
 	r, fake := releaseSandboxRun(t, false)
 	if rel, err := r.SandboxReleaser(); err != nil || rel != nil {
