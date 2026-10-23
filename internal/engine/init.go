@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -65,6 +66,9 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 		return &nodeFailure{err}
 	}
 	if err := pinRuntime(ctx, r, spec); err != nil {
+		return &nodeFailure{err}
+	}
+	if err := writeProductStart(ctx, r.Project, runtime); err != nil {
 		return &nodeFailure{err}
 	}
 	var created, kept []string
@@ -146,35 +150,92 @@ func pinRuntime(ctx context.Context, r *run.Run, spec *schema.Leaves) error {
 // show in its status (backlog B-073).
 const factoryIgnore = ".factory/"
 
-// ignoreFactory makes the project's .gitignore name .factory/ and commits that. It creates the file
+// ignoreFactory makes the project's .gitignore name .factory/ and commits that.
+func ignoreFactory(ctx context.Context, project string) error {
+	return ignoreLine(ctx, project, factoryIgnore)
+}
+
+// ignoreLine makes the project's .gitignore hold the line and commits that. It creates the file
 // when the project has none, adds the line to one that lacks it, and leaves one that has it alone, so
 // a resumed init adds nothing twice. It refuses when the file has changes that are not committed.
-func ignoreFactory(ctx context.Context, project string) error {
+func ignoreLine(ctx context.Context, project, line string) error {
 	path := filepath.Join(project, ".gitignore")
 	// The operator's own uncommitted edit of .gitignore is not Odin's to commit.
 	if st, err := git.Run(ctx, project, "status", "--porcelain", "--", ".gitignore"); err != nil || st != "" {
-		return fmt.Errorf("%s has changes that are not committed, so init can't add %s to it: commit or discard them first (%v)", path, factoryIgnore, err)
+		return fmt.Errorf("%s has changes that are not committed, so init can't add %s to it: commit or discard them first (%v)", path, line, err)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if strings.TrimSpace(line) == factoryIgnore {
+	for _, have := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(have) == line {
 			return nil
 		}
 	}
 	if len(b) > 0 && b[len(b)-1] != '\n' {
 		b = append(b, '\n')
 	}
-	if err := os.WriteFile(path, append(b, factoryIgnore+"\n"...), 0o644); err != nil {
+	if err := os.WriteFile(path, append(b, line+"\n"...), 0o644); err != nil {
 		return err
 	}
 	if _, err := git.Run(ctx, project, "add", "--", ".gitignore"); err != nil {
 		return err
 	}
-	_, err = git.Run(ctx, project, "commit", "-q", "-m", "ygg init: ignore "+factoryIgnore, "--", ".gitignore")
+	_, err = git.Run(ctx, project, "commit", "-q", "-m", "ygg init: ignore "+line, "--", ".gitignore")
 	return err
+}
+
+// productStartFile is where the project keeps the runtime realm's product start, at its root, and dataIgnore
+// is the line its .gitignore needs: the product's data folder is not source.
+const (
+	productStartFile = "start.sh"
+	dataIgnore       = ".data/"
+)
+
+// writeProductStart writes the runtime realm's product start script as start.sh at the project's root, mode
+// 0755, and commits it; it adds .data/ to the project's .gitignore. A project with no runtime realm, or whose
+// runtime realm names no product start, keeps its own start.sh. A start.sh that is already the realm's, with
+// the mode, adds no commit, so a resumed init adds nothing; one that differs gets the realm's in a new commit
+// that says so. The mode is set by hand, since a file Odin writes through the remote loses it (B-128).
+func writeProductStart(ctx context.Context, project string, runtime *realm.Realm) error {
+	if runtime == nil || runtime.Pack.Product == nil {
+		return nil
+	}
+	want, err := os.ReadFile(filepath.Join(runtime.Dir, runtime.Pack.Product.Start))
+	if err != nil {
+		return fmt.Errorf("the runtime realm %s names the product start %s, and its folder has no such file: %w", runtime.Name, runtime.Pack.Product.Start, err)
+	}
+	path := filepath.Join(project, productStartFile)
+	have, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	exists := err == nil
+	st, _ := os.Stat(path)
+	if exists && bytes.Equal(have, want) && st.Mode().Perm() == 0o755 {
+		return ignoreLine(ctx, project, dataIgnore)
+	}
+	if out, err := git.Run(ctx, project, "status", "--porcelain", "--", productStartFile); err != nil || out != "" {
+		return fmt.Errorf("%s has changes that are not committed, so init can't write the runtime realm's product start to it: commit or discard them first (%v)", path, err)
+	}
+	if err := os.WriteFile(path, want, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		return err
+	}
+	msg := fmt.Sprintf("ygg init: write %s, the product start of the runtime realm %s %s", productStartFile, runtime.Name, runtime.Version)
+	if exists {
+		msg = fmt.Sprintf("ygg init: replace %s with the product start of the runtime realm %s %s", productStartFile, runtime.Name, runtime.Version)
+	}
+	if _, err := git.Run(ctx, project, "add", "--", productStartFile); err != nil {
+		return err
+	}
+	if _, err := git.Run(ctx, project, "commit", "-q", "-m", msg, "--", productStartFile); err != nil {
+		return err
+	}
+	return ignoreLine(ctx, project, dataIgnore)
 }
 
 // maxLeavesFile is the biggest leaves file Odin reads: a few leaves, each a few lines.

@@ -38,6 +38,10 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   sandbox starts (`run.Setup.CheckNeeds`, with the message of `services.Provider`, where acceptance is checked: at prepare and in `init`); the
   `tasks` node that reads the leaves file (`ready`) checks it too, and fails without going back to the
   planner. The message names the need, the realm, and `runtime` in `docs/leaves.yaml`.
+  A runtime realm's pack may name a product start (`product.start`, a file of the realm). `init` then writes
+  it as `start.sh` at the project's root, mode 0755, in a commit of its own, and adds `.data/` to the
+  project's `.gitignore`; a `start.sh` that differs is replaced in a new commit, one that matches adds none,
+  and a project with no product start keeps its own `start.sh`.
 - Runs the stages before the code: a scratch agent works in a workspace of its own (the brief, copies
   of what it reads, an `out/` folder); `publish` copies its documents into the project and commits them,
   after checking they are documents and hold no secret; `tasks` reads `tasks.md`, applies the Definition
