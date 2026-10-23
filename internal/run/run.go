@@ -179,7 +179,7 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		return nil, err
 	}
 	s.newSandbox, s.newGrader = o.Hooks.NewSandbox, o.Hooks.NewGrader
-	if err := s.prepareSandbox(); err != nil {
+	if err := s.prepareSandbox(s.initAhead(o.Resume)); err != nil {
 		return nil, err
 	}
 	if err := s.prepareSkills(o.Hooks.Libs); err != nil {
