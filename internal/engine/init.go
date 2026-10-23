@@ -161,8 +161,12 @@ func ignoreFactory(ctx context.Context, project string) error {
 func ignoreLine(ctx context.Context, project, line string) error {
 	path := filepath.Join(project, ".gitignore")
 	// The operator's own uncommitted edit of .gitignore is not Odin's to commit.
-	if st, err := git.Run(ctx, project, "status", "--porcelain", "--", ".gitignore"); err != nil || st != "" {
-		return fmt.Errorf("%s has changes that are not committed, so init can't add %s to it: commit or discard them first (%v)", path, line, err)
+	st, err := git.Run(ctx, project, "status", "--porcelain", "--", ".gitignore")
+	if err != nil {
+		return err
+	}
+	if st != "" {
+		return fmt.Errorf("%s has changes that are not committed, so init can't add %s to it: commit or discard them first", path, line)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -207,26 +211,36 @@ func writeProductStart(ctx context.Context, project string, runtime *realm.Realm
 		return fmt.Errorf("the runtime realm %s names the product start %s, and its folder has no such file: %w", runtime.Name, runtime.Pack.Product.Start, err)
 	}
 	path := filepath.Join(project, productStartFile)
+	if err := noSymlinks(project, path); err != nil {
+		return fmt.Errorf("init can't write the runtime realm's product start: %w", err)
+	}
 	have, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	exists := err == nil
 	st, _ := os.Stat(path)
-	if exists && bytes.Equal(have, want) && st.Mode().Perm() == 0o755 {
+	same := exists && bytes.Equal(have, want) && st.Mode().Perm() == 0o755
+	changes, err := git.Run(ctx, project, "status", "--porcelain", "--", productStartFile)
+	if err != nil {
+		return err
+	}
+	if same && changes == "" { // the realm's file, tracked as it is
 		return ignoreLine(ctx, project, dataIgnore)
 	}
-	if out, err := git.Run(ctx, project, "status", "--porcelain", "--", productStartFile); err != nil || out != "" {
-		return fmt.Errorf("%s has changes that are not committed, so init can't write the runtime realm's product start to it: commit or discard them first (%v)", path, err)
+	if !same && changes != "" {
+		return fmt.Errorf("%s has changes that are not committed, so init can't write the runtime realm's product start to it: commit or discard them first", path)
 	}
-	if err := os.WriteFile(path, want, 0o755); err != nil {
-		return err
+	if !same { // else the file is the realm's already, untracked or not committed as it is, and only needs its commit
+		if err := os.WriteFile(path, want, 0o755); err != nil {
+			return err
+		}
 	}
 	if err := os.Chmod(path, 0o755); err != nil {
 		return err
 	}
 	msg := fmt.Sprintf("ygg init: write %s, the product start of the runtime realm %s %s", productStartFile, runtime.Name, runtime.Version)
-	if exists {
+	if exists && !same {
 		msg = fmt.Sprintf("ygg init: replace %s with the product start of the runtime realm %s %s", productStartFile, runtime.Name, runtime.Version)
 	}
 	if _, err := git.Run(ctx, project, "add", "--", productStartFile); err != nil {

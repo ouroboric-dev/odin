@@ -57,7 +57,8 @@ func TestInitWritesProductStart(t *testing.T) {
 	if mode := git1(t, r.Project, "ls-tree", "HEAD", "--", "start.sh"); !strings.HasPrefix(mode, "100755 ") {
 		t.Errorf("start.sh is committed as %q; want mode 100755", mode)
 	}
-	if files := git1(t, r.Project, "log", "--format=%s", "--name-only", "-1", "--", "start.sh"); !strings.Contains(files, "start.sh") || strings.Count(files, "\n") > 3 {
+	sha := git1(t, r.Project, "log", "-1", "--format=%H", "--", "start.sh")
+	if files := git1(t, r.Project, "show", "--name-only", "--format=", sha); strings.TrimSpace(files) != "start.sh" {
 		t.Errorf("start.sh is not in a commit of its own: %q", files)
 	}
 	if ig, _ := os.ReadFile(filepath.Join(r.Project, ".gitignore")); !strings.Contains(string(ig), "\n.data/\n") && !strings.HasPrefix(string(ig), ".data/\n") {
@@ -130,5 +131,88 @@ func TestInitWritesProductStart(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(missing.Project, "start.sh")); err == nil {
 		t.Error("start.sh was written")
+	}
+}
+
+// productRun is a run on a project whose runtime realm names the product start realmStart.
+func productRun(t *testing.T) (*run.Run, schema.Node) {
+	t.Helper()
+	realms := append(galleryRealms(), withProduct(runtimeFiles("niflheim-local", "0.1.0", "postgres", "s3"), realmStart))
+	return initRun(t, runtimeLine("niflheim-local", "0.1.0")+galleryLeaves, realms...),
+		schema.Node{ID: "leaves", Kind: schema.KindInit, From: "docs/leaves.yaml"}
+}
+
+func TestInitRefusesAStartShWithUncommittedChanges(t *testing.T) {
+	r, node := productRun(t)
+	commitFile(t, r.Project, "start.sh", "#!/bin/sh\necho mine\n", 0o755)
+	mine := "#!/bin/sh\necho mine, edited\n"
+	path := filepath.Join(r.Project, "start.sh")
+	if err := os.WriteFile(path, []byte(mine), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := runInit(context.Background(), r, node)
+	if err == nil || !strings.Contains(err.Error(), "not committed") || strings.Contains(err.Error(), "<nil>") {
+		t.Errorf("init = %v; want a refusal that says the changes are not committed, with no (<nil>)", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != mine {
+		t.Errorf("start.sh = %q; want the operator's edit left as it was", b)
+	}
+}
+
+func TestInitCommitsAStartShThatIsTheRealmsButNotTracked(t *testing.T) {
+	for name, stage := range map[string]func(t *testing.T, project string){
+		"untracked": func(t *testing.T, project string) {},
+		"in the index only": func(t *testing.T, project string) {
+			git1(t, project, "add", "--", "start.sh")
+		},
+	} {
+		r, node := productRun(t)
+		path := filepath.Join(r.Project, "start.sh")
+		if err := os.WriteFile(path, []byte(realmStart), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stage(t, r.Project)
+		if err := runInit(context.Background(), r, node); err != nil {
+			t.Fatalf("%s: init = %v", name, err)
+		}
+		if mode := git1(t, r.Project, "ls-tree", "HEAD", "--", "start.sh"); !strings.HasPrefix(mode, "100755 ") {
+			t.Errorf("%s: start.sh is committed as %q; want mode 100755", name, mode)
+		}
+		if st := git1(t, r.Project, "status", "--porcelain", "--", "start.sh"); st != "" {
+			t.Errorf("%s: start.sh is left uncommitted: %q", name, st)
+		}
+	}
+}
+
+func TestInitRefusesASymlinkedStartSh(t *testing.T) {
+	r, node := productRun(t)
+	target := filepath.Join(t.TempDir(), "elsewhere.sh")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(r.Project, "start.sh")); err != nil {
+		t.Fatal(err)
+	}
+	err := runInit(context.Background(), r, node)
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("init = %v; want a refusal that names the symlink", err)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "#!/bin/sh\n" {
+		t.Errorf("the link's target was written: %q", b)
+	}
+}
+
+func TestInitWritesProductStartOfTheRuntimeTheUmbrellaPins(t *testing.T) {
+	realms := append(galleryRealms(), withProduct(runtimeFiles("niflheim-local", "0.1.0", "postgres", "s3"), realmStart))
+	r := startRealms(t, realmsSetup{nodes: initNode, script: "steps: {}\n", realms: realms, runtime: "niflheim-local"})
+	writeLeaves(t, r, galleryLeaves) // the leaves file names no runtime
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(r.Project, "start.sh")); err != nil || string(b) != realmStart {
+		t.Errorf("start.sh = %q, %v; want the realm's", b, err)
 	}
 }
