@@ -2,6 +2,7 @@ package run
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -23,13 +24,19 @@ type fakeReleaser struct {
 	Seen   []string // the files of the snapshot at the last call
 	Make   func(t *testing.T, leafDir string)
 	Err    error
+	Output string // what the build prints
+	ID     string // its Key
 	t      *testing.T
 	Parent string
 }
 
-func (f *fakeReleaser) Build(_ context.Context, snap string, leaves []string) (string, error) {
+func (f *fakeReleaser) Key() string { return f.ID }
+
+func (f *fakeReleaser) Build(_ context.Context, spec ReleaseSpec) (string, error) {
+	leaves := spec.Leaves
 	f.Calls = append(f.Calls, slices.Clone(leaves))
-	f.Seen = filesOf(f.t, snap)
+	f.Seen = filesOf(f.t, spec.Snapshot)
+	io.WriteString(spec.Log, f.Output)
 	if f.Err != nil {
 		return "", f.Err
 	}
@@ -164,6 +171,45 @@ func TestReleaseIsReused(t *testing.T) {
 	}
 	if len(f.Calls) != 2 {
 		t.Errorf("a new commit of a leaf called the releaser %d times in all, want 2", len(f.Calls))
+	}
+}
+
+// A release kept from another releaser (another acceptance realm, version or image) is built again.
+func TestReleaseIsKeptByItsReleaser(t *testing.T) {
+	r, f := releaseRun(t)
+	commitInLeaf(t, r, "repos/api", "release.sh", "#!/bin/sh\n", 0o755)
+	dst := filepath.Join(r.GradeDir(), "app")
+	for _, id := range []string{"midgard-react 0.1.0", "midgard-react 0.1.0", "midgard-react 0.2.0"} {
+		f.ID = id
+		if err := r.ExportApp(ctx, dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(f.Calls) != 2 {
+		t.Errorf("the releaser was called %d times; want once for each releaser", len(f.Calls))
+	}
+}
+
+// release.log holds what the build printed, and the failure after it; past its bound it is cut.
+func TestReleaseLogHoldsTheBuildsOutput(t *testing.T) {
+	r, f := releaseRun(t)
+	commitInLeaf(t, r, "repos/api", "release.sh", "#!/bin/sh\n", 0o755)
+	f.Output, f.Err = "npm ci: added 12 packages\n", errors.New("vite: exit 1")
+	dst := filepath.Join(r.GradeDir(), "app")
+	if err := r.ExportApp(ctx, dst); err == nil {
+		t.Fatal("ExportApp() = nil for a release that fails")
+	}
+	b, _ := os.ReadFile(filepath.Join(r.GradeDir(), "release.log"))
+	if !strings.Contains(string(b), "npm ci: added 12 packages") || !strings.Contains(string(b), "vite: exit 1") {
+		t.Errorf("release.log = %q", b)
+	}
+	f.Output, f.Err = strings.Repeat("x", maxReleaseLog+10), nil
+	if err := r.ExportApp(ctx, dst); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(filepath.Join(r.GradeDir(), "release.log"))
+	if len(b) > maxReleaseLog+100 || !strings.Contains(string(b), "release.log is cut here") || strings.Contains(string(b), "vite") {
+		t.Errorf("release.log of a build that printed past the bound: %d bytes, ends %q", len(b), b[max(0, len(b)-80):])
 	}
 }
 

@@ -210,7 +210,8 @@ func lastState(project string) *run.State {
 	return s
 }
 
-// exportProduct writes the committed files of the project and its leaves to dst, as the grader's /app is made.
+// exportProduct writes the committed files of the project and its leaves to dst, as the grader's /app is made:
+// with each leaf's release, built in the project's acceptance sandbox.
 func (c *command) exportProduct(project, dst string) error {
 	s := lastState(project)
 	if s == nil {
@@ -221,6 +222,9 @@ func (c *command) exportProduct(project, dst string) error {
 		return err
 	}
 	defer r.Close()
+	if r.Releaser, err = r.SandboxReleaser(); err != nil {
+		return err
+	}
 	return r.ExportApp(c.ctx, dst)
 }
 

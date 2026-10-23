@@ -327,7 +327,10 @@ type brokenReleaser struct {
 	Dir   string // where the releases are made
 }
 
-func (b *brokenReleaser) Build(_ context.Context, _ string, leaves []string) (string, error) {
+func (b *brokenReleaser) Key() string { return "broken" }
+
+func (b *brokenReleaser) Build(_ context.Context, spec run.ReleaseSpec) (string, error) {
+	leaves := spec.Leaves
 	b.Calls++
 	if b.Err != nil {
 		return "", b.Err
@@ -343,16 +346,40 @@ func (b *brokenReleaser) Build(_ context.Context, _ string, leaves []string) (st
 	return dir, nil
 }
 
-func TestGradeFailsOnARelease(t *testing.T) {
+// leakyReleaser makes a release and leaves its sandbox recorded as up, as a releaser whose sandbox did not stop.
+type leakyReleaser struct {
+	brokenReleaser
+	r *run.Run
+}
+
+func (l *leakyReleaser) Build(ctx context.Context, spec run.ReleaseSpec) (string, error) {
+	l.r.State.Sandboxes = map[string]gungnir.Env{"snapshot/release/test": {Name: "snapshot/release/test", Container: "c"}}
+	return l.brokenReleaser.Build(ctx, spec)
+}
+
+// The second line behind the releaser's own stop: the grader does not start while a sandbox is recorded as up.
+func TestTheGraderNeverStartsBesideTheReleaseSandbox(t *testing.T) {
 	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
-	rel := &brokenReleaser{Err: errors.New("go build: exit 2"), Dir: t.TempDir()}
-	g.r.Releaser = rel
-	l, err := g.r.Leaf("repos/app")
+	g.r.Releaser = &leakyReleaser{brokenReleaser{Dir: t.TempDir()}, g.r}
+	commitRelease(t, g.r)
+	_, err := Grade(context.Background(), g.r, "")
+	var failed *GradeFailed
+	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "still up") {
+		t.Fatalf("Grade() = %v, want a *GradeFailed for the sandbox left up", err)
+	}
+	if len(g.grader.Specs) != 0 {
+		t.Errorf("the grader started beside a sandbox")
+	}
+}
+
+// commitRelease commits an executable release.sh to repos/app and records it in the project.
+func commitRelease(t *testing.T, r *run.Run) {
+	t.Helper()
+	l, err := r.Leaf("repos/app")
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := filepath.Join(g.r.RepoDir("repos/app"), "release.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(r.RepoDir("repos/app"), "release.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"add", "release.sh"}, {"commit", "-q", "-m", "release"}} {
@@ -360,13 +387,20 @@ func TestGradeFailsOnARelease(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p := git.Repo{GitDir: g.r.Setup.Project.GitDir, WorkTree: g.r.Setup.Project.Dir}
+	p := git.Repo{GitDir: r.Setup.Project.GitDir, WorkTree: r.Setup.Project.Dir}
 	for _, args := range [][]string{{"add", "repos/app"}, {"commit", "-q", "-m", "bump"}} {
 		if _, err := p.Run(context.Background(), args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_, err = Grade(context.Background(), g.r, "")
+}
+
+func TestGradeFailsOnARelease(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
+	rel := &brokenReleaser{Err: errors.New("go build: exit 2"), Dir: t.TempDir()}
+	g.r.Releaser = rel
+	commitRelease(t, g.r)
+	_, err := Grade(context.Background(), g.r, "")
 	var failed *GradeFailed
 	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "repos/app") || !strings.Contains(err.Error(), "exit 2") {
 		t.Fatalf("Grade() = %v, want a *GradeFailed that names repos/app", err)

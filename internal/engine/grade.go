@@ -68,8 +68,9 @@ func runGrade(ctx context.Context, r *run.Run, n schema.Node) error {
 // Grade grades the project of run r against the hidden suite of a task, and writes score.json to the run
 // folder (spec §11, change benchmark-split). taskID names the task; "" takes it from the run's brief,
 // which must be the instruction.md of a task in grader.tasks_dir. Grading starts only after every
-// sandbox of the run has stopped. It refuses, before it builds anything, with a *task.Refusal, which
-// the ledger records as grade_refused; a failure of the grading run itself is a *GradeFailed.
+// sandbox of the run has stopped, the one that builds the releases of the export too (run.SandboxReleaser).
+// It refuses, before it builds anything, with a *task.Refusal, which the ledger records as grade_refused; a
+// failure of the grading run itself is a *GradeFailed.
 //
 // The container sees three folders and nothing else (v0-T246): /app, a copy of the project's committed
 // files in the run folder; /tests, the suite's tests folder in the store, read only; and /logs/verifier,
@@ -120,7 +121,16 @@ func Grade(ctx context.Context, r *run.Run, taskID string) (*Graded, error) {
 	}
 	started := time.Now().UTC()
 	app, logs := filepath.Join(r.GradeDir(), "app"), filepath.Join(r.GradeDir(), "logs-"+started.Format("20060102-150405.000000"))
+	if r.Releaser == nil { // a test's stand-in stays; otherwise the releases are built in the acceptance sandbox
+		if r.Releaser, err = r.SandboxReleaser(); err != nil {
+			return nil, &GradeFailed{err}
+		}
+	}
 	if err := r.ExportApp(ctx, app); err != nil {
+		return nil, &GradeFailed{err}
+	}
+	// The release's sandbox stopped inside the export; the grader never starts while it is up.
+	if err := r.NoSandboxesLeft(); err != nil {
 		return nil, &GradeFailed{err}
 	}
 	if err := os.MkdirAll(logs, 0o755); err != nil {

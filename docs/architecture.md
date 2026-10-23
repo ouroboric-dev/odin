@@ -115,14 +115,23 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   never sees the suite folder, `score.json` or the container's output. `ygg grade <run-id>` grades a done
   run that has no grade node, or grades again; `--task` names the task when the brief of the run is not the
   `instruction.md` of a task.
-- Adds the release to the export. A `Releaser` builds the release of each leaf with an executable `release.sh`
-  from the exported project, and Odin copies it to `.ygg/release/<leaf path>/` (for example
-  `.ygg/release/repos/api/`) in the export only: a release is never committed to the project or a leaf. The copy
-  is bounded on its own: 128 MiB a file and 512 MiB in all, with no symlink, device or other special file. A
-  release that fails or breaks a bound fails the export, which is left empty, and so the grade
-  (`GradeFailed`); the message goes to `release.log` beside `grade.log`. A release is kept in the run folder
-  (`release/`) under the commits it was built from, so a second export of the same commits does not build it
-  again.
+- Adds the release to the export. A `Releaser` builds the release of each leaf with an executable `release.sh`,
+  and Odin copies it to `.ygg/release/<leaf path>/` (for example `.ygg/release/repos/api/`) in the export only: a
+  release is never committed to the project or a leaf. `ygg grade` and `ygg bridge` build it in the project's
+  acceptance sandbox: the acceptance stack of the realm that defines an acceptance check the graph runs
+  (midgard-react's, which holds Node and Go), over a snapshot of the exported commits (`snapshot/release/<realm>`
+  in the run folder), with the registries of every leaf's realm, no agent and no secret. Odin runs each leaf's
+  `release.sh` in the leaf with `OUT` set to an empty folder of the snapshot and no other variable, then stops the
+  sandbox, whether the release was made or not, so the grader never starts beside it. The whole release has the
+  grader's timeout (`grader.timeout`; 20 minutes with no grader section). Odin copies the release out itself, so
+  every file of the export is the host user's, and gives the snapshot's folders back to the host user, so that a
+  later export can empty them (B-139). A project with no acceptance realm, or a run with no sandbox, exports no
+  release. The copy is bounded on its own: 128 MiB a file and 512 MiB in all, with no symlink, device or other
+  special file. A release that fails, times out or breaks a bound fails the export, which is left empty, and so
+  the grade (`GradeFailed`). The build's output, and the failure after it, go to `release.log` (`0600`, at most 4
+  MiB) beside `grade.log`. A release is kept in the run folder (`release/`) under the commits it was built from
+  and the releaser's key (the acceptance realm, its version and hash, and its acceptance image), so a second
+  export of the same commits by the same releaser does not build it again.
 - Limits the grading container with `grader.memory` and `grader.cpus`. `grader.memory: none` and
   `grader.cpus: 0` ask for no limit, for an engine that cannot apply one; `ygg doctor` warns when either is
   set, because only the timeout then holds a suite that hangs. `ygg doctor` also finds the grader containers
