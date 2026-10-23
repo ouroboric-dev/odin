@@ -258,9 +258,10 @@ const releaseNode = "release"
 
 // sandboxReleaser builds the releases in the project's acceptance sandbox (spec §11): the sandbox of the
 // acceptance realm's acceptance stack, over a snapshot of the exported commits, with no agent, no secret
-// and no service (the founder's decision, 2026-10-23: no build needs Postgres or S3). It runs each leaf's release.sh in the leaf, with OUT set to an empty folder of the snapshot and
-// nothing else, and stops the sandbox before it returns, whether the release was made or not, so that the
-// grader never starts beside it. Midgard-react's acceptance stack holds Node and the Go toolchain (it builds
+// and no service (the founder's decision, 2026-10-23: no build needs Postgres or S3). It runs each leaf's
+// release.sh in the leaf, with OUT set to an empty folder of the snapshot and nothing else, and stops the
+// sandbox before it returns, whether the release was made or not, so that the grader never starts beside
+// it. Midgard-react's acceptance stack holds Node and the Go toolchain (it builds
 // the API leaf for the acceptance run), and the snapshot sandbox opens the registries of every leaf's
 // realm, so one sandbox builds the releases of both realms' leaves.
 type sandboxReleaser struct {
