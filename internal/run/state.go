@@ -121,6 +121,9 @@ type Decision struct {
 type LoopRecord struct {
 	State      jormungandr.State `json:"state"`
 	Escalation *Escalation       `json:"escalation,omitempty"`
+	// Base is the leaf's commit when the loop started, before its first attempt: the task's diff starts there.
+	// A state written before this field has none, and the loop records the leaf's commit when it next runs.
+	Base string `json:"base,omitempty"`
 }
 
 // Escalation is why a loop gave up (spec §7.3): see the Reason constants of Jormungandr.

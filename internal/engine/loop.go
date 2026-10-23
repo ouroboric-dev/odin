@@ -38,7 +38,10 @@ func runLoop(ctx context.Context, r *run.Run, n schema.Node) error {
 	if rec.State.Passed {
 		return nil // an earlier run of this node passed; a rejection that sends the work back clears the record
 	}
-	steps := &loopSteps{r: r, n: n, st: &rec.State}
+	if err := recordBase(ctx, r, n, rec); err != nil {
+		return err
+	}
+	steps := &loopSteps{r: r, n: n, st: &rec.State, base: rec.Base}
 	out, err := jormungandr.Run(ctx, cfg, &rec.State, steps)
 	if err != nil {
 		return nodeError(err)
@@ -85,6 +88,8 @@ type loopSteps struct {
 	r  *run.Run
 	n  schema.Node
 	st *jormungandr.State
+	// base is the leaf's commit when the loop started: the task's diff, which the reviewers read, starts there.
+	base string
 	// ran is how each check of the ladder ended in the attempt in progress: a dispute is decided on it.
 	// The ladder runs every check again after a resume, so nothing here needs saving.
 	ran map[string]checkRun
@@ -226,6 +231,13 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	}
 	if block := taskBlock(r, n); block != "" {
 		text += "\n\n" + block
+	}
+	change, err := changeBlock(ctx, r, n, l.base)
+	if err != nil {
+		return "", err
+	}
+	if change != "" {
+		text += "\n\n" + change
 	}
 	text += "\n\n" + jormungandr.ReviewRequest(rv.ID, open, passed)
 	before, err := snapshot(ctx, r, n.Repo)
