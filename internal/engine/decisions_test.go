@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -219,7 +220,7 @@ func TestOnlyAGateNoteIsADecision(t *testing.T) {
 func TestANoteIsOneLine(t *testing.T) {
 	r := start(t, "step-by-step", "", decisionNodes, decisionScript)
 	advanceTo(t, r, "design-gate")
-	for _, note := range []string{"a\nb", "a\rb", "a\tb", "a\x00b", "a\x1bb", "a\x7fb", "a\u0085b", "line\n## Heading"} {
+	for _, note := range []string{"a\nb", "a\rb", "a\tb", "a\x00b", "a\x1bb", "a\x7fb", "a\u0085b", "a\u2028b", "a\u2029b", "line\n## Heading"} {
 		err := Approve(bg, r, "design-gate", note)
 		if err == nil || !strings.Contains(err.Error(), "control character") {
 			t.Errorf("Approve(%q) = %v; want a refusal that names the control character", note, err)
@@ -230,6 +231,23 @@ func TestANoteIsOneLine(t *testing.T) {
 	}
 	if err := Approve(bg, r, "design-gate", "one line, with ünïcode"); err != nil {
 		t.Errorf("a plain note was refused: %v", err)
+	}
+}
+
+// A back_to return past a gate (land or move back to implement) meets the gate again: its second approval
+// replaces the first one's note, and one with no note drops it, so no stale or second note is left.
+func TestASecondApprovalOfAGateReplacesItsNote(t *testing.T) {
+	s := &run.State{}
+	keepDecision(s, "design-gate", "Warm.")
+	keepDecision(s, "spec-gate", "Two users.")
+	keepDecision(s, "design-gate", "Cold.")
+	want := []run.Decision{{Gate: "spec-gate", Note: "Two users."}, {Gate: "design-gate", Note: "Cold."}}
+	if !slices.Equal(s.Decisions, want) {
+		t.Errorf("decisions = %+v, want %+v", s.Decisions, want)
+	}
+	keepDecision(s, "design-gate", " ")
+	if !slices.Equal(s.Decisions, want[:1]) {
+		t.Errorf("after an approval with no note: decisions = %+v, want %+v", s.Decisions, want[:1])
 	}
 }
 

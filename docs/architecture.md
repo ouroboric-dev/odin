@@ -65,9 +65,11 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
   implementer's evidence and the check run.
 - Gives the note of a gate approval to every later session (spec §7.2, finding F1). `Approve` refuses a note
-  with a control character (the rule of `ygg-proof-run.sh`), and keeps a note that is not blank in
-  `State.Decisions`, as `{gate, note}` in the order given, only when the stopped node is a gate: a note at an
-  escalation, `policy-violation` or `shrink-guard` stays on the `gate_approved` event. `decisionsBlock`
+  with a control character (the rule of `ygg-proof-run.sh`) or a line or paragraph separator (U+2028, U+2029),
+  and keeps a note that is not blank in `State.Decisions`, as `{gate, note}` in the order given, only when the
+  stopped node is a gate: a note at an escalation, `policy-violation` or `shrink-guard` stays on the
+  `gate_approved` event. A second approval of the same gate, after a `back_to` return past it, replaces the
+  gate's note (a blank one drops it). `decisionsBlock`
   (`internal/engine/decisions.go`) writes "The product owner's decisions" after the brief in the prompt of an
   agent, a scratch agent, an implementer and each reviewer. A rejection that goes back past gates drops their
   notes; a resume keeps them from `run.json`.
