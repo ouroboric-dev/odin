@@ -26,7 +26,9 @@ const FeaturesFile = ".factory/features.json"
 // derives features.json from it. A plan that isn't ready is a refusal: it goes back to the node n names
 // with back_to, the planner, as input with every problem listed; with no back_to, or once the returns are
 // used, the node fails. The tasks of a ready plan are recorded in build order, in run.json and in
-// features.json, with all of them to do.
+// features.json, with all of them to do. A node that names a leaves file also checks that the project's
+// runtime realm provides every need of the file's realms (spec §6.1): init runs after it, and the plan can't
+// change the leaves file, so an unmet need fails the node and goes back to no one.
 func runTasks(ctx context.Context, r *run.Run, n schema.Node) error {
 	attempt, err := startAttempt(r, n)
 	if err != nil {
@@ -48,6 +50,12 @@ func runTasks(ctx context.Context, r *run.Run, n schema.Node) error {
 			return err
 		}
 		return &nodeFailure{errors.New(refusal)}
+	}
+	if err := checkLeavesNeeds(r, n.Leaves); err != nil {
+		if lerr := r.Log(gungnir.Event{Name: gungnir.EventNodeFailed, Node: n.ID, Attempt: attempt, Result: firstLine(err.Error())}); lerr != nil {
+			return lerr
+		}
+		return &nodeFailure{err}
 	}
 	s := r.State
 	s.Features, s.PlanSource, s.PlanSHA256 = nil, source, sum
@@ -110,6 +118,29 @@ func readPlan(r *run.Run, n schema.Node) (fs []schema.Feature, source, sum, refu
 	}
 	h := sha256.Sum256(data)
 	return fs, source, hex.EncodeToString(h[:]), "", nil
+}
+
+// checkLeavesNeeds checks the needs of the realms of the leaves file at rel (none when rel is ""), with the
+// runtime realm the file pins or the project records. The realms are loaded from the realm store as init loads
+// them, and nothing is recorded: init, after this node, takes them. Realms that can't be loaded, or pins that
+// disagree, are not this node's to refuse: init refuses them, with every problem, before it creates anything.
+func checkLeavesNeeds(r *run.Run, rel string) error {
+	if rel == "" {
+		return nil
+	}
+	data, err := readLeavesFile(r, rel)
+	if err != nil {
+		return fmt.Errorf("the leaves file %s can't be read: %w", rel, err)
+	}
+	spec, err := schema.ParseLeaves(rel, data)
+	if err != nil {
+		return err
+	}
+	_, runtime, leafRealms, err := planLeafRealms(r, spec)
+	if err != nil {
+		return nil // init's refusal, which it makes before it creates anything
+	}
+	return r.Setup.CheckNeedsWith(runtime, leafRealms)
 }
 
 // planLeaves returns the leaves a task may work in: those the project has, and those the spec stage named

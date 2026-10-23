@@ -62,6 +62,7 @@ type Setup struct {
 	ConfigSHA256 string
 	GraphPack    *realm.Realm // the graph pack: --graph, loaded. It is also the realm of the leaves that pin none, when it holds a recipe
 	Realms       *realm.Set   // the realms of the run: one for each realm a leaf of the project pins, each loaded once, and the graph pack when it holds a recipe
+	Runtime      *realm.Realm // the project's runtime realm, which provides the needs of its leaves' realms (spec §9.4); nil when the project pins none
 	Graph        *schema.Graph
 	GraphSHA256  string
 	Brief        string // absolute, or ""
@@ -145,7 +146,7 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if err := s.checkGraphPin(byName); err != nil {
 		return nil, err
 	}
-	if s.Realms, err = s.collectRealms(nil); err != nil {
+	if s.Realms, s.Runtime, err = s.collectRealms(nil); err != nil {
 		return nil, err
 	}
 	for _, p := range o.Leaves {
@@ -163,10 +164,14 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
-	// Acceptance is decided here only when no init node is still ahead: otherwise init counts the leaves it is
-	// about to create, and refuses before it makes any (change voluspa).
+	// Acceptance and the needs are decided here only when no init node is still ahead: otherwise init counts
+	// the leaves it is about to create, and the runtime realm it is about to pin, and refuses before it makes
+	// any leaf (change voluspa, gallery-runtime).
 	if !s.initAhead(o.Resume) {
 		if err := s.CheckAcceptance(nil); err != nil {
+			return nil, err
+		}
+		if err := s.CheckNeeds(nil); err != nil {
 			return nil, err
 		}
 	}
@@ -352,7 +357,7 @@ func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
 	return nil
 }
 
-// projectPins returns the realm pins of the project's leaves.
+// projectPins returns the realm pins of the project's leaves, and the pin of its runtime realm.
 func (s *Setup) projectPins() []schema.Pin {
 	var pins []schema.Pin
 	if u := s.Project.Umbrella; u != nil {
@@ -360,6 +365,9 @@ func (s *Setup) projectPins() []schema.Pin {
 			if u.Children[p.Where].Kind == schema.ChildLeaf {
 				pins = append(pins, p)
 			}
+		}
+		if p, ok := u.RuntimePin(); ok {
+			pins = append(pins, p)
 		}
 	}
 	return pins
@@ -408,15 +416,18 @@ func (s *Setup) loadRealm(name string) (*realm.Realm, error) {
 
 // collectRealms loads the realms of the run: one for each realm the project's pins and extra name, and
 // the graph pack when it holds a recipe. The pins must agree with each other and with what the realm store holds (change
-// realm-leaf-naming), so a mismatch stops the run before anything is created or started.
-func (s *Setup) collectRealms(extra []schema.Pin) (*realm.Set, error) {
+// realm-leaf-naming), so a mismatch stops the run before anything is created or started. It also returns the
+// runtime realm, the one a pin with Where schema.RuntimeWhere names (extra's before the project's), or nil;
+// a runtime pin that names a build realm is refused.
+func (s *Setup) collectRealms(extra []schema.Pin) (*realm.Set, *realm.Realm, error) {
 	var have []*realm.Realm
 	if s.GraphPack.Pack.HoldsRecipe() {
 		have = append(have, s.GraphPack)
 	}
-	set, err := realm.Collect(have, append(s.projectPins(), extra...), s.loadRealm)
+	pins := append(s.projectPins(), extra...)
+	set, err := realm.Collect(have, pins, s.loadRealm)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// A resumed run keeps every realm it recorded, whether or not the project pins it yet: init loads a
 	// realm, and may stop before it has created the leaf that pins it.
@@ -424,24 +435,38 @@ func (s *Setup) collectRealms(extra []schema.Pin) (*realm.Set, error) {
 		if set.Realms[name] == nil {
 			x, err := realm.Load(dir)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			set.Realms[name] = x
 		}
 	}
-	return set, nil
+	var runtime *realm.Realm
+	for _, p := range slices.Backward(pins) {
+		if p.Where == schema.RuntimeWhere {
+			runtime = set.Realms[p.Realm]
+			break
+		}
+	}
+	if runtime != nil && runtime.Pack.Leaf != nil {
+		return nil, nil, fmt.Errorf("the project's runtime realm would be %s %s, which is a build realm (its pack.yaml names leaf): a runtime realm provides services and no leaf; pin one such as niflheim-local",
+			runtime.Name, runtime.Version)
+	}
+	return set, runtime, nil
 }
 
 // PlanRealms loads and checks the realms that extra pins would add to the run, as AddRealms does, and
-// changes nothing: a caller can look at the realms before it commits the run to them.
-func (r *Run) PlanRealms(extra []schema.Pin) (*realm.Set, error) { return r.Setup.collectRealms(extra) }
+// changes nothing: a caller can look at the realms before it commits the run to them. It also returns the
+// runtime realm the run would have: the one a runtime pin of extra names, else the project's, or nil.
+func (r *Run) PlanRealms(extra []schema.Pin) (*realm.Set, *realm.Realm, error) {
+	return r.Setup.collectRealms(extra)
+}
 
 // AddRealms loads the realms that extra pins name and the run doesn't have yet, after checking that
 // every pin of the project, the old and the new, agrees. The spec stage names the product's leaves and
-// their realms, and init is where they join the run. Each new realm is recorded in run.json and the
-// ledger.
+// their realms, and the project's runtime realm, and init is where they join the run. Each new realm is
+// recorded in run.json and the ledger.
 func (r *Run) AddRealms(extra []schema.Pin) error {
-	set, err := r.Setup.collectRealms(extra)
+	set, runtime, err := r.Setup.collectRealms(extra)
 	if err != nil {
 		return err
 	}
@@ -458,7 +483,7 @@ func (r *Run) AddRealms(extra []schema.Pin) error {
 			return err
 		}
 	}
-	r.Setup.Realms = set
+	r.Setup.Realms, r.Setup.Runtime = set, runtime
 	return r.Save()
 }
 

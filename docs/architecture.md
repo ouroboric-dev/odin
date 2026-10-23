@@ -28,6 +28,16 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   a run could read, and a resume refuses a pack or a realm that changed. A run of schema `ygg.run/v2`,
   which a realm led, is refused by `resume` and `status`; `ygg doctor` reports it as a WARN, and its
   folder can go. A pack or realm that is a subfolder of a repo is hashed from its committed files.
+- Loads the project's runtime realm (change gallery-runtime, spec §9.4): a realm with no leaf that names
+  services and the needs they provide (`provides`), pinned once per project as `runtime` and
+  `runtime_version` in `umbrella.yaml`. The spec stage names it under `runtime` in `docs/leaves.yaml`, and
+  `init` loads it and records the pin in the commit that records the first leaf it creates (or in a
+  commit of its own when every leaf is there); a later leaves file names the same pin or none. A build
+  realm's pack lists the services its leaves need (`needs`: `postgres`, `s3`). A need with no provider, or
+  any need in a project with no runtime realm, stops the run before any leaf is created or any leaf
+  sandbox starts (`run.Setup.CheckNeeds`, where acceptance is checked: at prepare and in `init`); the
+  `tasks` node that reads the leaves file (`ready`) checks it too, and fails without going back to the
+  planner. The message names the need, the realm, and `runtime` in `docs/leaves.yaml`.
 - Runs the stages before the code: a scratch agent works in a workspace of its own (the brief, copies
   of what it reads, an `out/` folder); `publish` copies its documents into the project and commits them,
   after checking they are documents and hold no secret; `tasks` reads `tasks.md`, applies the Definition

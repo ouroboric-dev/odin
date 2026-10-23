@@ -234,6 +234,56 @@ func (s *Setup) SnapshotSandbox(rl *realm.Realm) (stack string, egress []string,
 	return rl.Acceptance, sortedUnique(egress), set.list, nil
 }
 
+// LeavesFile is where the spec stage names the product's leaves and the project's runtime realm.
+const LeavesFile = "docs/leaves.yaml"
+
+// CheckNeeds refuses, before any leaf is created or any leaf sandbox starts, a need of a realm of the project's
+// leaves that the project's runtime realm does not provide, or any need in a project that pins no runtime realm
+// (spec §6.1, §9.4). extra are the realms of the leaves init is about to create. Every unmet need is listed.
+func (s *Setup) CheckNeeds(extra []*realm.Realm) error { return s.CheckNeedsWith(s.Runtime, extra) }
+
+// CheckNeedsWith is CheckNeeds with runtime as the project's runtime realm: the one a leaves file pins, before
+// init records it. runtime is nil when there is none.
+func (s *Setup) CheckNeedsWith(runtime *realm.Realm, extra []*realm.Realm) error {
+	realms, err := s.leafRealms(extra)
+	if err != nil {
+		return err
+	}
+	var problems []string
+	for _, r := range realms {
+		for _, need := range r.Pack.Needs {
+			if _, err := provider(runtime, r, need); err != nil {
+				problems = append(problems, err.Error())
+			}
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("a need of the project's leaves has no provider, so no leaf is created and no leaf sandbox starts:\n  %s", strings.Join(problems, "\n  "))
+	}
+	return nil
+}
+
+// provider returns the service of the runtime realm that meets the need of the realm r. Its error is the one
+// message for an unmet need: it names the need, the realm and where the runtime realm is pinned.
+func provider(runtime, r *realm.Realm, need string) (gungnir.Service, error) {
+	what := need
+	for _, n := range gungnir.Needs {
+		if n.Name == need {
+			what = fmt.Sprintf("%s (%s)", need, n.Description)
+		}
+	}
+	if runtime == nil {
+		return gungnir.Service{}, fmt.Errorf("the realm %s needs %s, and the project pins no runtime realm to provide it: name one under runtime in %s",
+			r.Name, what, LeavesFile)
+	}
+	svc, ok := runtime.Pack.Provider(need)
+	if !ok {
+		return gungnir.Service{}, fmt.Errorf("the realm %s needs %s, and the runtime realm %s %s does not provide it: name one that does under runtime in %s",
+			r.Name, what, runtime.Name, runtime.Version, LeavesFile)
+	}
+	return svc, nil
+}
+
 func sameService(a, b gungnir.Service) bool {
 	return a.Image == b.Image && maps.Equal(a.Env, b.Env) && slices.Equal(a.Ports, b.Ports) && slices.Equal(a.Command, b.Command)
 }
