@@ -64,6 +64,13 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve` accepts the
   implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
   implementer's evidence and the check run.
+- Gives the note of a gate approval to every later session (spec §7.2, finding F1). `Approve` refuses a note
+  with a control character (the rule of `ygg-proof-run.sh`), and keeps a note that is not blank in
+  `State.Decisions`, as `{gate, note}` in the order given, only when the stopped node is a gate: a note at an
+  escalation, `policy-violation` or `shrink-guard` stays on the `gate_approved` event. `decisionsBlock`
+  (`internal/engine/decisions.go`) writes "The product owner's decisions" after the brief in the prompt of an
+  agent, a scratch agent, an implementer and each reviewer. A rejection that goes back past gates drops their
+  notes; a resume keeps them from `run.json`.
 - Starts each leaf's sandbox on its realm's stack, with the services `services.For` gives the leaf (spec
   §6.1, §9.2, §9.4): for its realm and the realm of each leaf it consumes, the runtime realm's provider of
   each need, under the name it has in the runtime realm's pack, and the services an older pack names itself.

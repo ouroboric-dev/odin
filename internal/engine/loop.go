@@ -118,7 +118,7 @@ func (l *loopSteps) prompt(realm, file string, skillNames []string) (string, err
 	if l.r.Setup.BriefText != "" {
 		text += "\n\n## Brief\n\n" + l.r.Setup.BriefText
 	}
-	return text, nil
+	return withDecisions(text, l.r.State), nil
 }
 
 // Implement runs one implementer session with the findings that are open, and commits what it did. It

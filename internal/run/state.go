@@ -101,11 +101,19 @@ type State struct {
 	NewLeaves       map[string]bool        `json:"new_leaves,omitempty"`    // leaf paths this run's init creates: only these get the realm's template
 	Returns         map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
 	Refusals        map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
+	Decisions       []Decision             `json:"decisions,omitempty"`     // the notes of gate approvals, in the order given: every later session reads them
 	Ledger          ledger.Anchor          `json:"ledger"`
 	Error           string                 `json:"error,omitempty"`
 	Exec            *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
 	Created         time.Time              `json:"created"`
 	Updated         time.Time              `json:"updated"`
+}
+
+// Decision is the note an operator gave when approving a gate node (spec §7.2): the product owner's
+// decision, which every later session reads.
+type Decision struct {
+	Gate string `json:"gate"`
+	Note string `json:"note"`
 }
 
 // LoopRecord is where one loop node stands (spec §4.2): Jormungandr's state, which holds the attempt,
