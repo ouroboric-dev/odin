@@ -232,7 +232,7 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if block := taskBlock(r, n); block != "" {
 		text += "\n\n" + block
 	}
-	change, err := changeBlock(ctx, r, n, l.base)
+	change, err := reviewChange(ctx, r, n, l.base, attempt)
 	if err != nil {
 		return "", err
 	}

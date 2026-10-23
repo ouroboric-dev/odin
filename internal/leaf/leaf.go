@@ -61,6 +61,12 @@ func (l *Leaf) Output(ctx context.Context, args ...string) ([]byte, error) {
 	return l.repo.Output(ctx, args...)
 }
 
+// Pipe is Git with the standard output handed to read as git writes it, for output too big to hold: if read
+// returns an error, git is stopped and the error is returned.
+func (l *Leaf) Pipe(ctx context.Context, read func(io.Reader) error, args ...string) error {
+	return l.repo.Pipe(ctx, read, args...)
+}
+
 // StartBranch creates branch at from and checks it out. It refuses a leaf with uncommitted
 // changes, so a run never discards work it didn't make.
 func (l *Leaf) StartBranch(ctx context.Context, branch, from string) (string, error) {

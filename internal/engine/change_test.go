@@ -2,11 +2,14 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -83,14 +86,10 @@ func TestTheChangeStartsAtTheLoopsBaseAcrossAResume(t *testing.T) {
 	}
 }
 
-func TestComputingTheChangeRunsNothingFromTheLeaf(t *testing.T) {
-	marker := filepath.Join(t.TempDir(), "ran")
-	attrs := "*.dat diff=x\n"
-	conf := "[diff \"x\"]\n\ttextconv = sh -c 'echo ran > " + marker + "; cat \"$0\"'\n\tcommand = sh -c 'echo ran > " + marker + "'\n"
-	script := "steps:\n  build:\n    - actions: [ " + write(".gitattributes", strings.TrimSpace(attrs)) + ", " + write("build.txt", "done") + ", " + write("x.dat", "payload") + " ]\n      result: { status: ok }\n" +
-		"  build-spec:\n    - result: { status: ok, report: [] }\n"
-	r := startReview(t, "key-points", script)
-	// the driver is configured in the leaf's own git config, where an agent could put it
+// leafConfig appends conf to the leaf's git config. Odin owns that file (the sandbox mounts the git dir read-only),
+// but the flags of the diff must hold whatever it says.
+func leafConfig(t *testing.T, r *run.Run, conf string) {
+	t.Helper()
 	gf, err := os.ReadFile(filepath.Join(r.RepoDir("repos/app"), ".git"))
 	if err != nil {
 		t.Fatal(err)
@@ -103,52 +102,171 @@ func TestComputingTheChangeRunsNothingFromTheLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString(conf)
-	f.Close()
+	defer f.Close()
+	if _, err := f.WriteString(conf); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func oneReview(t *testing.T, actions string) *run.Run {
+	t.Helper()
+	script := "steps:\n  build:\n    - actions: [ " + actions + " ]\n      result: { status: ok }\n" +
+		"  build-spec:\n    - result: { status: ok, report: [] }\n"
+	return startReview(t, "key-points", script)
+}
+
+func finish(t *testing.T, r *run.Run) {
+	t.Helper()
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("a diff driver of the leaf ran")
+}
+
+// Each driver writes its own marker, so a failure says which one ran. The drivers are scripts the config points
+// to (a ; or a quote in a config value would be cut by git and the driver could never run).
+func TestComputingTheChangeRunsNothingFromTheLeaf(t *testing.T) {
+	dir := t.TempDir()
+	drivers := map[string]string{"textconv": "diff.x.textconv", "command": "diff.x.command", "external": "diff.external"}
+	conf := "[diff \"x\"]\n"
+	var other string
+	for name, key := range drivers {
+		script := filepath.Join(dir, name+".sh")
+		if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch "+filepath.Join(dir, "ran-"+name)+"\n[ -f \"$1\" ] && cat \"$1\"\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(key, "diff.x.") {
+			conf += "\t" + strings.TrimPrefix(key, "diff.x.") + " = " + script + "\n"
+		} else {
+			other += "[diff]\n\texternal = " + script + "\n"
+		}
+	}
+	r := oneReview(t, write(".gitattributes", "*.dat diff=x")+", "+write("build.txt", "done")+", "+write("x.dat", "payload"))
+	leafConfig(t, r, conf+other)
+	finish(t, r)
+	for name := range drivers {
+		if _, err := os.Stat(filepath.Join(dir, "ran-"+name)); err == nil {
+			t.Errorf("the %s driver of the leaf ran", name)
+		}
 	}
 	got := changeSection(t, promptOf(t, r, "build-spec-1"))
-	if !strings.Contains(got, "+payload") {
+	if !strings.Contains(got, "+payload") || strings.Contains(got, "could not be computed") {
 		t.Errorf("the diff isn't plain:\n%s", got)
 	}
 }
 
-func TestACappedChangeIsCutAtAFileAndNamesWhatItLeftOut(t *testing.T) {
-	big := strings.Repeat("0123456789abcdef", 64) // 1 KiB a line
-	var lines []string
-	for i := 0; i < 90; i++ {
-		lines = append(lines, big)
-	}
-	text := strings.Join(lines, "\\n") // 90 KiB a file; three files pass the cap
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + ", " +
-		`{ write: { path: a.big, content: "` + text + `\n" } }, { write: { path: b.big, content: "` + text + `\n" } }, { write: { path: c.big, content: "` + text + `\n" } }` + ", " + `{ write: { path: z.big, content: "` + text + `\n" } }` + " ]\n      result: { status: ok }\n" +
-		"  build-spec:\n    - result: { status: ok, report: [] }\n"
-	r := startReview(t, "key-points", script)
-	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
-		t.Fatalf("Advance() = %+v, %v", out, err)
-	}
+// A * -diff or binary attribute in the work tree must not hide text.
+func TestAnAttributeThatHidesTheDiffDoesNotHideTheText(t *testing.T) {
+	r := oneReview(t, write(".gitattributes", "* -diff")+", "+write("build.txt", "done"))
+	finish(t, r)
 	got := changeSection(t, promptOf(t, r, "build-spec-1"))
-	if len(got) > maxChangeBytes+8<<10 {
+	if !strings.Contains(got, "+done") || strings.Contains(got, "Binary files") {
+		t.Errorf("the text change is hidden:\n%s", got)
+	}
+}
+
+func bigFile(name string, kib int) string {
+	line := strings.Repeat("0123456789abcdef", 64) // 1 KiB a line
+	var lines []string
+	for i := 0; i < kib; i++ {
+		lines = append(lines, line)
+	}
+	return `{ write: { path: ` + name + `, content: "` + strings.Join(lines, "\\n") + `\n" } }`
+}
+
+func TestACappedChangeSkipsWhatDoesNotFitAndKeepsLaterFiles(t *testing.T) {
+	r := oneReview(t, strings.Join([]string{write("build.txt", "done"), bigFile("a.big", 90), bigFile("b.big", 90), bigFile("c.big", 90), bigFile("d.big", 250), write("z.txt", "small")}, ", "))
+	finish(t, r)
+	got := changeSection(t, promptOf(t, r, "build-spec-1"))
+	if len(got) > maxChangeBytes+16<<10 {
 		t.Errorf("the section is %d bytes; the cap is %d", len(got), maxChangeBytes)
 	}
-	for _, f := range []string{"a.big", "b.big", "c.big", "z.big", "build.txt"} {
+	for _, f := range []string{"a.big", "b.big", "c.big", "d.big", "build.txt", "z.txt"} {
 		if !strings.Contains(got, f+" ") {
 			t.Errorf("the stat part lacks %s:\n%.600s", f, got)
 		}
 	}
+	for _, f := range []string{"a.big", "b.big", "build.txt", "z.txt"} {
+		if !strings.Contains(got, "diff --git a/"+f) {
+			t.Errorf("%s fits and must be shown", f)
+		}
+	}
 	i := strings.Index(got, "left out")
-	if i < 0 || !strings.Contains(got[i:], "z.big") {
-		t.Errorf("the section doesn't name the files left out (z.big):\n%.800s", got)
+	if i < 0 || !strings.Contains(got[i:], "c.big") || !strings.Contains(got[i:], "d.big") {
+		t.Fatalf("the files left out (c.big, d.big) aren't named:\n%.1000s", got)
 	}
-	if strings.Contains(got, "diff --git a/z.big") {
-		t.Error("z.big was cut in the middle or shown past the cap")
+	for _, f := range []string{"c.big", "d.big"} {
+		if strings.Contains(got, "diff --git a/"+f) {
+			t.Errorf("%s doesn't fit and must be named only", f)
+		}
 	}
-	if !strings.Contains(got, "diff --git a/a.big") {
-		t.Error("the files before the cap must be whole")
+	if strings.Contains(got[i:], "z.txt") {
+		t.Error("z.txt fits and was named as left out")
+	}
+}
+
+func TestAFirstFileOverTheCapIsNamedNotClipped(t *testing.T) {
+	r := oneReview(t, write("build.txt", "done")+", "+bigFile("a.big", 250)+", "+write("z.txt", "small"))
+	finish(t, r)
+	got := changeSection(t, promptOf(t, r, "build-spec-1"))
+	if strings.Contains(got, "diff --git a/a.big") || !strings.Contains(got, "diff --git a/z.txt") || !strings.Contains(got[strings.Index(got, "left out"):], "a.big") {
+		t.Errorf("a.big must be named as left out and z.txt shown:\n%.1200s", got)
+	}
+}
+
+func TestTheStatIsBounded(t *testing.T) {
+	var acts []string
+	for i := 0; i < maxChangeStat+40; i++ {
+		acts = append(acts, write(fmt.Sprintf("f%04d.txt", i), "x"))
+	}
+	acts = append(acts, write("build.txt", "done"))
+	r := oneReview(t, strings.Join(acts, ", "))
+	finish(t, r)
+	got := changeSection(t, promptOf(t, r, "build-spec-1"))
+	if strings.Contains(got, fmt.Sprintf("f%04d.txt |", maxChangeStat+39)) || !strings.Contains(got, "and 41 more") {
+		t.Errorf("the stat isn't bounded with a count of the rest:\n%.400s", got)
+	}
+}
+
+func TestAFailedDiffDoesNotFailTheReview(t *testing.T) {
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n  build-spec:\n    - result: { status: ok, report: [] }\n"
+	r := startReview(t, "key-points", script)
+	node := schema.Node{Attempts: 3, Checks: []string{"unit"}, Reviewers: []schema.Reviewer{{ID: "spec"}}}
+	r.State.Loops["build"] = &run.LoopRecord{State: *jormungandr.NewState(loopConfig(node)), Base: strings.Repeat("0123456789", 4)}
+	finish(t, r)
+	got := changeSection(t, promptOf(t, r, "build-spec-1"))
+	if !strings.Contains(got, "The diff could not be computed (") || !strings.Contains(got, "); read the change in the leaf.") {
+		t.Errorf("the section = %s", got)
+	}
+	if !strings.Contains(ledgerText(t, r), "change not computed") {
+		t.Error("the ledger doesn't say the change was not computed")
+	}
+}
+
+func TestAPatchLineWithBackticksCannotCloseTheFence(t *testing.T) {
+	fence := strings.Repeat("`", 3)
+	r := oneReview(t, write("build.txt", "done")+", "+`{ write: { path: notes.md, content: "`+fence+`\ncode\n`+fence+`\n" } }`)
+	finish(t, r)
+	got := changeSection(t, promptOf(t, r, "build-spec-1"))
+	if !strings.Contains(got, "\n````diff\n") {
+		t.Errorf("the fence isn't longer than the backticks in the patch:\n%s", got)
+	}
+}
+
+func TestPieceNamesComeFromTheirHeaders(t *testing.T) {
+	cases := map[string]string{
+		"diff --git a/src/x.go b/src/x.go\nindex 1..2\n":                 "src/x.go",
+		"diff --git a/my file.txt b/my file.txt\nnew file mode 100644\n": "my file.txt",
+		"diff --git \"a/n\\n## h.bin\" \"b/n\\n## h.bin\"\n":             "\"a/n\\n## h.bin\" \"b/n\\n## h.bin\"",
+		"diff --git a/link b/link\ndeleted file mode 100644\n":           "link",
+		"diff --git a/link b/link\nnew file mode 120000\n":               "link",
+	}
+	for piece, want := range cases {
+		if got := pieceName(piece); got != want {
+			t.Errorf("pieceName(%q) = %q, want %q", piece, got, want)
+		}
+	}
+	if got := safeName("a\nb\x01.txt"); strings.ContainsAny(got, "\n\x01") {
+		t.Errorf("safeName leaves control bytes: %q", got)
 	}
 }
 
