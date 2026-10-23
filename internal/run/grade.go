@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
@@ -46,7 +47,9 @@ func (r *Run) GradeDir() string { return filepath.Join(r.Dir, "grade") }
 
 // ExportApp writes the project as it is committed to dst: the files of the project umbrella and of each
 // leaf at the commit the umbrella records, with no git directory and nothing a working copy ignores
-// (the snapshot of v0-T238). dst is emptied first. The result is what a grader's /app holds.
+// (the snapshot of v0-T238), and, for each leaf with an executable release.sh, its release at
+// .ygg/release/<leaf path>/, built by the run's Releaser. dst is emptied first, and emptied again when
+// the release fails. The result is what a grader's /app holds.
 func (r *Run) ExportApp(ctx context.Context, dst string) error {
 	sources, err := r.snapshotSources(ctx, nil)
 	if err != nil {
@@ -55,7 +58,19 @@ func (r *Run) ExportApp(ctx context.Context, dst string) error {
 	if err := snapshot.Export(ctx, dst, sources); err != nil {
 		return &SnapshotError{err}
 	}
+	if err := r.addRelease(ctx, dst, sources); err != nil {
+		clearDir(dst) // no partial export: a grader must not run on a project without its release
+		return err
+	}
 	return nil
+}
+
+// clearDir removes what dst holds and keeps dst.
+func clearDir(dst string) {
+	entries, _ := os.ReadDir(dst)
+	for _, e := range entries {
+		os.RemoveAll(filepath.Join(dst, e.Name()))
+	}
 }
 
 // NoSandboxesLeft refuses to go on while a sandbox of the run is recorded as up: grading starts only

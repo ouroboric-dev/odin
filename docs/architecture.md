@@ -91,7 +91,8 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   any project, and stops the run at the hard approval point `budget-cap` before a session would start
   over a cap (spec §7.4). Pauses the run when the provider's quota is used up (spec §12).
 - Grades a build (spec §11, change benchmark-split). The `grade` node is the last node of a graph. It stops
-  every sandbox first, exports the committed files of the project as `/app`, and runs the hidden suite of the
+  every sandbox first, exports the committed files of the project as `/app` (with, for each leaf that holds an
+  executable `release.sh`, its release at `.ygg/release/<leaf path>/`, see below), and runs the hidden suite of the
   task in a container of Gleipnir's `Grade`: no network, `/app` read and write, `/tests` read only, one empty
   folder for the suite's own logs, and no other mount. It checks the task first (`task.toml`, the hash of
   `instruction.md`, the suite version, the retired mark, the suite's `manifest.json`) and refuses with
@@ -107,6 +108,14 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   never sees the suite folder, `score.json` or the container's output. `ygg grade <run-id>` grades a done
   run that has no grade node, or grades again; `--task` names the task when the brief of the run is not the
   `instruction.md` of a task.
+- Adds the release to the export. A `Releaser` builds the release of each leaf with an executable `release.sh`
+  from the exported project, and Odin copies it to `.ygg/release/<leaf path>/` (for example
+  `.ygg/release/repos/api/`) in the export only: a release is never committed to the project or a leaf. The copy
+  is bounded on its own: 128 MiB a file and 512 MiB in all, with no symlink, device or other special file. A
+  release that fails or breaks a bound fails the export, which is left empty, and so the grade
+  (`GradeFailed`); the message goes to `release.log` beside `grade.log`. A release is kept in the run folder
+  (`release/`) under the commits it was built from, so a second export of the same commits does not build it
+  again.
 - Limits the grading container with `grader.memory` and `grader.cpus`. `grader.memory: none` and
   `grader.cpus: 0` ask for no limit, for an engine that cannot apply one; `ygg doctor` warns when either is
   set, because only the timeout then holds a suite that hangs. `ygg doctor` also finds the grader containers

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 	"github.com/ouroboric-dev/odin/internal/task"
@@ -316,5 +317,78 @@ func TestABriefWhoseTaskIdIsNotATaskIdFailsTheGradeNodeAsARefusal(t *testing.T) 
 	}
 	if text := ledgerText(t, g.r); !strings.Contains(text, `"event":"grade_refused"`) || !strings.Contains(text, `"event":"node_failed"`) {
 		t.Errorf("the ledger:\n%s", text)
+	}
+}
+
+// brokenReleaser is a Releaser that fails until Err is nil, and then makes a one-file release.
+type brokenReleaser struct {
+	Err   error
+	Calls int
+	Dir   string // where the releases are made
+}
+
+func (b *brokenReleaser) Build(_ context.Context, _ string, leaves []string) (string, error) {
+	b.Calls++
+	if b.Err != nil {
+		return "", b.Err
+	}
+	dir, err := os.MkdirTemp(b.Dir, "release")
+	if err != nil {
+		return "", err
+	}
+	for _, l := range leaves {
+		os.MkdirAll(filepath.Join(dir, l), 0o755)
+		os.WriteFile(filepath.Join(dir, l, "run.sh"), []byte("#!/bin/sh\n"), 0o755)
+	}
+	return dir, nil
+}
+
+func TestGradeFailsOnARelease(t *testing.T) {
+	g := startGraded(t, gradedNodes, tasktest.Results(nil), nil)
+	rel := &brokenReleaser{Err: errors.New("go build: exit 2"), Dir: t.TempDir()}
+	g.r.Releaser = rel
+	l, err := g.r.Leaf("repos/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(g.r.RepoDir("repos/app"), "release.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "release.sh"}, {"commit", "-q", "-m", "release"}} {
+		if _, err := l.Git(context.Background(), args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := git.Repo{GitDir: g.r.Setup.Project.GitDir, WorkTree: g.r.Setup.Project.Dir}
+	for _, args := range [][]string{{"add", "repos/app"}, {"commit", "-q", "-m", "bump"}} {
+		if _, err := p.Run(context.Background(), args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = Grade(context.Background(), g.r, "")
+	var failed *GradeFailed
+	if !errors.As(err, &failed) || !strings.Contains(err.Error(), "repos/app") || !strings.Contains(err.Error(), "exit 2") {
+		t.Fatalf("Grade() = %v, want a *GradeFailed that names repos/app", err)
+	}
+	if _, err := os.Stat(filepath.Join(g.r.Dir, "score.json")); err == nil {
+		t.Error("a failed release has a score")
+	}
+	if len(g.grader.Specs) != 0 {
+		t.Errorf("the grader ran %d times on a project without its release", len(g.grader.Specs))
+	}
+	rel.Err = nil
+	if _, err := Grade(context.Background(), g.r, ""); err != nil {
+		t.Fatalf("the second Grade() = %v", err)
+	}
+	if len(g.grader.Specs) != 1 || rel.Calls != 2 {
+		t.Errorf("grader calls %d, releaser calls %d; want 1 and 2", len(g.grader.Specs), rel.Calls)
+	}
+	found := false
+	for _, f := range g.grader.Apps[0] {
+		found = found || f == ".ygg/release/repos/app/run.sh"
+	}
+	if !found {
+		t.Errorf("the graded /app lacks the release: %v", g.grader.Apps[0])
 	}
 }

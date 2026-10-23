@@ -26,7 +26,7 @@ type Graded struct {
 }
 
 // GradeFailed is a grading run that could not finish: the container did not run or timed out, the
-// suite printed no readable scores, or the project could not be exported. It is not a refusal and
+// suite printed no readable scores, or the project could not be exported (a release that fails or breaks its bounds is an export that fails). It is not a refusal and
 // not a score. The run stops failed, and a resume grades again.
 type GradeFailed struct{ Err error }
 
