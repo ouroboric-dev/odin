@@ -101,12 +101,30 @@ func (r *Run) addRelease(ctx context.Context, dst string, sources []snapshot.Sou
 			return &ReleaseError{spec.Leaves, err}
 		}
 	}
+	// The target is a folder of the export: snapshot.Export refuses a tracked symlink, so .ygg, and anything
+	// under it, cannot be a link that would take the copy out of dst.
+	var total int64
 	for _, leaf := range spec.Leaves {
-		if err := copyRelease(filepath.Join(kept, filepath.FromSlash(leaf)), filepath.Join(dst, ".ygg", "release", filepath.FromSlash(leaf)), nil); err != nil {
+		if err := copyRelease(filepath.Join(kept, filepath.FromSlash(leaf)), filepath.Join(dst, ".ygg", "release", filepath.FromSlash(leaf)), &total); err != nil {
+			r.appendReleaseLog(fmt.Sprintf("copying the kept release of %s into the export: %v", leaf, err))
 			return &ReleaseError{[]string{leaf}, err}
 		}
 	}
 	return nil
+}
+
+// appendReleaseLog adds a line to release.log, beside grade.log. A log that can't be written is no
+// reason to hide the failure it reports, which the caller returns.
+func (r *Run) appendReleaseLog(line string) {
+	if err := os.MkdirAll(r.GradeDir(), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(r.GradeDir(), "release.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, line)
 }
 
 // releaseSpecOf reads the commit the export holds of each of sources, as "<path> <commit>" lines in the

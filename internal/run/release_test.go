@@ -229,9 +229,6 @@ func TestReleaseRefused(t *testing.T) {
 				}
 			}
 		},
-		"a file past the bound": func(f *fakeReleaser) {
-			f.Make = func(t *testing.T, d string) { sparse(t, filepath.Join(d, "big"), maxReleaseFile+1) }
-		},
 		"a release past the bound in all": func(f *fakeReleaser) {
 			f.Make = func(t *testing.T, d string) {
 				for _, n := range []string{"a", "b", "c", "d", "e"} {
@@ -288,6 +285,41 @@ func TestReleaseBound(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(dst, ".ygg/release/repos/api/app.bin")); err != nil || info.Size() != 40<<20 {
 		t.Errorf("app.bin = %v, %v", info, err)
+	}
+	// One byte past the per-file bound is refused.
+	r, f = releaseRun(t)
+	f.Make = func(t *testing.T, d string) { sparse(t, filepath.Join(d, "big"), maxReleaseFile+1) }
+	commitInLeaf(t, r, "repos/api", "release.sh", "#!/bin/sh\n", 0o755)
+	var re *ReleaseError
+	if err := r.ExportApp(ctx, dst); !errors.As(err, &re) || !strings.Contains(err.Error(), "big is") {
+		t.Errorf("a file of %d bytes: ExportApp() = %v, want a *ReleaseError that names it", maxReleaseFile+1, err)
+	}
+}
+
+// A kept release is copied under the same bounds as a new one, counted across its leaves, and a copy that
+// fails says so in release.log.
+func TestAKeptReleaseIsBoundedInAll(t *testing.T) {
+	r, f := releaseRun(t)
+	f.Make = func(t *testing.T, d string) {
+		if err := os.WriteFile(filepath.Join(d, "app.bin"), make([]byte, 1<<20), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitInLeaf(t, r, "repos/api", "release.sh", "#!/bin/sh\n", 0o755)
+	commitInLeaf(t, r, "repos/web", "release.sh", "#!/bin/sh\n", 0o755)
+	dst := filepath.Join(r.GradeDir(), "app")
+	if err := r.ExportApp(ctx, dst); err != nil {
+		t.Fatal(err)
+	}
+	defer func(old int64) { maxReleaseTotal = old }(maxReleaseTotal)
+	maxReleaseTotal = 3 << 19 // one leaf's release fits, both do not
+	err := r.ExportApp(ctx, dst)
+	var re *ReleaseError
+	if !errors.As(err, &re) || !strings.Contains(err.Error(), "more than") || len(f.Calls) != 1 {
+		t.Fatalf("ExportApp() of a kept release past the bound in all = %v (releaser calls %d)", err, len(f.Calls))
+	}
+	if b, _ := os.ReadFile(filepath.Join(r.GradeDir(), "release.log")); !strings.Contains(string(b), "more than") {
+		t.Errorf("release.log lacks the copy's failure:\n%s", b)
 	}
 }
 
