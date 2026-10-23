@@ -47,14 +47,17 @@ func For(u *schema.Umbrella, repos []string, l Loader) ([]gungnir.Service, error
 		}
 	}
 	set := serviceSet{where: strings.Join(repos, " and ")}
-	var runtime *realm.Realm
-	loaded := false
-	for _, r := range realms {
+	for _, r := range realms { // every realm's own services first, so a conflict of names comes before any need
 		for _, v := range r.Pack.ServiceList() {
 			if err := set.add(r.Name, v); err != nil {
 				return nil, err
 			}
 		}
+	}
+	var runtime *realm.Realm
+	loaded := false
+	var unmet error // the first, which a conflict found later outranks
+	for _, r := range realms {
 		for _, need := range r.Pack.Needs {
 			if !loaded {
 				var err error
@@ -64,6 +67,12 @@ func For(u *schema.Umbrella, repos []string, l Loader) ([]gungnir.Service, error
 				loaded = true
 			}
 			v, err := Provider(runtime, r, need)
+			if _, ok := err.(*Unmet); ok {
+				if unmet == nil {
+					unmet = err
+				}
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -71,6 +80,9 @@ func For(u *schema.Umbrella, repos []string, l Loader) ([]gungnir.Service, error
 				return nil, err
 			}
 		}
+	}
+	if unmet != nil {
+		return nil, unmet
 	}
 	slices.SortFunc(set.list, func(a, b gungnir.Service) int { return strings.Compare(a.Name, b.Name) })
 	return set.list, nil

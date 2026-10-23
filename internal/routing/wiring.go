@@ -111,12 +111,14 @@ func Wiring(dir string, packs map[string]*schema.Pack) (*Result, error) {
 // needs adds an edge from the leaf to each service its realm's sandbox starts, as services.For names them: the
 // runtime realm's provider of each need of the leaf's realm, and the services the realm's pack names itself.
 // The leaves it consumes are left out: their realms' needs are their own edges. A need with no provider gives
-// no edge, and is reported.
+// no edge, and is reported; the services the pack names itself keep their edges.
 func (w *wiring) needs(u *schema.Umbrella, packs map[string]*schema.Pack, leaf, source string) {
 	svcs, err := services.For(nil, []string{leaf}, packLoader{u, packs})
 	if err != nil {
 		w.skip("%s: %v", source, err)
-		return
+		if p := packs[u.Children[leaf].Realm]; p != nil { // an unmet need drops no service the pack names itself
+			svcs = p.ServiceList()
+		}
 	}
 	for _, s := range svcs {
 		w.add(leaf, "needs", "service:"+s.Name, Extracted, source)

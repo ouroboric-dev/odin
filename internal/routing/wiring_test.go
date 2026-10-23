@@ -276,3 +276,27 @@ func TestWiringNeedsEdges(t *testing.T) {
 		t.Errorf("skipped = %v; want the need with no provider reported", res.Skipped)
 	}
 }
+
+// An older pack that names its own service and has a need no runtime realm provides still gets the edge to its
+// own service; the unmet need is reported.
+func TestWiringNeedsEdgesKeepAnOwnServiceWhenANeedIsUnmet(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "p")
+	if err := os.CopyFS(dir, os.DirFS(fixture)); err != nil {
+		t.Fatal(err)
+	}
+	ps := map[string]*schema.Pack{
+		"helheim-go":     {Name: "helheim-go", Needs: []string{"s3"}, Services: map[string]schema.PackService{"postgres": {}}},
+		"midgard-react":  {Name: "midgard-react"},
+		"niflheim-local": {Name: "niflheim-local"},
+	}
+	res, err := Wiring(dir, ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := find(res.Edges, "api", "needs", "service:postgres"); e == nil || e.Source != "realm:helheim-go/pack.yaml" {
+		t.Errorf("api -needs-> service:postgres is %+v; want the pack's own service", e)
+	}
+	if !slices.ContainsFunc(res.Skipped, func(s string) bool { return strings.Contains(s, "the realm helheim-go needs s3") }) {
+		t.Errorf("skipped = %v; want the unmet need reported", res.Skipped)
+	}
+}

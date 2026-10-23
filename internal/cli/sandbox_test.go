@@ -362,3 +362,24 @@ func TestSandboxBuildPullsTheRuntimesServices(t *testing.T) {
 		t.Errorf("the engine was not asked to pull %s:\n%s", s3, b)
 	}
 }
+
+// A realm with no stack but with provides, named on purpose, gives its service images, as --all does.
+func TestSandboxBuildRealmWithNoStackPullsItsServices(t *testing.T) {
+	log := stubEngine(t)
+	store, config := realmsStore(t)
+	const s3 = "docker.io/chrislusf/seaweedfs:4.45@sha256:fc9f76fa993ad69966ffeb2f65d0318fcae39c6f8e20cf68ef7b3a5cb97769e5"
+	pack := "name: niflheim-local\nversion: 0.1.0\nservices:\n  s3:\n    image: " + s3 + "\n    ports: [8333]\nprovides:\n  s3: s3\n"
+	if err := os.MkdirAll(filepath.Join(store, "niflheim-local"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "niflheim-local", "pack.yaml"), []byte(pack), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := ygg(t, "sandbox", "build", "--config", config, "--realm", "niflheim-local")
+	if code != ExitDone || !strings.Contains(out, "Pulling the service image "+s3) {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	if b, _ := os.ReadFile(log); !strings.Contains(string(b), s3) {
+		t.Errorf("the engine was not asked to pull %s:\n%s", s3, b)
+	}
+}

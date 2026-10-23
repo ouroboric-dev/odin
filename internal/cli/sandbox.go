@@ -102,9 +102,9 @@ type stackBuild struct{ ref, dir, target string }
 
 // stacksToBuild returns the distinct sandbox stacks of the realms named, in the order named, or of every
 // realm in the store with --all, and the distinct images of their services, which a sandbox uses without
-// ever pulling them. A realm named on purpose that has no stack is an error; with --all no stack is built
-// for it, and the skip is returned for the output. Its service images are still pulled: the runtime realm
-// names no stack, and its services are the providers of the build realms' needs.
+// ever pulling them. A realm that has no stack and names no service is an error when named on purpose, and
+// skipped with --all. One that names services, the runtime realm, has no stack built, and the skip is returned
+// for the output, but its service images are still pulled: they are the providers of the build realms' needs.
 func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks []stackBuild, services, skipped []string, err error) {
 	var store *realm.Store
 	if cfg.Realms != nil {
@@ -138,7 +138,7 @@ func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks []stack
 			return nil, nil, nil, err
 		}
 		switch {
-		case pack.Sandbox == nil && all && len(pack.Services) > 0:
+		case pack.Sandbox == nil && len(pack.Services) > 0:
 			skipped = append(skipped, fmt.Sprintf("The realm %s names no sandbox stack; skipped, but its service images are pulled.", pack.Name))
 		case pack.Sandbox == nil && all:
 			skipped = append(skipped, fmt.Sprintf("The realm %s names no sandbox stack; skipped.", pack.Name))

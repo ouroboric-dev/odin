@@ -141,3 +141,21 @@ func TestForKeepsARealmsOwnServices(t *testing.T) {
 		t.Errorf("a leaf with no realm: For() = %+v, nil", got)
 	}
 }
+
+// With an unmet need and a conflict of names both in the realms, For returns the conflict: an Unmet is the
+// error init settles by pinning a runtime realm, and a conflict it does not settle would show only mid-run.
+func TestForReturnsAConflictAheadOfAnUnmetNeed(t *testing.T) {
+	u, l := gallery(niflheim("postgres"))
+	l.leaves["repos/api"] = buildRealm("helheim-go", []string{"postgres"}, map[string]schema.PackService{"postgres": {Image: pgImage, Ports: []int{5433}}})
+	l.leaves["repos/web"] = buildRealm("midgard-react", []string{"s3"}, nil) // the runtime realm has no s3
+	got, err := For(u, []string{"repos/web", "repos/api"}, l)
+	var unmet *Unmet
+	if err == nil || errors.As(err, &unmet) || !strings.Contains(err.Error(), "two different services named postgres") {
+		t.Errorf("For() = %+v, %v; want the conflict of the postgres services, not the unmet need", got, err)
+	}
+	// With no conflict the unmet need is the error.
+	l.leaves["repos/api"] = buildRealm("helheim-go", []string{"postgres"}, nil)
+	if _, err := For(u, []string{"repos/web", "repos/api"}, l); !errors.As(err, &unmet) {
+		t.Errorf("For() error = %v; want the unmet need", err)
+	}
+}
