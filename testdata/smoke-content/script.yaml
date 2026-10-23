@@ -43,6 +43,9 @@ steps:
         - write:
             path: out/leaves.yaml
             content: |
+              runtime:
+                realm: niflheim-local
+                realm_version: 0.1.0
               leaves:
                 repos/api:
                   realm: helheim-go

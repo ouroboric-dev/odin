@@ -98,6 +98,9 @@ const realScript = `steps:
         - write:
             path: out/leaves.yaml
             content: |
+              runtime:
+                realm: niflheim-local
+                realm_version: NIFLHEIM_VERSION
               leaves:
                 repos/api:
                   realm: helheim-go
@@ -173,15 +176,16 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	store := t.TempDir()
 	realRealm(t, store, "midgard-react")
 	realRealm(t, store, "helheim-go")
+	copyBesideOdin(t, store, "niflheim-local")          // the runtime realm: it has no check to replace
 	graphs := copyBesideOdin(t, t.TempDir(), "voluspa") // the graph pack's repo: graphs.dir holds software
 	versions := map[string]string{}
-	for _, name := range []string{"midgard-react", "helheim-go"} {
+	for _, name := range []string{"midgard-react", "helheim-go", "niflheim-local"} {
 		p, err := schema.LoadPack(filepath.Join(store, name))
 		if err != nil {
 			t.Fatalf("the realm %s does not load: %v", name, err)
 		}
 		versions[name] = p.Version
-		if p.Leaf == nil {
+		if name != "niflheim-local" && p.Leaf == nil {
 			t.Fatalf("%s offers no leaf recipe", name)
 		}
 	}
@@ -196,7 +200,7 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 			t.Errorf("the software graph's spec prompt does not offer %s %s", name, v)
 		}
 	}
-	script := strings.NewReplacer("HELHEIM_VERSION", versions["helheim-go"], "MIDGARD_VERSION", versions["midgard-react"]).Replace(realScript)
+	script := strings.NewReplacer("HELHEIM_VERSION", versions["helheim-go"], "NIFLHEIM_VERSION", versions["niflheim-local"], "MIDGARD_VERSION", versions["midgard-react"]).Replace(realScript)
 	for i := 1; i <= 3; i++ {
 		script += fmt.Sprintf(leafReviewers, i, i, i)
 	}
@@ -231,6 +235,9 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	st, err := run.LoadState(run.Dir(dir, id))
 	if err != nil || st.Status != run.StatusDone {
 		t.Fatalf("run.json: %+v, %v", st, err)
+	}
+	if _, ok := st.Realms["niflheim-local"]; !ok {
+		t.Errorf("run.json records the realms %v, want niflheim-local among them", st.Realms)
 	}
 	// The leaves were made from the real templates of their realms.
 	for leaf, files := range map[string][]string{"repos/api": {"openapi.yaml", "sqlc.yaml", "internal/store/migrate.go", "cmd/api/main.go"},
