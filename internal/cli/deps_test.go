@@ -453,3 +453,30 @@ func TestDepsSandboxOfALeafThatNeedsNothingHasNoService(t *testing.T) {
 		t.Errorf("exit %d, sandboxes %+v; want one with no service:\n%s", code, fake.Ups, errOut)
 	}
 }
+
+func TestDepsRefusesAPinThePackOfTheStoreDoesNotMatch(t *testing.T) {
+	for name, c := range map[string]struct{ leaf, runtime, want string }{
+		"the runtime pin": {"0.1.0", "0.9.0", "the realm store holds niflheim-local 0.1.0, but runtime pins 0.9.0"},
+		"the leaf's pin":  {"0.9.0", "0.1.0", "the realm store holds helheim-go 0.1.0, but repos/api pins 0.9.0"},
+	} {
+		dir, config := depsProjectWith(t, goStack, "needs: [postgres]\n", true)
+		u, err := schema.LoadUmbrella(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.RuntimeVersion = c.runtime
+		child := u.Children["repos/api"]
+		child.RealmVersion = c.leaf
+		u.Children["repos/api"] = child
+		if err := u.Save(dir); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := git.Run(ctx, dir, "commit", "-q", "-am", "the pins"); err != nil {
+			t.Fatal(err)
+		}
+		_, code, errOut, started := depsServices(t, dir, config)
+		if code != ExitRefused || started != 0 || !strings.Contains(errOut, c.want) {
+			t.Errorf("%s: exit %d, %d drivers started; want a refusal with %q:\n%s", name, code, started, c.want, errOut)
+		}
+	}
+}

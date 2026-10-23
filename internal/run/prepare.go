@@ -206,7 +206,7 @@ func (s *Setup) SnapshotSandbox(rl *realm.Realm) (stack string, egress []string,
 
 // CheckNeeds refuses, before any leaf is created or any leaf sandbox starts, a need of a realm of the project's
 // leaves that the project's runtime realm does not provide, or any need in a project that pins no runtime realm
-// (spec §6.1, §9.4). extra are the realms of the leaves init is about to create. Every unmet need is listed.
+// (spec §6.1, §9.4). extra are the realms of the leaves init is about to create. Every unmet need is listed, on one line with the first problem leading, since a stage failure shows the first line only.
 func (s *Setup) CheckNeeds(extra []*realm.Realm) error { return s.CheckNeedsWith(s.Runtime, extra) }
 
 // CheckNeedsWith is CheckNeeds with runtime as the project's runtime realm: the one a leaves file pins, before
@@ -225,7 +225,7 @@ func (s *Setup) CheckNeedsWith(runtime *realm.Realm, extra []*realm.Realm) error
 		}
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("a need of the project's leaves has no provider, so no leaf is created and no leaf sandbox starts:\n  %s", strings.Join(problems, "\n  "))
+		return fmt.Errorf("%s (no leaf is created and no leaf sandbox starts)", strings.Join(problems, "; "))
 	}
 	return nil
 }

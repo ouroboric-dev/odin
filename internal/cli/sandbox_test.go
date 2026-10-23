@@ -383,3 +383,21 @@ func TestSandboxBuildRealmWithNoStackPullsItsServices(t *testing.T) {
 		t.Errorf("the engine was not asked to pull %s:\n%s", s3, b)
 	}
 }
+
+// A build realm named with --realm that declares needs says that its providers' images come from the runtime
+// realm, and which command pulls them.
+func TestSandboxBuildRealmWithNeedsSaysWhereTheServicesAre(t *testing.T) {
+	stubEngine(t)
+	store, config := realmsStore(t)
+	pack := "name: helheim-api\nversion: 0.1.0\nneeds: [postgres, s3]\nsandbox:\n  stack: " + goStack + "\n"
+	if err := os.MkdirAll(filepath.Join(store, "helheim-api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "helheim-api", "pack.yaml"), []byte(pack), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := ygg(t, "sandbox", "build", "--config", config, "--realm", "helheim-api")
+	if code != ExitDone || !strings.Contains(out, "The realm helheim-api needs postgres, s3") || !strings.Contains(out, "name the runtime realm with --realm too, or use --all") {
+		t.Fatalf("exit %d; the output lacks where the needs' services are pulled:\n%s%s", code, out, errOut)
+	}
+}

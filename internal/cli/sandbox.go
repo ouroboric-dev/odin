@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir/schema"
@@ -170,6 +171,10 @@ func stacksToBuild(cfg *schema.Factory, refs []string, all bool) (stacks []stack
 					stacks = append(stacks, w)
 				}
 			}
+		}
+		if len(pack.Needs) > 0 && !all { // its providers are the project's runtime realm's services, which this run does not pull
+			skipped = append(skipped, fmt.Sprintf("The realm %s needs %s, which the project's runtime realm provides: its service images are not pulled here; name the runtime realm with --realm too, or use --all.",
+				pack.Name, strings.Join(pack.Needs, ", ")))
 		}
 		for _, v := range pack.ServiceList() {
 			if !slices.Contains(services, v.Image) {

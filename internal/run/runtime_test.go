@@ -156,6 +156,11 @@ func TestNeedsWithoutAProviderStop(t *testing.T) {
 	_, err := Start(ctx, Options{Project: project, Config: cfg, Graph: "midgard-react"})
 	unmet(t, "no runtime realm", err, "postgres", "helheim-go")
 	unmet(t, "no runtime realm", err, "s3", "helheim-go")
+	// The first line is what node_failed and ygg status show: it holds the first problem, and the message is
+	// one line, with the problems separated by "; ".
+	if err != nil && (strings.Contains(err.Error(), "\n") || !strings.HasPrefix(err.Error(), "the realm helheim-go needs postgres") || !strings.Contains(err.Error(), "; the realm helheim-go needs s3")) {
+		t.Errorf("the refusal is %q; want one line that starts with the first problem and separates the others with %q", err, "; ")
+	}
 	if _, serr := os.Stat(filepath.Join(project, ".factory")); serr == nil {
 		t.Error("a refused start created .factory/")
 	}

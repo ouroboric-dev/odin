@@ -242,20 +242,21 @@ type depsLoader struct {
 }
 
 func (l depsLoader) Leaf(repo string) (*realm.Realm, error) {
+	c := l.u.Children[repo]
 	if repo == l.repo {
-		return l.leaf, nil
+		return l.checked(l.leaf, repo, c.RealmVersion)
 	}
-	return l.load(l.u.Children[repo].Realm, "the leaf "+repo)
+	return l.load(c.Realm, c.RealmVersion, repo, "the leaf "+repo)
 }
 
 func (l depsLoader) Runtime() (*realm.Realm, error) {
 	if l.u.Runtime == "" {
 		return nil, nil
 	}
-	return l.load(l.u.Runtime, "the project")
+	return l.load(l.u.Runtime, l.u.RuntimeVersion, "runtime", "the project")
 }
 
-func (l depsLoader) load(name, whose string) (*realm.Realm, error) {
+func (l depsLoader) load(name, version, where, whose string) (*realm.Realm, error) {
 	if name == "" {
 		return nil, fmt.Errorf("%s pins no realm", whose)
 	}
@@ -263,7 +264,19 @@ func (l depsLoader) load(name, whose string) (*realm.Realm, error) {
 	if err != nil {
 		return nil, err
 	}
-	return realm.Load(dir)
+	r, err := realm.Load(dir)
+	if err != nil {
+		return nil, err
+	}
+	return l.checked(r, where, version)
+}
+
+// checked refuses a realm of another version than the pin at where, as a run does.
+func (l depsLoader) checked(r *realm.Realm, where, version string) (*realm.Realm, error) {
+	if version != "" && r.Version != version {
+		return nil, fmt.Errorf("the realm store holds %s %s, but %s pins %s", r.Name, r.Version, where, version)
+	}
+	return r, nil
 }
 
 // depsOpener runs a product's commands in its sandbox, or on the host when factory.yaml has no sandbox.
