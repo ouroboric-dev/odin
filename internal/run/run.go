@@ -80,6 +80,7 @@ type Setup struct {
 	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
 	Backoff      jormungandr.Backoff
 	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
+	Clock        func() time.Time                                 // nil: the system's; the date input reads it
 	PinGraph     bool                                             // the graph pack was named, and the project doesn't pin a graph yet: Start pins it
 	store        *realm.Store                                     // where a realm is found by name; nil without factory.yaml's realms section
 	recorded     map[string]string                                // a resume: the folder of each realm the run recorded

@@ -37,7 +37,7 @@ func TestAMergeGateThatRefusesTheChecksSendsTheWorkBackIntoTheLoop(t *testing.T)
 		t.Errorf("the implementer ran %d times, the refusal went back %d times; want 2 and 1", r.State.Attempts["build"], r.State.Returns["merge"])
 	}
 	prompt := promptOf(t, r, "build-2")
-	for _, want := range []string{"## Refused after your work passed", "merge gate refused (checks)", "check late failed"} {
+	for _, want := range []string{"## Input: refusal\n\nA later step of the factory refused the last attempt's work.", "merge gate refused (checks)", "check late failed"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the second attempt's prompt lacks %q:\n%s", want, prompt)
 		}

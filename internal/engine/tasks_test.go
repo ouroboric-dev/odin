@@ -76,12 +76,12 @@ func TestAPlanThatIsNotReadyGoesBackToThePlannerWithEveryProblem(t *testing.T) {
 		t.Errorf("the planner ran %d times, the refusal went back %d times; want 2 and 1", r.State.Attempts["plan"], r.State.Returns["ready"])
 	}
 	prompt := promptOf(t, r, "plan-2")
-	for _, want := range []string{"## Refused after your work passed", "size L: split it", `layer "repos/db" is not a leaf of this project (repos/app)`, `depends on "p-T9"`} {
+	for _, want := range []string{"## Input: refusal\n\nA later step of the factory refused", "size L: split it", `layer "repos/db" is not a leaf of this project (repos/app)`, `depends on "p-T9"`} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the planner's second prompt lacks %q:\n%s", want, prompt)
 		}
 	}
-	if first := promptOf(t, r, "plan-1"); strings.Contains(first, "Refused after") {
+	if first := promptOf(t, r, "plan-1"); !strings.Contains(first, "## Input: refusal\n\nNone.\n") {
 		t.Error("the first attempt was told of a refusal that had not happened")
 	}
 	if len(r.State.Features) != 2 || len(r.State.Refusals) != 0 {

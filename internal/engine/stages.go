@@ -202,28 +202,37 @@ func clip(s string, n int) string {
 	return strings.TrimSpace(s)
 }
 
-// taskBlock tells a session what its task is, as the plan states it (spec §4.4: a session reads its task
-// from features.json, and Odin, the only reader of that file, puts the task in the prompt). It is empty
-// for a node that works for no task. The words are the planner's, bounded, and are data to the session as
-// the rest of the repository is.
-func taskBlock(r *run.Run, n schema.Node) string {
+// taskInput is the section of the task input: what the session's task is, as the plan states it (spec §4.4: a
+// session reads its task from features.json, and Odin, the only reader of that file, puts the task in the prompt).
+// It is empty for a node that works for no task. The words are the planner's: its title, criteria and test
+// bounded, and its text and its contract whole, since the readiness check bounds them; the contract is in a fence
+// no run of backticks in it can close. Every line is data to the session, written so that none starts a heading.
+func taskInput(r *run.Run, n schema.Node) string {
 	i := slices.IndexFunc(r.State.Features, func(f schema.FeatureRecord) bool { return n.Task != "" && f.Slug() == n.Task })
 	if i < 0 {
 		return ""
 	}
 	f := r.State.Features[i]
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Your task\n\n%s: %s\n\nYou work in the leaf %s.\n\nAcceptance criteria:\n", f.ID, clip(f.Title, maxTaskTitle), f.Layer)
+	fmt.Fprintf(&b, "%s\n\n%s\n\nAcceptance criteria:\n", safeText(f.ID+": "+clip(f.Title, maxTaskTitle)), safeText("You work in the leaf "+f.Layer+"."))
+	var criteria []string
 	for j, c := range f.Criteria {
 		if j == maxTaskCriteria {
-			fmt.Fprintf(&b, "- ... and %d more in the plan\n", len(f.Criteria)-j)
+			criteria = append(criteria, fmt.Sprintf("... and %d more in the plan", len(f.Criteria)-j))
 			break
 		}
-		fmt.Fprintf(&b, "- %s\n", clip(c, maxTaskField))
+		criteria = append(criteria, clip(c, maxTaskField))
 	}
-	fmt.Fprintf(&b, "\nThe test that proves it: %s\n", clip(f.Test, maxTaskField))
+	b.WriteString(bullets(criteria))
+	fmt.Fprintf(&b, "\n%s\n", safeText("The test that proves it: "+clip(f.Test, maxTaskField)))
 	if len(f.DependsOn) > 0 {
-		fmt.Fprintf(&b, "\nIt builds on: %s (already landed).\n", strings.Join(f.DependsOn, ", "))
+		fmt.Fprintf(&b, "\n%s\n", safeText("It builds on: "+strings.Join(f.DependsOn, ", ")+" (already landed)."))
+	}
+	if strings.TrimSpace(f.Text) != "" {
+		b.WriteString("\n### The text\n\n" + safeText(f.Text) + "\n")
+	}
+	if strings.TrimSpace(f.Contract) != "" {
+		b.WriteString("\n### The contract\n\n" + fenced("", f.Contract))
 	}
 	return b.String()
 }

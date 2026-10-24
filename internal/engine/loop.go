@@ -85,31 +85,12 @@ type loopSteps struct {
 	st *jormungandr.State
 	// base is the leaf's commit when the loop started: the task's diff, which the reviewers read, starts there.
 	base string
+	// checks are how the checks of each attempt ended, as this run of the loop saw them: the next attempt's
+	// check_results. A resumed loop has none of the attempts before it.
+	checks map[int][]checkView
 }
 
 var _ jormungandr.Steps = (*loopSteps)(nil)
-
-// prompt is the text of a session: the prompt file of the realm named realm ("" is the graph pack), the
-// skills it names, and the brief. The implementer's prompt comes from the realm of the task's leaf; a
-// reviewer's from the graph pack.
-func (l *loopSteps) prompt(realm, file string, skillNames []string) (string, error) {
-	b, err := readPrompt(l.r.Setup, realm, file)
-	if err != nil {
-		return "", err
-	}
-	text := string(b)
-	skillText, err := l.r.Setup.Libs.Load(skillNames)
-	if err != nil {
-		return "", err
-	}
-	if skillText != "" {
-		text += "\n\n" + skillText
-	}
-	if l.r.Setup.BriefText != "" {
-		text += "\n\n## Brief\n\n" + l.r.Setup.BriefText
-	}
-	return withDecisions(text, l.r.State), nil
-}
 
 // Implement runs one implementer session with the findings that are open, and commits what it did. It
 // returns the implementer's answer as a ygg.implement/v1 document, which holds its disputes; an answer that
@@ -117,14 +98,13 @@ func (l *loopSteps) prompt(realm, file string, skillNames []string) (string, err
 // attempt left it: what it wrote is discarded, so the next attempt does not build on half a thought.
 func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.Input) (schema.Implement, error) {
 	r, n := l.r, l.n
-	text, err := l.prompt(n.Realm, n.Prompt, n.Skills)
+	text, err := promptFor(r, n, nil, map[string]string{
+		schema.SourceOpenFindings: implementerFindings(in),
+		schema.SourceCheckResults: checkResults(l.checks[attempt-1]),
+	})
 	if err != nil {
 		return schema.Implement{}, err
 	}
-	if block := taskBlock(r, n); block != "" {
-		text += "\n\n" + block
-	}
-	text += "\n\n" + jormungandr.FeedbackWith(in.Open, in.Rejected, in.LastFailure, r.State.Reasons[n.ID]) + jormungandr.Refusal(r.State.Refusals[n.ID])
 	text = jormungandr.WithDisputeFormat(text, in.Open, n.Checks)
 	started := func() error {
 		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: attempt,
@@ -132,6 +112,9 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 	}
 	res, ev, err := session(ctx, r, sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, output: schema.ContractImplement,
 		maxTurns: n.MaxTurns, maxTokens: n.MaxTokens, timeout: time.Duration(n.Timeout), started: started})
+	if derr := dropInputs(r, n); derr != nil && err == nil {
+		err = derr
+	}
 	if err != nil {
 		var af *jormungandr.AgentFailure
 		if errors.As(err, &af) {
@@ -199,6 +182,10 @@ func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormun
 		DurationMS: res.Duration.Milliseconds()}); err != nil {
 		return jormungandr.CheckOutcome{}, err
 	}
+	if l.checks == nil {
+		l.checks = map[int][]checkView{}
+	}
+	l.checks[attempt] = append(l.checks[attempt], checkView{Check: name, Passed: res.Passed})
 	out := jormungandr.CheckOutcome{Passed: res.Passed, Check: name,
 		Proof: fmt.Sprintf("check %s ran in attempt %d and passed (%s)", name, attempt, filepath.ToSlash(rel))}
 	if f, failed := res.Finding(filepath.ToSlash(rel) + ":1"); failed {
@@ -219,25 +206,24 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 			rv = c
 		}
 	}
-	text, err := l.prompt("", rv.Prompt, rv.Skills)
+	extra := map[string]string{schema.SourceOpenFindings: reviewerFindings(open)}
+	var ran []checkView
+	for _, c := range passed {
+		ran = append(ran, checkView{Check: c, Passed: true})
+	}
+	extra[schema.SourceCheckResults] = checkResults(ran)
+	if slices.Contains(sessionInputs(n, &rv), schema.SourceChange) {
+		change, err := reviewChange(ctx, r, n, l.base, attempt)
+		if err != nil {
+			return schema.Review{}, err
+		}
+		extra[schema.SourceChange] = change
+	}
+	// The prompt is built, and its input files written, before the snapshot: they are Odin's, not the reviewer's.
+	text, err := promptFor(r, n, &rv, extra)
 	if err != nil {
 		return schema.Review{}, err
 	}
-	if block := taskBlock(r, n); block != "" {
-		text += "\n\n" + block
-	}
-	change, err := reviewChange(ctx, r, n, l.base, attempt)
-	if err != nil {
-		return schema.Review{}, err
-	}
-	if change != "" {
-		text += "\n\n" + change
-	}
-	request, err := jormungandr.ReviewRequest(rv.ID, open, passed, submits(r, rv.Role))
-	if err != nil {
-		return schema.Review{}, err
-	}
-	text += "\n\n" + request
 	before, err := snapshot(ctx, r, n.Repo)
 	if err != nil {
 		return schema.Review{}, err
@@ -245,7 +231,11 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	sp := sessionSpec{key: n.SessionKey(rv), role: rv.Role, repo: n.Repo, text: text, output: schema.ContractReview, readOnly: true, before: before,
 		maxTurns: rv.MaxTurns, maxTokens: rv.MaxTokens, timeout: time.Duration(rv.Timeout)}
 	res, ev, err := session(ctx, r, sp)
-	if err := checkReadOnly(ctx, r, sp, ev, err); err != nil {
+	err = checkReadOnly(ctx, r, sp, ev, err)
+	if derr := dropInputs(r, n); derr != nil && err == nil {
+		err = derr
+	}
+	if err != nil {
 		return schema.Review{}, err
 	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary

@@ -79,7 +79,7 @@ func TestRejectingAnEscalatedLoopGivesItAFullSetOfAttemptsWithTheOperatorsGuidan
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v; want done after the rejection", out, err)
 	}
-	if got := transcript(t, r, "build-4"); !strings.Contains(got, "## Guidance from the operator") || !strings.Contains(got, "in lower case") || !strings.Contains(got, "- check-unit (blocker") {
+	if got := promptOf(t, r, "build-4"); !strings.Contains(got, "## Input: rejection\n\nA person rejected the last attempt") || !strings.Contains(got, "in lower case") || !strings.Contains(got, `"id": "check-unit"`) {
 		t.Errorf("the fourth attempt was told:\n%s", got)
 	}
 	text := ledgerText(t, r)
@@ -190,7 +190,7 @@ func TestASendBackAfterAPassedLoopStartsTheLoopOver(t *testing.T) {
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped || out.Gate != "feature-gate" {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if got := transcript(t, r, "build-2"); !strings.Contains(got, "Add a footer.") || !strings.Contains(got, "## Guidance from the operator") {
+	if got := promptOf(t, r, "build-2"); !strings.Contains(got, "Add a footer.") || !strings.Contains(got, "## Input: rejection\n\nA person rejected the last attempt") {
 		t.Errorf("the loop's new first attempt was told:\n%s", got)
 	}
 	if r.State.Loops["build"].State.Attempt != 1 {

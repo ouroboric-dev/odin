@@ -178,7 +178,7 @@ func TestATaskInALeafWhoseRealmOffersNoRecipeFailsTheNode(t *testing.T) {
 
 func TestTheTaskIsInThePromptOfItsImplementerAndItsReviewer(t *testing.T) {
 	shape := strings.Replace(taskShape, "      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [rejection, refusal], output: ygg.implement/v1 }\n",
-		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md, output: ygg.review/v1 } ], input: [rejection, refusal], output: ygg.implement/v1 }\n", 1)
+		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md, input: [task], output: ygg.review/v1 } ], input: [task, rejection, refusal], output: ygg.implement/v1 }\n", 1)
 	script := "steps:\n" + writeStep("p-t1-implement", "api.txt") + "  p-t1-implement-spec:\n    - result: { status: ok, summary: no findings, report: [] }\n"
 	r := startRealms(t, realmsSetup{nodes: shape, script: script,
 		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")},
@@ -191,7 +191,7 @@ func TestTheTaskIsInThePromptOfItsImplementerAndItsReviewer(t *testing.T) {
 	}
 	for _, stem := range []string{"p-t1-implement-1", "p-t1-implement-spec-1"} {
 		got := promptOf(t, r, stem)
-		for _, want := range []string{"## Your task", "p-T1: the API stores galleries", "You work in the leaf repos/api.", "- a gallery can be created", "- a name is required",
+		for _, want := range []string{"## Input: task", "p-T1: the API stores galleries", "You work in the leaf repos/api.", "- a gallery can be created", "- a name is required",
 			"The test that proves it: repos/api/gallery_test.go TestCreate"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("the prompt of %s lacks %q:\n%s", stem, want, got)
@@ -209,11 +209,11 @@ func TestATasksWordsAreBoundedInAPrompt(t *testing.T) {
 		f.Criteria = append(f.Criteria, long)
 	}
 	r.State.Features = []schema.FeatureRecord{{Feature: f, Status: schema.TaskTodo}}
-	got := taskBlock(r, schema.Node{Task: "p-t1"})
+	got := taskInput(r, schema.Node{Task: "p-t1"})
 	if len(got) > 40*1100 || strings.Contains(got, strings.Repeat("w", 1001)) || !strings.Contains(got, "... and 10 more in the plan") {
 		t.Errorf("the block is %d bytes: a task's words are cut, and criteria past the thirtieth are counted", len(got))
 	}
-	if taskBlock(r, schema.Node{}) != "" || taskBlock(r, schema.Node{Task: "nobody"}) != "" {
+	if taskInput(r, schema.Node{}) != "" || taskInput(r, schema.Node{Task: "nobody"}) != "" {
 		t.Error("a node with no task, or an unknown one, gets a task block")
 	}
 }

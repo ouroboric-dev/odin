@@ -49,14 +49,14 @@ func TestAReviewerSeesItsFindingsAndClosesThemOnlyWithProof(t *testing.T) {
 	if r.State.Loops["build"].State.Attempt != 2 || r.State.Attempts["build-spec"] != 2 {
 		t.Errorf("loop attempt %d, reviewer sessions %d; want 2 and 2", r.State.Loops["build"].State.Attempt, r.State.Attempts["build-spec"])
 	}
-	first, second := transcript(t, r, "build-spec-1"), transcript(t, r, "build-spec-2")
-	if !strings.Contains(first, "Your id is spec") || !strings.Contains(first, "The checks that passed on this work: unit.") || strings.Contains(first, "reported before") {
+	first, second := promptOf(t, r, "build-spec-1"), promptOf(t, r, "build-spec-2")
+	if !strings.Contains(first, "Your id is spec") || !strings.Contains(first, "## Input: check_results") || !strings.Contains(first, `"check": "unit",`+"\n"+`    "passed": true`) || strings.Contains(first, "reported before") {
 		t.Errorf("the first review was told:\n%s", first)
 	}
-	if !strings.Contains(second, "Findings you reported before") || !strings.Contains(second, `\"id\": \"spec-1\"`) {
+	if !strings.Contains(second, "## Input: open_findings\n\nThese are the findings you reported before") || !strings.Contains(second, `"id": "spec-1"`) {
 		t.Errorf("the second review wasn't shown its finding:\n%s", second)
 	}
-	if !strings.Contains(transcript(t, r, "build-2"), "- spec-1 (major, from spec) at build.txt:1") {
+	if p := promptOf(t, r, "build-2"); !strings.Contains(p, `"id": "spec-1"`) || !strings.Contains(p, `"location": "build.txt:1"`) {
 		t.Error("the second implementer attempt wasn't given the reviewer's finding")
 	}
 	text := ledgerText(t, r)

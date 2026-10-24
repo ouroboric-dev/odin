@@ -1,0 +1,215 @@
+package engine
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"syscall"
+
+	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/jormungandr"
+	"github.com/ouroboric-dev/odin/internal/run"
+)
+
+// maxInlineInput is the most bytes one input's section takes in a prompt. A larger one goes to a file in the
+// session's workspace, which the section names: it is never cut, and never silently left out.
+const maxInlineInput = 96 << 10
+
+// Where the files of the inputs over the bound go: inputs/ in a scratch workspace; in a leaf or an umbrella, a
+// folder that no checkpoint commits (ruling R36), which the leaf's git ignores by a rule in its git dir, Odin's,
+// and which Odin removes after the session.
+const (
+	scratchInputs = "inputs"
+	repoInputs    = ".ygg-inputs"
+)
+
+// promptFor is the prompt of a session of node n, or of its reviewer rv when rv is set: the role's prompt file
+// and its skills, as they are; for a scratch node, what its workspace holds; then one section for each input the
+// session declares, in the declared order, each rendered from its typed value (inputs.go); then how to hand back
+// the answer, a document of the session's contract, through the submit tool when the role's adapter has it. extra
+// holds the values only the caller has: the task's change, the open findings and the check results. A declared
+// input with no value is a *nodeFailure, before any session starts. An input over maxInlineInput is written to
+// the session's workspace, and its section names the file.
+func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]string) (string, error) {
+	who, role, realm, file, skillNames, output := n.ID, n.Role, n.Realm, n.Prompt, n.Skills, n.Output
+	if rv != nil {
+		// A reviewer's prompt comes from the graph pack.
+		who, role, realm, file, skillNames, output = n.SessionKey(*rv), rv.Role, "", rv.Prompt, rv.Skills, rv.Output
+	}
+	inputs := sessionInputs(n, rv)
+	b, err := readPrompt(r.Setup, realm, file)
+	if err != nil {
+		return "", err
+	}
+	text := strings.TrimRight(string(b), "\n")
+	// Skills load explicitly, the ones the session names, and no others (spec §5.1).
+	skillText, err := r.Setup.Libs.Load(skillNames)
+	if err != nil {
+		return "", err
+	}
+	if skillText != "" {
+		text = strings.TrimRight(text+"\n\n"+skillText, "\n")
+	}
+	if n.Scratch {
+		text = strings.TrimRight(text+"\n\n"+workspaceNote(), "\n")
+	}
+	files, err := inputFiles(r, n)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range inputs {
+		body, err := inputBody(r, n, who, name, extra)
+		if err != nil {
+			return "", err
+		}
+		if len(body) > maxInlineInput {
+			rel, err := files.write(name, body)
+			if err != nil {
+				return "", &nodeFailure{fmt.Errorf("the input %s of %s: %w", name, who, err)}
+			}
+			body = fmt.Sprintf("Your input %s is in %s: read it whole.\n", name, rel)
+		}
+		text = strings.TrimRight(text+"\n\n## Input: "+name+"\n\n"+body, "\n")
+	}
+	viaSubmit := submits(r, role)
+	if rv != nil {
+		// The review request holds the answer's instructions, and the rules of a finding.
+		request, err := jormungandr.ReviewRequest(rv.ID, nil, nil, viaSubmit)
+		if err != nil {
+			return "", err
+		}
+		return text + "\n\n" + request, nil
+	}
+	answer, err := jormungandr.AnswerInstructions(schema.Contract(output), viaSubmit)
+	if err != nil {
+		return "", err
+	}
+	return text + "\n\n## Your answer\n\n" + answer + "\n", nil
+}
+
+// sessionInputs lists the inputs of a session of node n, or of its reviewer rv when rv is set, in order: what it
+// declares, then what the node reviews when it does not list it (ruling R12), and for a loop outside a foreach
+// body the loop's own sources (withLoopSources).
+func sessionInputs(n schema.Node, rv *schema.Reviewer) []string {
+	inputs := n.Input
+	if rv != nil {
+		inputs = rv.Input
+	} else if n.Reviews != "" && !slices.Contains(inputs, n.Reviews) {
+		inputs = append(slices.Clone(inputs), n.Reviews)
+	}
+	if n.Kind == schema.KindLoop && n.Task == "" {
+		inputs = withLoopSources(inputs, rv != nil)
+	}
+	return inputs
+}
+
+// withLoopSources adds to the inputs of a session of a loop outside a foreach body the loop's own sources it
+// lacks: the open findings and the check results, and for a reviewer the change. The graph check lets only a
+// foreach body declare them (ruling R13), and a loop's sessions can't work without them; inside a body, a session
+// gets only what it declares.
+func withLoopSources(inputs []string, reviewer bool) []string {
+	own := []string{schema.SourceOpenFindings, schema.SourceCheckResults}
+	if reviewer {
+		own = append([]string{schema.SourceChange}, own...)
+	}
+	out := slices.Clone(inputs)
+	for _, s := range own {
+		if !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// workspaceNote tells a scratch agent what its workspace holds and where its documents go.
+func workspaceNote() string {
+	return "## Your workspace\n\nYou work in the folder you start in. It is not a repository, and nothing in it is committed by you.\n" +
+		"- Your inputs are the sections below. An input too large for this prompt is a file under " + scratchInputs + "/, which its section names.\n" +
+		"- Write every document you produce under out/, in the folders it should have in the project (for example out/docs/2-engineering/specs/...). " +
+		"Only out/ leaves this workspace, and only after a person or a check has approved it.\n"
+}
+
+// inputFolder is where the input files of one session go: base is the session's workspace, folder the folder in it.
+type inputFolder struct {
+	base, folder string
+	exclude      func() error // makes the folder one git ignores, before the first file; nil for a workspace
+}
+
+// inputFiles is the input folder of node n's sessions, emptied: in a scratch node's workspace, or in the repo it
+// works in. The folder of a repo is removed whole, a link included, never followed.
+func inputFiles(r *run.Run, n schema.Node) (*inputFolder, error) {
+	if n.Scratch {
+		f := &inputFolder{base: r.ScratchDir(n.ID), folder: scratchInputs}
+		return f, os.RemoveAll(filepath.Join(f.base, f.folder))
+	}
+	f := &inputFolder{base: r.RepoDir(n.Repo), folder: repoInputs}
+	if _, ok := r.State.Leaves[n.Repo]; ok {
+		f.exclude = func() error {
+			l, err := r.Leaf(n.Repo)
+			if err != nil {
+				return err
+			}
+			return l.Exclude("/" + repoInputs + "/")
+		}
+	}
+	return f, dropInputs(r, n)
+}
+
+// dropInputs removes the input files of node n's sessions from the repo it works in, after a session and before
+// its checkpoint: nothing of them is ever committed (ruling R36). A link in their place is removed, not followed.
+func dropInputs(r *run.Run, n schema.Node) error {
+	if n.Scratch {
+		return nil
+	}
+	return os.RemoveAll(filepath.Join(r.RepoDir(n.Repo), repoInputs))
+}
+
+func (f *inputFolder) write(name, body string) (string, error) {
+	if f.exclude != nil {
+		if err := f.exclude(); err != nil {
+			return "", err
+		}
+		f.exclude = nil
+	}
+	return writeInputFile(f.base, f.folder, name, body)
+}
+
+// inputName is the name of an input: a node id or a built-in source. It names one file, and never .git or
+// .factory, nor anything outside the folder.
+var inputName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// writeInputFile writes body to <folder>/<name>.md under base, and returns that path, relative to base. The folder
+// is made when it is not there, and must be a folder of its own, not a link; the file is new, and is never
+// written through a link.
+func writeInputFile(base, folder, name, body string) (string, error) {
+	if !inputName.MatchString(name) {
+		return "", fmt.Errorf("%q can't name an input file", name)
+	}
+	dir := filepath.Join(base, folder)
+	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+		return "", err
+	}
+	if st, err := os.Lstat(dir); err != nil {
+		return "", err
+	} else if !st.IsDir() {
+		return "", fmt.Errorf("%s is %s, not a folder of the workspace's own", dir, st.Mode().Type())
+	}
+	p := filepath.Join(dir, name+".md")
+	out, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return "", err
+	}
+	if _, err := out.WriteString(body); err != nil {
+		out.Close()
+		return "", err
+	}
+	if err := out.Close(); err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(filepath.Join(folder, name+".md")), nil
+}

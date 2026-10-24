@@ -16,7 +16,6 @@ import (
 	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
-	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/run"
@@ -212,33 +211,13 @@ func readPrompt(s *run.Setup, realm, file string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// runAgent runs agent node n in the repo it works in: one session, whose prompt promptFor builds from the node's
+// declared inputs, and a checkpoint of what it did.
 func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
-	prompt, err := readPrompt(r.Setup, n.Realm, n.Prompt)
+	text, err := promptFor(r, n, nil, nil)
 	if err != nil {
 		return err
-	}
-	text := string(prompt)
-	// Skills load explicitly, the ones this node names, and no others (spec §5.1).
-	skillText, err := r.Setup.Libs.Load(n.Skills)
-	if err != nil {
-		return err
-	}
-	if skillText != "" {
-		text += "\n\n" + skillText
-	}
-	if r.Setup.BriefText != "" {
-		text += "\n\n## Brief\n\n" + r.Setup.BriefText
-	}
-	text = withDecisions(text, s)
-	if block := taskBlock(r, n); block != "" {
-		text += "\n\n" + block
-	}
-	if reason := s.Reasons[n.ID]; reason != "" {
-		text += "\n\n## Rejected at the approval point\n\n" + reason + "\n"
-	}
-	if refusal := s.Refusals[n.ID]; refusal != "" {
-		text += "\n\n" + jormungandr.Refusal(refusal)
 	}
 	var before string
 	if n.ReadOnly {
@@ -249,7 +228,11 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	sp := sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, output: schema.Contract(n.Output), readOnly: n.ReadOnly, before: before,
 		maxTurns: n.MaxTurns, maxTokens: n.MaxTokens, timeout: time.Duration(n.Timeout)}
 	res, ev, err := sessionForOutput(ctx, r, sp)
-	if err := checkReadOnly(ctx, r, sp, ev, err); err != nil {
+	err = checkReadOnly(ctx, r, sp, ev, err)
+	if derr := dropInputs(r, n); derr != nil && err == nil {
+		err = derr
+	}
+	if err != nil {
 		return nodeError(err)
 	}
 	if ev.Commit, err = checkpoint(ctx, r, n, ev.Attempt); err != nil {

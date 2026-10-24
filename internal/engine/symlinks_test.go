@@ -51,25 +51,6 @@ func TestPublishWritesNothingThroughASymlinkInTheProject(t *testing.T) {
 	}
 }
 
-func TestAScratchInputReachedThroughASymlinkIsRefused(t *testing.T) {
-	t.Skip("typed-T16: graph schema 2 has no inputs: folders to copy; T16 decides the workspace's input files")
-	r := start(t, "key-points", "", scratchNode, designScript)
-	outside := outsideDir(t)
-	if err := os.MkdirAll(filepath.Join(r.Project, "docs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(r.Project, "docs", "more")); err != nil {
-		t.Fatal(err)
-	}
-	out, err := Advance(bg, r)
-	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "docs/more") || !strings.Contains(out.Err.Error(), "symlink") {
-		t.Fatalf("Advance() = %+v, %v", out, err)
-	}
-	if _, err := os.Stat(filepath.Join(r.ScratchDir("design"), "docs", "more", "secret.md")); err == nil {
-		t.Error("a file outside the project was copied into the workspace")
-	}
-}
-
 func TestAPlanAndALeavesFileReachedThroughASymlinkAreNotRead(t *testing.T) {
 	outside := outsideDir(t)
 	os.WriteFile(filepath.Join(outside, "tasks.md"), []byte(readyPlan+taskMD("p-T1", "repos/app", "S", "nothing")), 0o644)

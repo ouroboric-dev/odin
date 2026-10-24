@@ -68,11 +68,13 @@ func TestAFailingCheckGoesBackToTheNextAttemptAsAFinding(t *testing.T) {
 	if r.State.Attempts["build"] != 2 || r.State.Loops["build"].State.Attempt != 2 {
 		t.Errorf("sessions %d, loop attempt %d; want 2 and 2", r.State.Attempts["build"], r.State.Loops["build"].State.Attempt)
 	}
-	first, second := transcript(t, r, "build-1"), transcript(t, r, "build-2")
-	if strings.Contains(first, "Findings to fix") {
+	first, second := promptOf(t, r, "build-1"), promptOf(t, r, "build-2")
+	if !strings.Contains(first, "## Input: open_findings\n\nNone.\n") {
 		t.Errorf("the first attempt was told of findings:\n%s", first)
 	}
-	for _, want := range []string{"## Findings to fix", "- check-unit (blocker, from unit) at logs/build-1-unit.log:1", "check unit failed: exit status 1", "Do not say any of them is fixed"} {
+	for _, want := range []string{"## Input: open_findings\n\nThe checks and reviewers found these problems", `"id": "check-unit"`, `"severity": "blocker"`, `"source": "unit"`,
+		`"location": "logs/build-1-unit.log:1"`, "check unit failed: exit status 1", "Do not say any of them is fixed",
+		"## Input: check_results", `"check": "unit"`, `"passed": false`} {
 		if !strings.Contains(second, want) {
 			t.Errorf("the second attempt's prompt lacks %q:\n%s", want, second)
 		}

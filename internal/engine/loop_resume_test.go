@@ -49,7 +49,7 @@ func TestACapBetweenTwoAttemptsStopsTheRunAndTheSameAttemptGoesOnWhenItIsRaised(
 	if got := r.State.Loops["build"].State.Attempt; got != 2 || r.State.Attempts["build"] != 2 {
 		t.Errorf("the loop ended in attempt %d with %d sessions; a stop for a cap must not use up an attempt", got, r.State.Attempts["build"])
 	}
-	if !strings.Contains(transcript(t, r, "build-2"), "- check-unit (blocker") {
+	if !strings.Contains(promptOf(t, r, "build-2"), `"id": "check-unit"`) {
 		t.Error("the finding was lost across the stop")
 	}
 }
@@ -117,7 +117,7 @@ func TestARunInterruptedInAnAttemptResumesThatAttemptWithTheFindings(t *testing.
 	if got := r.State.Loops["build"].State.Attempt; got != 2 {
 		t.Errorf("the loop ended in attempt %d; the interrupted attempt 2 must be done again, not counted twice", got)
 	}
-	if !strings.Contains(transcript(t, r, "build-3"), "- check-unit (blocker") {
+	if !strings.Contains(promptOf(t, r, "build-3"), `"id": "check-unit"`) {
 		t.Error("the resumed attempt wasn't given the finding")
 	}
 }

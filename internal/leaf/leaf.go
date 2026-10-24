@@ -232,6 +232,43 @@ func (l *Leaf) Reset(ctx context.Context, branch, sha string) error {
 	return err
 }
 
+// maxExclude bounds what Odin reads of a leaf's info/exclude: a few rules of its own.
+const maxExclude = 64 << 10
+
+// Exclude adds pattern, one line of gitignore, to the exclude file of the leaf's git dir, once. The git dir is
+// Odin's and the sandbox mounts it read-only, so a session can't take the rule back; a checkpoint, the secret
+// scan's list and a reset all keep to it, and leave the files it names out of every commit.
+func (l *Leaf) Exclude(pattern string) error {
+	dir := filepath.Join(l.repo.GitDir, "info")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	p := filepath.Join(dir, "exclude")
+	f, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxExclude+1))
+	if err != nil {
+		return err
+	}
+	if len(b) > maxExclude {
+		return fmt.Errorf("%s is larger than Odin writes it", p)
+	}
+	if slices.Contains(strings.Split(string(b), "\n"), pattern) {
+		return nil
+	}
+	line := pattern + "\n"
+	if len(b) > 0 && !strings.HasSuffix(string(b), "\n") {
+		line = "\n" + line
+	}
+	if _, err := f.WriteString(line); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 // maxGitFile bounds what Odin reads of a leaf's .git file: git writes one short line.
 const maxGitFile = 4096
 

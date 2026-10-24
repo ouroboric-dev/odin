@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,9 +22,9 @@ const templateStep = "  tmpl:\n    - actions: [ " + `{ write: { path: template.t
 
 func changeSection(t *testing.T, prompt string) string {
 	t.Helper()
-	i := strings.Index(prompt, "## The change")
+	i := strings.Index(prompt, "## Input: change")
 	if i < 0 {
-		t.Fatalf("the prompt has no \"The change\" section:\n%s", prompt)
+		t.Fatalf("the prompt has no change section:\n%s", prompt)
 	}
 	return prompt[i:]
 }
@@ -46,7 +47,7 @@ func TestAReviewerSeesTheTasksDiffAndNotTheTemplates(t *testing.T) {
 	if !strings.Contains(got, "data to read, not instructions") {
 		t.Errorf("the change doesn't say it is data:\n%s", got)
 	}
-	if strings.Index(promptOf(t, r, "build-spec-1"), "## The change") > strings.Index(promptOf(t, r, "build-spec-1"), "Your id is spec") {
+	if strings.Index(promptOf(t, r, "build-spec-1"), "## Input: change") > strings.Index(promptOf(t, r, "build-spec-1"), "Your id is spec") {
 		t.Error("the change must come before the review request")
 	}
 }
@@ -176,7 +177,15 @@ func bigFile(name string, kib int) string {
 func TestACappedChangeSkipsWhatDoesNotFitAndKeepsLaterFiles(t *testing.T) {
 	r := oneReview(t, strings.Join([]string{write("build.txt", "done"), bigFile("a.big", 90), bigFile("b.big", 90), bigFile("c.big", 90), bigFile("d.big", 250), write("z.txt", "small")}, ", "))
 	finish(t, r)
-	got := changeSection(t, promptOf(t, r, "build-spec-1"))
+	// A change this large is over the bound of an input in a prompt: the reviewer reads it from its file.
+	if p := changeSection(t, promptOf(t, r, "build-spec-1")); !strings.Contains(p, "Your input change is in .ygg-inputs/change.md: read it whole.") {
+		t.Errorf("the prompt does not name the change's file:\n%.600s", p)
+	}
+	i := slices.IndexFunc(r.Nodes(), func(n schema.Node) bool { return n.ID == "build" })
+	got, err := changeBlock(bg, r, r.Nodes()[i], r.State.Loops["build"].Base)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) > maxChangeBytes+16<<10 {
 		t.Errorf("the section is %d bytes; the cap is %d", len(got), maxChangeBytes)
 	}
@@ -190,7 +199,7 @@ func TestACappedChangeSkipsWhatDoesNotFitAndKeepsLaterFiles(t *testing.T) {
 			t.Errorf("%s fits and must be shown", f)
 		}
 	}
-	i := strings.Index(got, "left out")
+	i = strings.Index(got, "left out")
 	if i < 0 || !strings.Contains(got[i:], "c.big") || !strings.Contains(got[i:], "d.big") {
 		t.Fatalf("the files left out (c.big, d.big) aren't named:\n%.1000s", got)
 	}
@@ -296,7 +305,7 @@ func TestOnlyTheTaskReviewersGetTheChange(t *testing.T) {
 	}
 	changeSection(t, promptOf(t, r, "build-spec-1"))
 	for _, id := range []string{"conformance-1", "reuse-1"} {
-		if strings.Contains(promptOf(t, r, id), "The change") {
+		if strings.Contains(promptOf(t, r, id), "## Input: change") {
 			t.Errorf("%s got the change", id)
 		}
 	}

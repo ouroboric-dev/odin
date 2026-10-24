@@ -34,7 +34,7 @@ func withInputs(t *testing.T, r *run.Run) {
 }
 
 func TestAScratchAgentWorksInAWorkspaceOfItsOwnAndWritesUnderOut(t *testing.T) {
-	r := start(t, "key-points", "", scratchNode, designScript)
+	r := start(t, "key-points", "", strings.Replace(scratchNode, "input: [rejection]", "input: [brief, rejection]", 1), designScript)
 	withInputs(t, r)
 	r.Setup.BriefText = "Build a gallery."
 	out, err := Advance(context.Background(), r)
@@ -48,10 +48,10 @@ func TestAScratchAgentWorksInAWorkspaceOfItsOwnAndWritesUnderOut(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(ws, "out", "docs", "design.md")); err != nil || string(b) != "# Design\n" {
 		t.Errorf("out/docs/design.md = %q, %v", b, err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(ws, "brief.md")); string(b) != "Build a gallery." {
-		t.Errorf("brief.md = %q", b)
+	// Nothing is copied in, not even the brief: inputs are typed, and reach the prompt (typed-T16).
+	if _, err := os.Stat(filepath.Join(ws, "brief.md")); err == nil {
+		t.Error("the brief was copied into the workspace")
 	}
-	// The project's folders are not copied in since graph schema 2: inputs are typed (typed-T16).
 	if _, err := os.Stat(filepath.Join(ws, "docs", "more")); err == nil {
 		t.Error("a project folder was copied into the workspace")
 	}
@@ -59,7 +59,7 @@ func TestAScratchAgentWorksInAWorkspaceOfItsOwnAndWritesUnderOut(t *testing.T) {
 		t.Errorf("the agent changed the project's docs/input.md: %q", b)
 	}
 	prompt := promptOf(t, r, "design-1")
-	for _, want := range []string{"## Your workspace", "Write every document you produce under out/", "## Brief"} {
+	for _, want := range []string{"## Your workspace", "Write every document you produce under out/", "## Input: brief\n\nBuild a gallery.\n"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt lacks %q:\n%s", want, prompt)
 		}
@@ -96,27 +96,6 @@ func TestEachAttemptOfAScratchAgentStartsFromAFreshWorkspace(t *testing.T) {
 	}
 	if got := promptOf(t, r, "design-2"); !strings.Contains(got, "shorter, please") {
 		t.Errorf("the second prompt lacks the rejection:\n%s", got)
-	}
-}
-
-func TestAnInputThatCouldLeadOutOfTheProjectIsRefused(t *testing.T) {
-	t.Skip("typed-T16: graph schema 2 has no inputs: folders to copy; T16 decides the workspace's input files")
-	r := start(t, "key-points", "", scratchNode, designScript)
-	withInputs(t, r)
-	secret := filepath.Join(t.TempDir(), "secret.txt")
-	os.WriteFile(secret, []byte("secret\n"), 0o644)
-	if err := os.Symlink(secret, filepath.Join(r.Project, "docs", "more", "link.md")); err != nil {
-		t.Fatal(err)
-	}
-	out, err := Advance(context.Background(), r)
-	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "link.md") || !strings.Contains(out.Err.Error(), "not a regular file") {
-		t.Errorf("Advance() = %+v, %v", out, err)
-	}
-	if _, err := os.Stat(filepath.Join(r.ScratchDir("design"), "docs", "more", "link.md")); err == nil {
-		t.Error("the symlink's target was copied into the workspace")
-	}
-	if r.State.Attempts["design"] != 0 {
-		t.Error("the agent ran although its workspace could not be made")
 	}
 }
 

@@ -67,7 +67,7 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Puts the task's diff in every task reviewer's prompt (change review-diff). A read-only reviewer has no shell, so
   it cannot run `git diff`. Odin records the leaf's commit in the loop's record (`LoopRecord.Base`) when the loop
   starts, keeps it across resumes (a state without it records the leaf's commit when the loop next runs), and
-  `loopSteps.Review` adds a section "The change" after the task block: the files with their line counts, then the
+  a reviewer that declares `change` gets it as that input: the files with their line counts, then the
   patch from the base to the leaf's commit. Host git computes it with hooks, external diff drivers and text
   conversion off, so nothing in the leaf runs. The patch is filled greedily up to `maxChangeBytes` (200 KB): a file
   that does not fit is left out whole and named, and later files that fit are shown. A binary file (a NUL byte) is
@@ -78,9 +78,9 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   and keeps a note that is not blank in `State.Decisions`, as `{gate, note}` in the order given, only when the
   stopped node is a gate: a note at an escalation, `policy-violation` or `shrink-guard` stays on the
   `gate_approved` event. A second approval of the same gate, after a `back_to` return past it, replaces the
-  gate's note; a blank one keeps it, since the earlier decision still holds. `decisionsBlock`
-  (`internal/engine/decisions.go`) writes "The product owner's decisions" after the brief in the prompt of an
-  agent, a scratch agent, an implementer and each reviewer. A rejection that goes back past gates drops their
+  gate's note; a blank one keeps it, since the earlier decision still holds. A session that declares
+  `decisions` gets them as a `ygg.decisions/v1` list, each note with its gate as its id (`decisionsOf`,
+  `internal/engine/inputs.go`; typed-T19 gives a gate a decisions file). A rejection that goes back past gates drops their
   notes; a resume keeps them from `run.json`.
 - Starts each leaf's sandbox on its realm's stack, with the services `services.For` gives the leaf (spec
   §6.1, §9.2, §9.4): for its realm and the realm of each leaf it consumes, the runtime realm's provider of
@@ -104,9 +104,27 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   `outputs/<node>.json` of the run folder, with its hash in `run.json`, and a later stage reads it from there.
   A run started before this change keeps no outputs, and a resume refuses it.
 - Reads the design-conformance verdict (the `ygg.conformance/v1` output of a scratch reviewer that reviews
-  another scratch agent's output, which it finds as `reviewed/`) and gives it to the spec gate: a deviation
+  another scratch agent's output, which it reads as its input) and gives it to the spec gate: a deviation
   stops the gate in every mode, with the proposed amendment in the gate file, and so does a verdict that says
   the reviewer is blocked, with its reason (spec §4.2, §4.6).
+- Builds every session's prompt from the inputs its node declares (change typed-boundaries, `promptFor` in
+  `internal/engine/prompt.go`): the role's prompt file and its skills, as they are; for a scratch node, a note on
+  its workspace; one section `## Input: <name>` for each input, in the declared order; then how to hand back the
+  answer (`jormungandr.AnswerInstructions`, or a reviewer's `ReviewRequest`), through `submit` when the role's
+  adapter has it. The brief passes as it is. Every other input is rendered from its typed value (`inputs.go`): an
+  earlier node's kept output field by field in its schema's order, under `### <field>`, a list of strings as
+  bullets and anything nested as a JSON block; the task with its text and its contract whole, the contract in a
+  fence no run of backticks in it can close; the change, the open findings and the check results from the loop;
+  the date from Odin's clock (`Setup.Clock`). No line of a field's text can start a heading or front matter: one
+  that starts with `#` or `---`, or that underlines, is indented four spaces, and a fence it leaves open is closed.
+  A declared input with no value fails the node before any session; `decisions`, `rejection`, `refusal`,
+  `open_findings` and `check_results` may be empty, and say "None.". An input over 96 KiB goes to a file the
+  section names: `inputs/<name>.md` in a scratch workspace, and in a repo `.ygg-inputs/<name>.md`, which the leaf's
+  git ignores by a rule in its git dir (`Leaf.Exclude`) and which Odin removes after the session, before the
+  checkpoint (ruling R36). A scratch workspace holds `out/` and those files, and nothing of the project. A loop
+  outside a foreach body can't declare its own sources, so its sessions get the open findings, the check results
+  and, for a reviewer, the change without declaring them. A foreach body's input that names a body node names the
+  task's copy of it.
 - Checks the graphs with `ygg doctor`: each pack in `graphs.dir` must load, hold a graph and have the
   name of its folder, or `--graph <name>` could not find it. When `graphs.dir` is `realms.dir`, a pack with
   no graph is a realm and is not an error. It warns when `factory.yaml` has no `graphs`

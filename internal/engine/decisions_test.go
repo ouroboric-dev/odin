@@ -12,7 +12,13 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-const wantHeading = "## The product owner's decisions"
+// wantHeading is in the decisions input of a prompt once an approval gave a note.
+const wantHeading = "### decisions"
+
+// decided is how the decisions input renders the note of gate.
+func decided(gate, note string) string {
+	return "    \"id\": \"" + gate + "\",\n    \"text\": \"" + note + "\""
+}
 
 // promptOf is the prompt a session was given, from its transcript (key-attempt, as "spec-1").
 func sessionPrompt(t *testing.T, r *run.Run, name string) string {
@@ -30,12 +36,12 @@ func sessionPrompt(t *testing.T, r *run.Run, name string) string {
 
 // A design stage, a spec stage with a conformance check, and a plan: three kinds of prompt (an agent in a
 // leaf, a scratch agent) after two gates.
-const decisionNodes = "  - { id: design, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n" +
+const decisionNodes = "  - { id: design, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [decisions, rejection], output: ygg.implement/v1 }\n" +
 	"  - { id: design-gate, kind: gate, gate: spec, reruns: design }\n" +
-	"  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n" +
-	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [rejection], output: ygg.conformance/v1 }\n" +
+	"  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [decisions, rejection], output: ygg.implement/v1 }\n" +
+	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [decisions, rejection], output: ygg.conformance/v1 }\n" +
 	"  - { id: spec-gate, kind: gate, gate: spec, reruns: spec }\n" +
-	"  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection, refusal], output: ygg.plan/v1 }\n"
+	"  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [decisions, rejection, refusal], output: ygg.plan/v1 }\n"
 
 const decisionScript = `steps:
   design:
@@ -80,8 +86,8 @@ func TestApprovalNoteReachesLaterStages(t *testing.T) {
 	if p := sessionPrompt(t, r, "design-1"); strings.Contains(p, wantHeading) {
 		t.Errorf("design's prompt, from before the approval, holds the block:\n%s", p)
 	}
-	first := "design-gate: Use the warm palette."
-	second := "spec-gate: Albums are private by default."
+	first := decided("design-gate", "Use the warm palette.")
+	second := decided("spec-gate", "Albums are private by default.")
 	for _, node := range []string{"spec-1", "conformance-1"} {
 		p := sessionPrompt(t, r, node)
 		if !strings.Contains(p, wantHeading) || !strings.Contains(p, first) || strings.Contains(p, second) {
@@ -99,7 +105,7 @@ func TestApprovalNoteReachesLaterStages(t *testing.T) {
 }
 
 func TestBlockComesAfterTheBrief(t *testing.T) {
-	r := start(t, "step-by-step", "", decisionNodes, decisionScript)
+	r := start(t, "step-by-step", "", strings.ReplaceAll(decisionNodes, "input: [decisions,", "input: [brief, decisions,"), decisionScript)
 	r.Setup.BriefText = "Build a gallery."
 	advanceTo(t, r, "design-gate")
 	if err := Approve(bg, r, "design-gate", "Warm."); err != nil {
@@ -114,11 +120,11 @@ func TestBlockComesAfterTheBrief(t *testing.T) {
 	}
 }
 
-const decisionLoop = `  - { id: design, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }
+const decisionLoop = `  - { id: design, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [decisions, rejection], output: ygg.implement/v1 }
   - { id: design-gate, kind: gate, gate: spec, reruns: design }
   - id: build
     kind: loop
-    input: [rejection, refusal]
+    input: [decisions, rejection, refusal]
     output: ygg.implement/v1
     repo: repos/app
     role: planner
@@ -126,8 +132,8 @@ const decisionLoop = `  - { id: design, kind: agent, role: planner, prompt: p.md
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: planner, prompt: p.md, output: ygg.review/v1 }
-      - { id: arch, role: planner, prompt: p.md, output: ygg.review/v1 }
+      - { id: spec, role: planner, prompt: p.md, input: [decisions], output: ygg.review/v1 }
+      - { id: arch, role: planner, prompt: p.md, input: [decisions], output: ygg.review/v1 }
 `
 
 func TestNoteReachesLoopSessions(t *testing.T) {
@@ -144,7 +150,7 @@ func TestNoteReachesLoopSessions(t *testing.T) {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
 	for _, node := range []string{"build-1", "build-spec-1", "build-arch-1"} {
-		if p := sessionPrompt(t, r, node); !strings.Contains(p, wantHeading) || !strings.Contains(p, "design-gate: Warm.") {
+		if p := sessionPrompt(t, r, node); !strings.Contains(p, wantHeading) || !strings.Contains(p, decided("design-gate", "Warm.")) {
 			t.Errorf("%s's prompt lacks the note:\n%s", node, p)
 		}
 	}
@@ -289,7 +295,7 @@ func TestRejectionDropsTheNotesOfGatesItGoesBackPast(t *testing.T) {
 		t.Errorf("decisions = %+v; want the design gate's note kept", r.State.Decisions)
 	}
 	advanceTo(t, r, "spec-gate")
-	if p := sessionPrompt(t, r, "spec-2"); !strings.Contains(p, "design-gate: Warm.") {
+	if p := sessionPrompt(t, r, "spec-2"); !strings.Contains(p, decided("design-gate", "Warm.")) {
 		t.Errorf("the rerun of spec lacks the kept note:\n%s", p)
 	}
 }
@@ -309,7 +315,7 @@ func TestDecisionsSurviveAResume(t *testing.T) {
 		t.Fatalf("decisions after the resume = %+v", r.State.Decisions)
 	}
 	advanceTo(t, r, "spec-gate")
-	if p := sessionPrompt(t, r, "spec-1"); !strings.Contains(p, "design-gate: Warm.") {
+	if p := sessionPrompt(t, r, "spec-1"); !strings.Contains(p, decided("design-gate", "Warm.")) {
 		t.Errorf("spec's prompt after the resume lacks the note:\n%s", p)
 	}
 }
