@@ -50,9 +50,7 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Log(ev); err != nil {
 		return err
 	}
-	delete(s.Reasons, n.ID)
-	delete(s.Refusals, n.ID)
-	s.Summaries[n.ID] = res.Summary
+	s.Summaries[n.ID] = res.Summary // its rejection and refusal go once its output passes the owner check (advance)
 	return nil
 }
 

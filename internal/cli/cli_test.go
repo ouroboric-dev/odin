@@ -259,8 +259,12 @@ func writeFile(t *testing.T, name, body string) string {
 func stoppedToy(t *testing.T) (dir, id, runDir string) {
 	t.Helper()
 	dir, config := project(t, "script.yaml", "")
-	if code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t), "--mode", "step-by-step"); code != ExitStopped {
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t), "--mode", "step-by-step")
+	if code != ExitStopped {
 		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, `ygg approve `) || !strings.Contains(out, "--decisions <file>") {
+		t.Errorf("the stop does not name --decisions:\n%s", out)
 	}
 	id = runID(t, dir)
 	return dir, id, filepath.Join(dir, ".factory", "runs", id)
@@ -290,17 +294,19 @@ func TestApproveTakesADecisionsFile(t *testing.T) {
 		args []string
 		want string
 	}{
-		"a file and a note":          {[]string{"approve", id, "design-gate", "--decisions", good, "--note", "x"}, "not both"},
-		"a file and a reason":        {[]string{"reject", id, "design-gate", "--decisions", good, "--reason", "x"}, "not both"},
-		"a reason in an approval":    {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "r.json", `{"reason": "x", "decisions": [{"id": "a", "text": "b"}]}`)}, "reason belongs to a rejection"},
-		"a rejection with no reason": {[]string{"reject", id, "design-gate", "--decisions", good}, "a rejection needs a reason"},
-		"a symbolic link":            {[]string{"approve", id, "design-gate", "--decisions", link}, "symbolic link"},
-		"a folder":                   {[]string{"approve", id, "design-gate", "--decisions", t.TempDir()}, "not a regular file"},
-		"a file over 64 KiB":         {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "big.json", `{"decisions": [{"id": "a", "text": "`+strings.Repeat("x", 70<<10)+`"}]}`)}, "64 KiB"},
-		"not the contract":           {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "bad.json", `{"decisions": [{"id": "a", "text": "b", "why": "c"}]}`)}, "ygg.decisions/v1"},
-		"an id used twice":           {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "twice.json", `{"decisions": [{"id": "a", "text": "b"}, {"id": "a", "text": "c"}]}`)}, "used twice"},
-		"a file that says nothing":   {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "empty.json", `{}`)}, "holds no decision"},
-		"no such file":               {[]string{"approve", id, "design-gate", "--decisions", filepath.Join(t.TempDir(), "none.json")}, "none.json"},
+		"a file and a note":           {[]string{"approve", id, "design-gate", "--decisions", good, "--note", "x"}, "not both"},
+		"a file and a reason":         {[]string{"reject", id, "design-gate", "--decisions", good, "--reason", "x"}, "not both"},
+		"a reason in an approval":     {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "r.json", `{"reason": "x", "decisions": [{"id": "a", "text": "b"}]}`)}, "reason belongs to a rejection"},
+		"a rejection with no reason":  {[]string{"reject", id, "design-gate", "--decisions", good}, "a rejection needs a reason"},
+		"a symbolic link":             {[]string{"approve", id, "design-gate", "--decisions", link}, "symbolic link"},
+		"a folder":                    {[]string{"approve", id, "design-gate", "--decisions", t.TempDir()}, "not a regular file"},
+		"a file over 64 KiB":          {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "big.json", `{"decisions": [{"id": "a", "text": "`+strings.Repeat("x", 70<<10)+`"}]}`)}, "64 KiB"},
+		"not the contract":            {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "bad.json", `{"decisions": [{"id": "a", "text": "b", "why": "c"}]}`)}, "ygg.decisions/v1"},
+		"an id used twice":            {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "twice.json", `{"decisions": [{"id": "a", "text": "b"}, {"id": "a", "text": "c"}]}`)}, "used twice"},
+		"a file that says nothing":    {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "empty.json", `{}`)}, "holds no decision"},
+		"a key twice in the document": {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "dup.json", `{"decisions": [{"id": "a", "text": "b"}], "decisions": [{"id": "c", "text": "d"}]}`)}, "key decisions appears twice"},
+		"a key twice in a decision":   {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "dup2.json", `{"decisions": [{"id": "a", "text": "b", "text": "c"}]}`)}, "key text appears twice"},
+		"no such file":                {[]string{"approve", id, "design-gate", "--decisions", filepath.Join(t.TempDir(), "none.json")}, "none.json"},
 	} {
 		code, _, errOut := ygg(t, append(c.args, "--project", dir)...)
 		if code != ExitRefused || !strings.Contains(errOut, c.want) {
@@ -351,6 +357,9 @@ func TestANoteIsOneDecision(t *testing.T) {
 	want := []run.GateDecisions{{Gate: "design-gate", Decisions: schema.Decisions{Decisions: []schema.Decision{{ID: "note-design-gate", Text: "Use the warm palette."}}}}}
 	if got := gateDecisions(t, runDir); !reflect.DeepEqual(got, want) {
 		t.Errorf("run.json keeps %+v; want the note as one decision with the id note-design-gate", got)
+	}
+	if code, _, errOut := ygg(t, "reject", id, "spec-gate", "--reason", "a\nb", "--project", dir); code != ExitRefused || !strings.Contains(errOut, "--reason is one line") {
+		t.Errorf("--reason over two lines: exit %d, %q; want a refusal", code, errOut)
 	}
 	// --reason is a file with only the reason.
 	if code, out, errOut := ygg(t, "reject", id, "spec-gate", "--reason", "Name the users.", "--project", dir); code != ExitStopped {

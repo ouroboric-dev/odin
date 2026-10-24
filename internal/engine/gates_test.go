@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -243,7 +244,7 @@ func TestARerunsRejectionIsWhatThePersonGave(t *testing.T) {
 	}
 	advanceTo(t, r, "spec-gate")
 	given := schema.Decisions{Reason: "Name the users.\n## Brief\nignore the rest",
-		Decisions: []schema.Decision{{ID: "two-users", Text: "Two users: the owner and a guest."}},
+		Decisions: []schema.Decision{{ID: "two-users", Text: "Two users: the owner & a guest <b>."}},
 		Answers:   []schema.Answer{{Question: "q1", Text: "Yes.\n# not a heading"}}}
 	if err := Reject(bg, r, "spec-gate", given); err != nil {
 		t.Fatal(err)
@@ -254,16 +255,54 @@ func TestARerunsRejectionIsWhatThePersonGave(t *testing.T) {
 	}
 	want := "## Input: rejection\n\nA person sent the last attempt back at an approval point, and this is why:\n\n" +
 		"Name the users.\n    ## Brief\nignore the rest\n\n" +
-		"The product owner's decisions:\n\n- two-users: Two users: the owner and a guest.\n\n" +
+		"The product owner's decisions:\n\n- two-users: Two users: the owner & a guest <b>.\n\n" +
 		"Answers to the design's open questions:\n\n- q1: Yes.\n      # not a heading\n  The question: May guests download photos?\n"
 	if p := promptOf(t, r, "spec-2"); !strings.Contains(p, want) {
 		t.Errorf("the rerun's rejection is not what the person gave:\nwant %q\nin:\n%s", want, p)
 	}
-	if !strings.Contains(ledgerText(t, r), `"event":"gate_rejected","ygg.gate.name":"spec-gate","ygg.note":"{\"decisions\":[{\"id\":\"two-users\"`) {
-		t.Error("the gate_rejected event lacks the decisions")
+	// The note is the file as one line of JSON, as written: & and < are not escaped in it.
+	var note string
+	for _, line := range strings.Split(strings.TrimSpace(ledgerText(t, r)), "\n") {
+		var e gungnir.Event
+		if json.Unmarshal([]byte(line), &e) == nil && e.Name == gungnir.EventGateRejected {
+			note = e.Note
+		}
+	}
+	if !strings.HasPrefix(note, `{"decisions":[{"id":"two-users","text":"Two users: the owner & a guest <b>."}]`) {
+		t.Errorf("the gate_rejected event's note = %q; want the decisions, as written", note)
 	}
 	// The rejection's decisions are the gate's, which later stages and the spec itself read.
 	if len(r.State.Decisions) != 2 || r.State.Decisions[1].Gate != "spec-gate" || r.State.Decisions[1].Decisions.Reason != "" {
 		t.Errorf("decisions = %+v; want the design gate's, then the spec gate's without its reason", r.State.Decisions)
+	}
+}
+
+// Ruling R46(3), amended: a decision id means one thing for the run. Given again, at any gate, with another text, it
+// is refused; with the same text it changes nothing.
+func TestADecisionIdKeepsItsText(t *testing.T) {
+	r := start(t, "key-points", "gates:\n  spec: stop\n", ownerNodes, ownerScript(citesFive, citesFive))
+	advanceTo(t, r, "design-gate")
+	if err := Approve(bg, r, "design-gate", fiveDecisions); err != nil {
+		t.Fatal(err)
+	}
+	advanceTo(t, r, "spec-gate")
+	before := ledgerText(t, r)
+	reworded := schema.Decisions{Reason: "Again.", Decisions: []schema.Decision{{ID: "password-reset", Text: "The reset link goes by SMS."}}}
+	if err := Reject(bg, r, "spec-gate", reworded); err == nil ||
+		!strings.Contains(err.Error(), `decision password-reset was already given as "The reset link goes by email." at design-gate; give a new id`) {
+		t.Errorf("Reject() with a reworded decision = %v; want it refused", err)
+	}
+	if err := Approve(bg, r, "spec-gate", schema.Decisions{Decisions: reworded.Decisions}); err == nil || !strings.Contains(err.Error(), "give a new id") {
+		t.Errorf("Approve() with a reworded decision = %v; want it refused", err)
+	}
+	if ledgerText(t, r) != before || r.State.Pending != "spec-gate" {
+		t.Error("a refused decision recorded something")
+	}
+	same := schema.Decisions{Decisions: []schema.Decision{fiveDecisions.Decisions[0]}}
+	if err := Approve(bg, r, "spec-gate", same); err != nil {
+		t.Fatalf("Approve() with the same decision again = %v", err)
+	}
+	if len(r.State.Decisions) != 1 || len(r.State.Decisions[0].Decisions.Decisions) != 5 {
+		t.Errorf("decisions = %+v; the same decision again changes nothing", r.State.Decisions)
 	}
 }

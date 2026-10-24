@@ -256,7 +256,7 @@ func TestABlockedOutputStopsAtItsPublishForAPerson(t *testing.T) {
 				t.Fatal(err)
 			}
 			stopped(2, "Still no way to sign in.")
-			if p := promptOf(t, r, c.node+"-2"); !strings.Contains(p, "## Input: rejection\n\nA person sent the last attempt back") || !strings.Contains(p, "The product owner's decisions:\n\n- note-"+docs+": Use an email and a password.\n") {
+			if p := promptOf(t, r, c.node+"-2"); !strings.Contains(p, "## Input: rejection\n\nA person sent the last attempt back") || !strings.Contains(p, "What the person said:\n\n- note-"+docs+": Use an email and a password.\n") {
 				t.Errorf("the second attempt's prompt lacks the person's note, as the decision it is:\n%s", p)
 			}
 
@@ -385,7 +385,7 @@ func TestASecretInAnOutputRunsItsStageAgainAndNothingIsPublishedWhileItStands(t 
 	prompt := promptOf(t, r, "design-2")
 	rejection, _, _ := strings.Cut(prompt[strings.Index(prompt, "## Input: rejection"):], "\n## Your answer")
 	for _, want := range []string{"## Input: rejection\n\nA person sent the last attempt back", "secret scan", "aws-access-token at " + designJSON + ":1", designMD,
-		"before it is published.\n\nWhat the person who approved the stop said:\n\nThe product owner's decisions:\n\n- no-keys: Name the key's variable; never write a key.\n"} {
+		"before it is published.\n\nWhat the person said:\n\n- no-keys: Name the key's variable; never write a key.\n"} {
 		if !strings.Contains(rejection, want) {
 			t.Errorf("the rejection lacks %q:\n%s", want, rejection)
 		}

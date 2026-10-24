@@ -47,13 +47,6 @@ func reachGate(ctx context.Context, r *run.Run, n schema.Node) (bool, error) {
 			return false, err
 		}
 	}
-	// A spec since the last gate that still misses an owner decision after it went back once stops the gate for a
-	// person (ownercheck.go).
-	missing, err := uncitedSince(r, sinceLastGate(r))
-	if err != nil {
-		return false, &nodeFailure{err}
-	}
-	facts.Uncited = len(missing) > 0
 	var evidence string
 	if n.Gate == gungnir.GatePointerContract {
 		// The gate judges the move that the next pointer node makes (spec §3.4): a pass opens it, a fail
@@ -63,6 +56,13 @@ func reachGate(ctx context.Context, r *run.Run, n schema.Node) (bool, error) {
 			return false, err
 		}
 	}
+	// A spec since the last gate that still misses an owner decision after it went back once stops the gate for a
+	// person (ownercheck.go), whatever the facts above say.
+	missing, err := uncitedSince(r, sinceLastGate(r))
+	if err != nil {
+		return false, &nodeFailure{err}
+	}
+	facts.Uncited = len(missing) > 0
 	action := gate.Decide(s.Mode, n.Gate, r.Setup.Config.Gates, facts)
 	file, err := writeGateFile(r, n, attempt, action, verdict, evidence)
 	if err != nil {
@@ -269,13 +269,13 @@ func Approve(ctx context.Context, r *run.Run, gateID string, d schema.Decisions)
 	var err error
 	switch {
 	case n.Kind == schema.KindPublish && s.PendingGate == gungnir.GateRealSecrets:
-		rejection, err = rejectionText(r, d, "")
+		rejection, err = rejectionText(r, d, "", false)
 		if rejection != "" {
-			rejection = "\n\nWhat the person who approved the stop said:\n\n" + rejection
+			rejection = "\n\n" + rejection
 		}
 		rejection = s.Reasons[n.From] + rejection
 	case blockedStop(n, s.PendingGate):
-		rejection, err = rejectionText(r, d, blockedRetry)
+		rejection, err = rejectionText(r, d, blockedRetry, false)
 	}
 	if err != nil {
 		return err
@@ -382,14 +382,15 @@ func Reject(ctx context.Context, r *run.Run, gateID string, d schema.Decisions) 
 	if err := checkGiven(r, d, true); err != nil {
 		return err
 	}
-	reason, err := rejectionText(r, d, "")
+	n := nodes[s.Position]
+	reason, err := rejectionText(r, d, "", n.Kind == schema.KindGate) // a loop's stop is not a gate: its decisions are not kept
 	if err != nil {
 		return err
 	}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventGateRejected, Node: gateID, Gate: gateID, Note: noteOf(d)}); err != nil {
 		return err
 	}
-	if n := nodes[s.Position]; n.Kind == schema.KindLoop {
+	if n.Kind == schema.KindLoop {
 		rec := s.Loops[n.ID]
 		rec.State.Extend(loopConfig(n))
 		rec.Escalation = nil

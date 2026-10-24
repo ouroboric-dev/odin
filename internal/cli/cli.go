@@ -307,14 +307,14 @@ func (c *command) advance(r *run.Run) int {
 		switch {
 		case reject && approve:
 			fmt.Fprintf(c.out, "Run %s stopped at approval point %s. Read %s, then run one of:\n"+
-				"  ygg approve %s %s [--note \"...\"]\n  ygg reject %s %s --reason \"...\"\n",
+				"  ygg approve %s %s [--note \"...\" | --decisions <file>]\n  ygg reject %s %s --reason \"...\" | --decisions <file>\n",
 				id, out.Gate, gates, id, out.Gate, id, out.Gate)
 		case reject:
 			fmt.Fprintf(c.out, "Run %s stopped at approval point %s, which takes no approval. Read %s, then run:\n"+
-				"  ygg reject %s %s --reason \"...\"\n", id, out.Gate, gates, id, out.Gate)
+				"  ygg reject %s %s --reason \"...\" | --decisions <file>\n", id, out.Gate, gates, id, out.Gate)
 		default:
 			fmt.Fprintf(c.out, "Run %s stopped at the hard approval point %s. Read %s, then run:\n"+
-				"  ygg approve %s %s [--note \"...\"]\nA hard stop takes no rejection: to drop the work, start a new run.\n",
+				"  ygg approve %s %s [--note \"...\" | --decisions <file>]\nA hard stop takes no rejection: to drop the work, start a new run.\n",
 				id, r.State.PendingGate, gates, id, out.Gate)
 		}
 		return ExitStopped

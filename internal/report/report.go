@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/engine"
 	"github.com/ouroboric-dev/odin/internal/metrics"
@@ -45,7 +46,7 @@ func Write(w io.Writer, m *metrics.Run, st *run.State) error {
 	} else {
 		b.WriteString("| Kind | Where | Note |\n| --- | --- | --- |\n")
 		for _, it := range m.Interventions.Items {
-			fmt.Fprintf(&b, "| %s | %s | %s |\n", cell(it.Kind), cell(it.Node), cell(it.Note))
+			fmt.Fprintf(&b, "| %s | %s | %s |\n", cell(it.Kind), cell(it.Node), cell(noteText(it.Note)))
 		}
 		b.WriteString("\n")
 	}
@@ -88,6 +89,37 @@ func quote(s string) string {
 		lines[i] = strings.TrimSpace("> " + inline(l))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// noteText is how an intervention's note reads in the report. A gate's note is a ygg.decisions/v1 file (the ledger keeps
+// it whole): its decisions' ids, its answers' question ids and its reason's first line. Any other note is itself.
+func noteText(note string) string {
+	if !strings.HasPrefix(note, "{") {
+		return note
+	}
+	d, err := schema.Decode[schema.Decisions](schema.ContractDecisions, []byte(note))
+	if err != nil {
+		return note
+	}
+	var parts []string
+	if len(d.Decisions) > 0 {
+		ids := make([]string, len(d.Decisions))
+		for i, x := range d.Decisions {
+			ids[i] = x.ID
+		}
+		parts = append(parts, "decisions "+strings.Join(ids, ", "))
+	}
+	if len(d.Answers) > 0 {
+		ids := make([]string, len(d.Answers))
+		for i, a := range d.Answers {
+			ids[i] = a.Question
+		}
+		parts = append(parts, "answers "+strings.Join(ids, ", "))
+	}
+	if first, _, _ := strings.Cut(strings.TrimSpace(d.Reason), "\n"); first != "" {
+		parts = append(parts, "reason: "+first)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // cell makes text fit in one table cell: inline escapes the pipe too.

@@ -85,6 +85,12 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			if err == nil {
 				err = ownerCheck(r, n) // a spec must cite every owner decision (ownercheck.go)
 			}
+			if err == nil {
+				// The session's work stands: its rejection and refusal are used. A spec the check sends back keeps them,
+				// so its next session still has the person's reason beside the check's refusal.
+				delete(s.Reasons, n.ID)
+				delete(s.Refusals, n.ID)
+			}
 		case schema.KindLoop:
 			err = runLoop(ctx, r, n)
 		case schema.KindExec:
@@ -246,9 +252,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Log(ev); err != nil {
 		return err
 	}
-	delete(s.Reasons, n.ID)
-	delete(s.Refusals, n.ID)
-	s.Summaries[n.ID] = res.Summary
+	s.Summaries[n.ID] = res.Summary // its rejection and refusal go once its output passes the owner check (advance)
 	return nil
 }
 

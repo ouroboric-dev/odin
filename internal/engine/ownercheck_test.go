@@ -150,3 +150,52 @@ func TestASpecThatCannotSeeTheOwnerDecisionsIsRefusedWhenTheRunStarts(t *testing
 		}
 	}
 }
+
+// A spec that a person rejected and that the check then sends back keeps the person's reason on the run after: the
+// reason goes only once the check passes (review I1). Else the third spec would not know why the person rejected it.
+func TestAnOwnerCheckRerunKeepsThePersonsRejection(t *testing.T) {
+	citesSix := specCiting("password-reset", "storage-cap", "guest-download", "logout-on-change", "two-users", "album-limit")
+	r := start(t, "key-points", "gates:\n  spec: stop\n", ownerNodes, ownerScript(citesFive, citesFive, citesSix))
+	advanceTo(t, r, "design-gate")
+	if err := Approve(bg, r, "design-gate", fiveDecisions); err != nil {
+		t.Fatal(err)
+	}
+	advanceTo(t, r, "spec-gate")
+	rejection := schema.Decisions{Reason: "Name the users.", Decisions: []schema.Decision{{ID: "two-users", Text: "The owner and a guest."}}}
+	if err := Reject(bg, r, "spec-gate", rejection); err != nil {
+		t.Fatal(err)
+	}
+	advanceTo(t, r, "spec-gate")
+	if r.State.Attempts["spec"] != 3 {
+		t.Fatalf("spec ran %d time(s); want 3: the second misses two-users and goes back", r.State.Attempts["spec"])
+	}
+	p := promptOf(t, r, "spec-3")
+	for _, want := range []string{"## Input: rejection\n\nA person sent the last attempt back at an approval point, and this is why:\n\nName the users.\n",
+		"the spec does not cite the product owner's decisions two-users: cite each in a decision or a deviation"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the third spec's prompt lacks %q:\n%s", want, p)
+		}
+	}
+	if r.State.Reasons["spec"] != "" || r.State.Refusals["spec"] != "" {
+		t.Errorf("the reason %q or the refusal %q is kept after the check passed", r.State.Reasons["spec"], r.State.Refusals["spec"])
+	}
+}
+
+// Ruling R46(6): a spec that still misses a decision after it went back, with no gate after it for a person to
+// decide, fails its node.
+func TestASecondMissWithNoGateAfterTheSpecFailsIt(t *testing.T) {
+	nodes := strings.SplitAfter(ownerNodes, "\n")
+	noGate := strings.Join(nodes[:3], "") // design, design-gate, spec
+	r := start(t, "key-points", "", noGate, ownerScript(citesFour, citesFour))
+	advanceTo(t, r, "design-gate")
+	if err := Approve(bg, r, "design-gate", fiveDecisions); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "node spec: "+wantRefusal+" after Odin sent it back once, and no approval point follows") {
+		t.Errorf("Advance() = %+v, %v; want the spec failed with the ids", out, err)
+	}
+	if r.State.Attempts["spec"] != 2 {
+		t.Errorf("spec ran %d time(s); want 2", r.State.Attempts["spec"])
+	}
+}

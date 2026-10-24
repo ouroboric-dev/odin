@@ -5,12 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/run"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	gmtext "github.com/yuin/goldmark/text"
 )
 
 // wantHeading is in the decisions input of a prompt once an approval gave a note.
@@ -227,8 +231,9 @@ func TestOnlyAGateNoteIsADecision(t *testing.T) {
 }
 
 // A gate met again (a back_to return past it, or a rejection there and then an approval) adds what it is given to
-// what it was given before: a decision or an answer with the id of an earlier one replaces it, and the gate moves to
-// the end, the order in which they were given. Nothing given restates nothing, and the earlier decisions hold.
+// what it was given before, and moves to the end, the order in which they were given. A decision already kept, at any
+// gate, is not kept twice (Approve refuses one with another text, ruling R46(3)); an answer to a question answered
+// before replaces it. Nothing given restates nothing, and the earlier decisions hold.
 func TestAGateMetAgainAddsToWhatItWasGiven(t *testing.T) {
 	s := &run.State{}
 	one := func(id, text string) schema.Decisions {
@@ -236,22 +241,59 @@ func TestAGateMetAgainAddsToWhatItWasGiven(t *testing.T) {
 	}
 	keepDecisions(s, "design-gate", one("palette", "Warm."))
 	keepDecisions(s, "spec-gate", one("users", "Two users."))
-	keepDecisions(s, "design-gate", schema.Decisions{Decisions: []schema.Decision{{ID: "palette", Text: "Cold."}, {ID: "font", Text: "Serif."}},
+	keepDecisions(s, "spec-gate", one("palette", "Warm."))
+	want := []run.GateDecisions{{Gate: "design-gate", Decisions: one("palette", "Warm.")}, {Gate: "spec-gate", Decisions: one("users", "Two users.")}}
+	if !reflect.DeepEqual(s.Decisions, want) {
+		t.Errorf("a decision given again at another gate: decisions = %+v, want %+v", s.Decisions, want)
+	}
+	keepDecisions(s, "design-gate", schema.Decisions{Decisions: []schema.Decision{{ID: "palette", Text: "Warm."}, {ID: "font", Text: "Serif."}},
 		Answers: []schema.Answer{{Question: "q1", Text: "Yes."}}})
 	keepDecisions(s, "design-gate", schema.Decisions{Answers: []schema.Answer{{Question: "q1", Text: "No."}}})
-	want := []run.GateDecisions{{Gate: "spec-gate", Decisions: one("users", "Two users.")},
-		{Gate: "design-gate", Decisions: schema.Decisions{Decisions: []schema.Decision{{ID: "palette", Text: "Cold."}, {ID: "font", Text: "Serif."}},
+	want = []run.GateDecisions{{Gate: "spec-gate", Decisions: one("users", "Two users.")},
+		{Gate: "design-gate", Decisions: schema.Decisions{Decisions: []schema.Decision{{ID: "palette", Text: "Warm."}, {ID: "font", Text: "Serif."}},
 			Answers: []schema.Answer{{Question: "q1", Text: "No."}}}}}
 	if !reflect.DeepEqual(s.Decisions, want) {
 		t.Errorf("decisions = %+v, want %+v", s.Decisions, want)
 	}
 	keepDecisions(s, "design-gate", schema.Decisions{})
+	keepDecisions(s, "spec-gate", one("users", "Two users."))
 	if !reflect.DeepEqual(s.Decisions, want) {
-		t.Errorf("after an approval that gave nothing: decisions = %+v, want %+v", s.Decisions, want)
+		t.Errorf("after approvals that gave nothing new: decisions = %+v, want %+v", s.Decisions, want)
 	}
 	keepDecisions(s, "plan-gate", schema.Decisions{Reason: "Thin."})
 	if !reflect.DeepEqual(s.Decisions, want) {
 		t.Errorf("a rejection's reason alone was kept as a decision: %+v", s.Decisions)
+	}
+}
+
+// A decision or an answer reads as its text in the decisions input: a fence it opens is closed in its item, and no
+// line of it starts an HTML block or a heading (review focus 4).
+func TestADecisionCannotBreakTheDecisionsInput(t *testing.T) {
+	r := start(t, "key-points", "", ownerNodes, ownerScript(specCiting("fenced", "html")))
+	advanceTo(t, r, "design-gate")
+	given := schema.Decisions{Decisions: []schema.Decision{{ID: "fenced", Text: "```\nan open fence"}, {ID: "html", Text: "Plain.\n<!-- never closed\n\n## after"}},
+		Answers: []schema.Answer{{Question: "q1", Text: "Yes.\n<div>\n# not a heading"}}}
+	if err := Approve(bg, r, "design-gate", given); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	p := promptOf(t, r, "spec-1")
+	i, j := strings.Index(p, "## Input: decisions\n"), strings.Index(p, "## Input: rejection\n")
+	if i < 0 || j < i {
+		t.Fatalf("the prompt lacks its decisions and rejection sections:\n%s", p)
+	}
+	section := p[i:j]
+	want := "### decisions\n\n- fenced (at design-gate):\n  ```\n  an open fence\n  ```\n" +
+		"- html (at design-gate): Plain.\n      <!-- never closed\n\n      ## after\n\n" +
+		"### answers\n\n- q1 (at design-gate): Yes.\n      <div>\n      # not a heading\n  The question: May guests download photos?\n"
+	if !strings.Contains(section, want) {
+		t.Errorf("the decisions input is not as its fields:\nwant %q\nin:\n%s", want, section)
+	}
+	headings, html := parsedMarkdown([]byte(section))
+	if html != 0 || !slices.Equal(headings, []string{"## Input: decisions", "### decisions", "### answers"}) {
+		t.Errorf("goldmark reads %d HTML block(s) and the headings %q; want none, and Odin's own", html, headings)
 	}
 }
 
@@ -313,4 +355,28 @@ func TestDecisionsSurviveAResume(t *testing.T) {
 	if p := sessionPrompt(t, r, "spec-1"); !strings.Contains(p, decided("design-gate", "Warm.")) {
 		t.Errorf("spec's prompt after the resume lacks the note:\n%s", p)
 	}
+}
+
+// parsedMarkdown is what goldmark, a CommonMark parser, reads in a text: its headings, as "## text", and the number of
+// HTML blocks.
+func parsedMarkdown(body []byte) (headings []string, html int) {
+	doc := goldmark.New().Parser().Parse(gmtext.NewReader(body))
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch h := n.(type) {
+		case *ast.Heading:
+			var words []string
+			for i := 0; i < h.Lines().Len(); i++ {
+				seg := h.Lines().At(i)
+				words = append(words, string(seg.Value(body)))
+			}
+			headings = append(headings, strings.Repeat("#", h.Level)+" "+strings.TrimSpace(strings.Join(words, " ")))
+		case *ast.HTMLBlock:
+			html++
+		}
+		return ast.WalkContinue, nil
+	})
+	return headings, html
 }

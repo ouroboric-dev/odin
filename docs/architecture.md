@@ -96,28 +96,32 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   the review goes on. Scratch reviewers outside the loop do not get it.
 - Takes a person's gate decisions as data (spec §7.2, change typed-boundaries, `internal/engine/decisions.go`).
   `ygg approve RUN GATE --decisions FILE` and `ygg reject RUN GATE --decisions FILE` read a `ygg.decisions/v1` file
-  (a regular file, never a symbolic link, at most 64 KiB): decisions under ids the operator chooses and keeps across
+  (a regular file, never a symbolic link, at most 64 KiB, no key twice in one object): decisions under ids the operator chooses and keeps across
   runs, answers to this run's design's open questions by their ids, and for a rejection the reason, which it needs
   and an approval may not hold. `--note TEXT` is shorthand for a file with one decision, `note-<gate>`, and
   `--reason TEXT` for a file with only the reason; each is one line (the rule of `ygg-proof-run.sh`), and a file
   with a shorthand is refused. `Approve` and `Reject` check what is given before anything is recorded: the contract
-  (unique decision ids, a note of at most 4 KiB), and each answer names an open question of a design the run kept,
-  once (ruling R45). The `gate_approved` or `gate_rejected` event carries the file as one line of JSON in its note.
+  (unique decision ids, a note of at most 4 KiB); each answer names an open question of a design the run kept,
+  once (ruling R45); and a decision id already kept, at any gate, is given with its text or not at all ("decision X
+  was already given as …; give a new id", ruling R46(3)). The `gate_approved` or `gate_rejected` event carries the
+  file as one line of JSON in its note; `ygg report` shows it as its ids and its reason's first line.
   At a gate node the decisions and answers are the product owner's, kept in `State.Decisions` as
   `{gate, decisions}` in the order given; a gate met again (a `back_to` return past it, a rejection there and then an
-  approval) adds to what it was given, an id given again replacing the earlier one, and nothing given keeps it. At
-  any other stop they stay on the event. A session that declares `decisions` gets every gate's decisions and then
+  approval) adds what is new to what it was given, an answer given again replacing the earlier one, and nothing given
+  keeps it. At any other stop they stay on the event. A session that declares `decisions` gets every gate's decisions and then
   their answers as the lists of `ygg.decisions/v1`, each with its id and its gate, an answer with its question.
   Every stage that runs again after a person decided (a gate's or a loop's rejection, the secret-scan stop, a
   blocked output) gets as its `rejection` what they gave, rendered by one function (`rejectionText`): the reason,
-  each decision with its id, each answer with its question, every field made safe. A rejection that goes back past
+  each decision with its id (under "The product owner's decisions" at a gate node, "What the person said" at any
+  other stop), each answer with its question, every field made safe. A rejection that goes back past
   gates drops their decisions; a resume keeps them from `run.json`.
 - Checks that the spec cites every owner decision (design §4, `internal/engine/ownercheck.go`). Right after an
   agent node keeps a `ygg.spec/v1` output, before the conformance review, the ids of every decision in
   `State.Decisions` must each be cited by one of the spec's decisions or deviations. A spec that misses some goes
   back to its own node once, with "the spec does not cite the product owner's decisions IDS: cite each in a decision
   or a deviation" as its `refusal` and a `node_returned` event (`State.Returns` counts it; a rejection that runs the
-  spec again starts it over). A second miss stops the next gate in every mode, whose file lists the ids under "Owner
+  spec again starts it over). A node's `rejection` and `refusal` are dropped only once its output passes the check,
+  so the spec run again still has the person's reason. A second miss stops the next gate in every mode, whose file lists the ids under "Owner
   decisions the spec does not cite"; with no gate after the spec, the node fails. A blocked spec is left to its
   publish, and an open question with no answer stays allowed. A spec node that does not declare `decisions` and
   `refusal` is refused when the run starts.
