@@ -77,7 +77,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"fenced":  func(s string) string { return mdsafe.Fenced("", s) },
 	"bullets": mdsafe.Bullets,
 	"decided": decided,
-	"closed":  mdsafe.CloseFences,
+	"after":   mdsafe.After,
 	"list":    list,
 	"deps":    deps,
 }).ParseFS(files, "*.md.tmpl"))
@@ -127,9 +127,10 @@ func text(s string) string {
 }
 
 // decided is one decision as the prompts wrote it, "**Decided <date>:** <decision> <reason>", with the owner
-// decisions it cites, as a list item. Each field closes its own fences, so one cannot take in the next.
+// decisions it cites, as a list item. The reason starts a line of its own, so each field's fences close within
+// its own lines (mdsafe.Item).
 func decided(d schema.Decided) string {
-	s := "**Decided " + mdsafe.Line(d.Date) + ":** " + mdsafe.CloseFences(d.Decision) + "\n" + mdsafe.CloseFences(d.Reason)
+	s := mdsafe.After("**Decided "+mdsafe.Line(d.Date)+":** ", d.Decision) + "\n" + mdsafe.CloseFences(d.Reason)
 	if len(d.Cites) > 0 {
 		s += "\n(Owner decisions: " + list(d.Cites) + ")"
 	}

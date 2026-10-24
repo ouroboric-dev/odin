@@ -36,7 +36,8 @@ type Sandbox struct {
 		Exit   int
 		Report string
 	}
-	// OnScan, if set, sees each secret scan, with the files it was given, before the scan ends: a test
+	// OnScan, if set, sees each secret scan, with the files it was given, before the scan ends, which then ends as
+	// Scan says after it (so OnScan can judge the files, as gitleaks does): a test
 	// reads what the scan would read, or changes the files after it, as a real scan's timing allows.
 	OnScan func(env gungnir.Env, c gungnir.Cmd, files []string)
 	// Fail, if set, is asked before every command but the secret scan. An error it returns is what Exec
@@ -84,6 +85,9 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 	if isScan {
 		if onScan != nil {
 			onScan(env, c, files)
+			s.mu.Lock()
+			result = s.Scan // a scanner that judges what it is given sets how this scan ends
+			s.mu.Unlock()
 		}
 		c.Stdout.Write([]byte(result.Report))
 		return gungnir.ExecResult{ExitCode: result.Exit}, nil

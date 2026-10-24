@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/run"
+	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 	"github.com/ouroboric-dev/odin/internal/views"
 )
 
@@ -235,6 +237,17 @@ func TestAPublishNodeWithNoViewIsRefusedWhenTheRunStarts(t *testing.T) {
 	}
 }
 
+// A publish that the secret scan stops re-runs its source with the finding as its rejection, so the source must
+// take a rejection.
+func TestAPublishOfANodeThatTakesNoRejectionIsRefusedWhenTheRunStarts(t *testing.T) {
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, scratch: true, input: [brief], output: ygg.design/v1 }\n" +
+		"  - { id: a-docs, kind: publish, from: a, to: docs }\n"
+	_, err := run.Start(bg, startOptions(t, setup{nodes: nodes, script: "steps: {}\n"}))
+	if err == nil || !strings.Contains(err.Error(), "node a-docs: when the secret scan stops it, publish runs a again with the finding as its rejection, so a must declare the input rejection") {
+		t.Fatalf("Start() = %v; want the publish node refused", err)
+	}
+}
+
 func TestPublishWontCommitOverStagedWorkItDidNotMake(t *testing.T) {
 	r := start(t, "unattended", "gates:\n  design: auto\n", publishNodes, publishScript)
 	os.WriteFile(filepath.Join(r.Project, "notes.txt"), []byte("mine\n"), 0o644)
@@ -250,10 +263,42 @@ func TestPublishWontCommitOverStagedWorkItDidNotMake(t *testing.T) {
 	}
 }
 
-func TestSecretsInTheDocumentsAreAHardStopAndNothingIsPublished(t *testing.T) {
-	r, fake := startSandboxed(t, publishNodes, publishScript)
+// fakeKey is what the tests' scanner takes for a secret: it judges what it is given, as gitleaks does.
+const fakeKey = "AKIAFAKEFAKEFAKE7777"
+
+// keyScanner makes the fake's secret scan find fakeKey in the files it is given, at the file and line where it is.
+func keyScanner(t *testing.T, fake *sandboxfake.Sandbox) {
+	fake.OnScan = func(env gungnir.Env, c gungnir.Cmd, files []string) {
+		var rows []string
+		for _, f := range files {
+			b, err := os.ReadFile(filepath.Join(env.Workdir, c.Dir, f))
+			if err != nil {
+				t.Errorf("the scan can't read %s: %v", f, err)
+			}
+			for i, line := range strings.Split(string(b), "\n") {
+				if strings.Contains(line, fakeKey) {
+					rows = append(rows, fmt.Sprintf(`{"RuleID":"aws-access-token","File":"/%s","StartLine":%d,"Secret":"REDACTED","Match":"REDACTED"}`, f, i+1))
+				}
+			}
+		}
+		fake.Scan.Exit, fake.Scan.Report = 0, ""
+		if len(rows) > 0 {
+			fake.Scan.Exit, fake.Scan.Report = 7, "["+strings.Join(rows, ",")+"]"
+		}
+	}
+}
+
+// leakyDesign is the design with fakeKey in its summary.
+var leakyDesign = strings.Replace(designDoc, `"summary": "Albums of photos."`, `"summary": "Albums of photos. The key is `+fakeKey+`."`, 1)
+
+// A secret in a stage's output stops its publish, and nothing is published. Approving runs the stage again, with the
+// finding (its rule and place, never its text) as its rejection; the new output is kept, scanned again and published.
+func TestASecretInAnOutputRunsItsStageAgainAndNothingIsPublishedWhileItStands(t *testing.T) {
+	script := "steps:\n  design:\n    - result: { status: ok, summary: wrote the design, output: '" + leakyDesign + "' }\n" +
+		"    - result: { status: ok, summary: wrote the design again, output: '" + designDoc + "' }\n"
+	r, fake := startSandboxed(t, publishNodes, script)
 	onDay(r)
-	fake.Scan.Exit, fake.Scan.Report = 7, secretReport
+	keyScanner(t, fake)
 	head, _ := git.Run(bg, r.Project, "rev-parse", "HEAD")
 	out, err := Advance(bg, r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateRealSecrets || out.Gate != "design-docs" {
@@ -268,19 +313,64 @@ func TestSecretsInTheDocumentsAreAHardStopAndNothingIsPublished(t *testing.T) {
 	if len(fake.ScanFiles) != 1 || strings.Join(fake.ScanFiles[0], ",") != designJSON+","+designMD {
 		t.Errorf("the scan was given %q; want the two documents, at their paths in the project", fake.ScanFiles)
 	}
-	b, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "design-docs-1.md"))
-	if !strings.Contains(string(b), "Nothing was published") || !strings.Contains(string(b), "outputs/design.json") {
-		t.Errorf("the gate file = %s", b)
+	gf, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "design-docs-1.md"))
+	for _, want := range []string{"Nothing was published, and nothing is while a finding stands.", "Approving runs design again",
+		"as its rejection", "Odin keeps it, publishes it and scans it again", "The stages before design are kept."} {
+		if !strings.Contains(string(gf), want) {
+			t.Errorf("the gate file lacks %q:\n%s", want, gf)
+		}
 	}
-	fake.Scan.Exit, fake.Scan.Report = 0, ""
-	if err := Approve(bg, r, "design-docs", "a test key, removed"); err != nil {
+	if err := Approve(bg, r, "design-docs", ""); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
-		t.Fatalf("Advance() after approval = %+v, %v", out, err)
+		t.Fatalf("Advance() after approval = %+v, %v; want design run again and its new output published", out, err)
 	}
-	if got := headFiles(t, r.Project); !strings.Contains(got, designMD) {
-		t.Errorf("after approval the commit holds %q", got)
+	// The stage ran again, told where the scan found what and by which rule, never the secret itself.
+	prompt := promptOf(t, r, "design-2")
+	rejection, _, _ := strings.Cut(prompt[strings.Index(prompt, "## Input: rejection"):], "\n## Your answer")
+	for _, want := range []string{"## Input: rejection\n\nA person sent the last attempt back", "secret scan", "aws-access-token at " + designJSON + ":1", designMD} {
+		if !strings.Contains(rejection, want) {
+			t.Errorf("the rejection lacks %q:\n%s", want, rejection)
+		}
+	}
+	if strings.Contains(prompt, fakeKey) {
+		t.Error("the rejection holds the secret's text")
+	}
+	if got := string(readProject(t, r, designJSON)); got != designDoc {
+		t.Errorf("published %s = %s; want the new output", designJSON, got)
+	}
+	if len(fake.ScanFiles) != 2 {
+		t.Errorf("%d scans; the new output is scanned before it is published", len(fake.ScanFiles))
+	}
+	if r.State.Attempts["design"] != 2 {
+		t.Errorf("design ran %d times, want 2", r.State.Attempts["design"])
+	}
+}
+
+// An output that still holds the secret stops the publish again: nothing is ever published while a finding stands.
+func TestASecretThatIsStillThereStopsThePublishAgain(t *testing.T) {
+	script := "steps:\n  design:\n    - result: { status: ok, summary: wrote the design, output: '" + leakyDesign + "' }\n" +
+		"    - result: { status: ok, summary: wrote it again, output: '" + leakyDesign + "' }\n"
+	r, fake := startSandboxed(t, publishNodes, script)
+	onDay(r)
+	keyScanner(t, fake)
+	head, _ := git.Run(bg, r.Project, "rev-parse", "HEAD")
+	if out, err := Advance(bg, r); err != nil || out.Gate != "design-docs" {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if err := Approve(bg, r, "design-docs", ""); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateRealSecrets || out.Gate != "design-docs" {
+		t.Fatalf("Advance() = %+v, %v; want a second stop at the publish", out, err)
+	}
+	if after, _ := git.Run(bg, r.Project, "rev-parse", "HEAD"); after != head {
+		t.Error("a design with a secret was committed")
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, "gates", "design-docs-2.md")); err != nil {
+		t.Errorf("the second stop wrote no gate file: %v", err)
 	}
 }
 

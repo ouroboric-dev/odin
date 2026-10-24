@@ -163,7 +163,7 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
-	if err := checkPublish(graphPath, s.Graph.Nodes, map[string]string{}); err != nil {
+	if err := checkPublish(graphPath, s.Graph.Nodes, map[string]schema.Node{}); err != nil {
 		return nil, err
 	}
 	for _, p := range s.projectLeaves() { // every leaf the project has, whether or not the graph names it
@@ -310,18 +310,28 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 	return nil
 }
 
-// checkPublish refuses a publish node whose source's output has no view: Odin publishes an output's JSON and the
-// view it renders from it (change typed-boundaries), and a graph whose publish could only fail must not load.
-// outputs holds the output of every node before nodes, by id.
-func checkPublish(graphPath string, nodes []schema.Node, outputs map[string]string) error {
+// checkPublish refuses a publish node that could only fail, before anything runs: one whose source declares no
+// output, or one with no view (Odin publishes an output's JSON and the view it renders from it, change
+// typed-boundaries); and one whose source takes no rejection, which it is given when the secret scan stops the publish
+// and a person approves its run again. before holds the nodes before nodes, by id.
+func checkPublish(graphPath string, nodes []schema.Node, before map[string]schema.Node) error {
 	for _, n := range nodes {
-		if n.Kind == schema.KindPublish && !views.Has(schema.Contract(outputs[n.From])) {
-			return fmt.Errorf("%s: node %s: publish has no view for %s", graphPath, n.ID, outputs[n.From])
+		if n.Kind == schema.KindPublish {
+			from, ok := before[n.From]
+			switch {
+			case !ok || from.Output == "":
+				return fmt.Errorf("%s: node %s: publish names %s, which declares no output", graphPath, n.ID, n.From)
+			case !views.Has(schema.Contract(from.Output)):
+				return fmt.Errorf("%s: node %s: publish has no view for %s", graphPath, n.ID, from.Output)
+			case !slices.Contains(from.Input, schema.SourceRejection):
+				return fmt.Errorf("%s: node %s: when the secret scan stops it, publish runs %s again with the finding as its rejection, so %s must declare the input rejection",
+					graphPath, n.ID, n.From, n.From)
+			}
 		}
-		if err := checkPublish(graphPath, n.Body, maps.Clone(outputs)); err != nil {
+		if err := checkPublish(graphPath, n.Body, maps.Clone(before)); err != nil {
 			return err
 		}
-		outputs[n.ID] = n.Output
+		before[n.ID] = n
 	}
 	return nil
 }

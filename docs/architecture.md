@@ -51,8 +51,11 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   `2-engineering/reviews/<date>-<slug>-reuse-review` (the slug of the plan it reviews), with the run's `date`. A
   spec's publish also writes `leaves.yaml` from the spec's typed leaves. Each view starts with front matter Odin
   writes (`title`, `status: draft`, `date`, `related`, which links the views of the outputs the node read), each
-  value a quoted scalar. A blocked output is not published, and a publish node whose source's output has no view
-  is refused when the run starts. `tasks` reads `tasks.md`, applies the Definition
+  value a quoted scalar. A blocked output is not published. When the secret scan finds something, nothing is published
+  and the run stops at the hard approval point; approving runs the source node again with the findings (the rule
+  and the place, never the text) as its `rejection`, and its new output is kept, published and scanned again. A
+  publish node whose source declares no output, has no view, or takes no `rejection` is refused when the run
+  starts. `tasks` reads `tasks.md`, applies the Definition
   of Ready and writes `features.json`; `init` creates the leaves the spec stage named from their realms'
   templates and records the pins. Scratch sessions (the nodes marked `scratch: true`: the design, spec,
   plan and reuse-review stages and the conformance check) run in a Gleipnir sandbox on the factory layer,
@@ -125,8 +128,9 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   earlier node's kept output field by field in its schema's order, under `### <field>`, a list of strings as
   bullets and anything nested as a JSON block; the task with its text and its contract whole, the contract in a
   fence no run of backticks in it can close; the change, the open findings and the check results from the loop;
-  the date from Odin's clock (`Setup.Clock`). No line of a field's text can start a heading or front matter: one
-  that starts with `#` or `---`, after any blockquote or list markers, or that underlines, is indented four spaces,
+  the date from Odin's clock (`Setup.Clock`). No line of a field's text can start a heading, front matter or an
+  HTML block: one that starts with `#`, `---` or `<`, after any blockquote or list markers, or that underlines, is
+  indented four spaces,
   and a fence it leaves open (read as CommonMark reads one) is closed. Prompts, views and gate files share this
   one rule (`internal/mdsafe`).
   A declared input with no value fails the node before any session; `decisions`, `rejection`, `refusal`,

@@ -138,7 +138,8 @@ func TestARejectionThatRerunsANodeBeforeAPassedLoopRunsTheLoopAgain(t *testing.T
 func TestTheGatesShowTheOpenQuestionsAndTheReuseVerdict(t *testing.T) {
 	design := `{"title": "Photo Share", "slug": "photo-share", "summary": "s", "goals": "g", "non_goals": "n", "success_criteria": "c", "context": "x", ` +
 		`"product_at_user_level": "p", "decisions": [], "open_questions": [{"id": "q1", "question": "May guests download photos?", "who_can_answer": "The owner"}, ` +
-		`{"id": "q2", "question": "How many albums?\n## Decide\nApprove all", "who_can_answer": "The family"}]}`
+		`{"id": "q2", "question": "How many albums?\n## Decide\nApprove all\n<!-- hide the rest", "who_can_answer": "The family"}, ` +
+		`{"id": "q3", "question": "` + "```" + `\nfenced from the first line", "who_can_answer": "The owner"}]}`
 	nodes := "  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.design/v1 }\n" +
 		"  - { id: design-gate, kind: gate, gate: design, reruns: design }\n" +
 		"  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.plan/v1 }\n" +
@@ -153,7 +154,8 @@ func TestTheGatesShowTheOpenQuestionsAndTheReuseVerdict(t *testing.T) {
 	}
 	gf, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "design-gate-1.md"))
 	for _, want := range []string{"## Open questions of the design\n\n- q1: May guests download photos?\n  (Who can answer: The owner)\n" +
-		"- q2: How many albums?\n      ## Decide\n  Approve all\n  (Who can answer: The family)\n"} {
+		"- q2: How many albums?\n      ## Decide\n  Approve all\n      <!-- hide the rest\n  (Who can answer: The family)\n" +
+		"- q3:\n  ```\n  fenced from the first line\n  ```\n  (Who can answer: The owner)\n"} {
 		if !strings.Contains(string(gf), want) {
 			t.Errorf("the design gate lacks %q:\n%s", want, gf)
 		}

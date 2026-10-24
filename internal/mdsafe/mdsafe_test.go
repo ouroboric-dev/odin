@@ -17,6 +17,11 @@ func TestATextCannotStartAHeadingOrFrontMatter(t *testing.T) {
 		"a\r\nb\rc\n\n":                       "a\nb\nc",
 		"```go\n## in a fence\n```\n## after": "```go\n    ## in a fence\n```\n    ## after",
 		"~~~\n# in a tilde fence\n   ~~~~\nx": "~~~\n    # in a tilde fence\n   ~~~~\nx",
+		// The HTML blocks CommonMark starts at a line's start, which a comment, pre, script or CDATA keep open across
+		// blank lines until their end: every such line is indented, and a < inside a line stays as it is.
+		"<!-- never ends\n\n## x":         "    <!-- never ends\n\n    ## x",
+		"  <pre>\n> <script\n- <![CDATA[": "      <pre>\n    > <script\n    - <![CDATA[",
+		"<div>\na <b>bold</b> word":       "    <div>\na <b>bold</b> word",
 	} {
 		if got := Text(in); got != want {
 			t.Errorf("Text(%q) = %q, want %q", in, got, want)
@@ -47,6 +52,20 @@ func TestAnItemKeepsItsLinesInTheItem(t *testing.T) {
 	}
 	if got := Bullets([]string{"one", "two\n---\nlines"}); got != "- one\n- two\n      ---\n  lines\n" {
 		t.Errorf("Bullets() = %q", got)
+	}
+}
+
+// A field after words of the view's own on their line starts there, unless its first line opens a fence: after
+// the words it would open none, and the closer Odin adds would open one. Then it starts on the next line.
+func TestAFieldAfterAPrefixClosesItsOwnFences(t *testing.T) {
+	for in, want := range map[string]string{
+		"a decision":         "**Decided:** a decision",
+		"```\nfenced":        "**Decided:**\n```\nfenced\n```",
+		"words\n```\nfenced": "**Decided:** words\n```\nfenced\n```",
+	} {
+		if got := After("**Decided:** ", in); got != want {
+			t.Errorf("After(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

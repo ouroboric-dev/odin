@@ -12,6 +12,10 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	gmtext "github.com/yuin/goldmark/text"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -97,14 +101,22 @@ func TestAViewRefusesAContractItHasNoViewForAndAValueOfAnotherType(t *testing.T)
 }
 
 // evil is a field that tries every way out of its place: front matter, headings, an underline, a quote, a list, a
-// fence it leaves open, a pipe for a table and a run of backticks.
-const evil = "x\n---\nstatus: accepted\n## Brief\n### evil\n  # also evil\n===\n> ## quoted\n- ## listed\n| a | b |\n````\nan open fence"
+// pipe for a table, the HTML blocks CommonMark runs across blank lines until their end (a comment, pre, script,
+// CDATA), and a fence it leaves open with a run of backticks.
+const evil = "x\n---\nstatus: accepted\n## Brief\n### evil\n  # also evil\n===\n> ## quoted\n- ## listed\n| a | b |\n" +
+	"<!-- a comment that never ends\n\n  <pre>\n> <script\n- <![CDATA[\n\n````\nan open fence"
+
+// fenceFirst is a field whose first line opens a fence: after a prefix of the view's own on its line, that line opens
+// none, so the field must start a line of its own for its fence to close where it ends.
+const fenceFirst = "```\nfenced from the first line"
 
 func TestAViewCannotBeBrokenByAField(t *testing.T) {
 	title := "Photo Share\n---\nstatus: accepted"
-	decided := []schema.Decided{{Date: day, Decision: evil, Reason: "a reason\n```\nits own open fence", Cites: []string{"a"}}}
+	decided := []schema.Decided{{Date: day, Decision: evil, Reason: "a reason\n```\nits own open fence", Cites: []string{"a"}},
+		{Date: day, Decision: fenceFirst, Reason: "the reason after it", Cites: []string{"b"}}}
 	design := schema.Design{Title: evil, Slug: "x", Summary: evil, Goals: evil, NonGoals: evil, SuccessCriteria: evil, Context: evil,
-		ProductAtUserLevel: evil, Decisions: decided, OpenQuestions: []schema.Question{{ID: "q1", Question: evil, WhoCanAnswer: evil}},
+		ProductAtUserLevel: evil, Decisions: decided, OpenQuestions: []schema.Question{{ID: "q1", Question: evil, WhoCanAnswer: evil},
+			{ID: "q2", Question: fenceFirst, WhoCanAnswer: "w"}},
 		Blocked: &gungnir.Blocked{Reason: evil}, Notes: []string{evil}}
 	spec := schema.Spec{Title: evil, Slug: "x", Summary: evil, Architecture: evil, Interfaces: evil, DataModel: evil, AcceptanceCriteria: evil,
 		Security: evil, Testing: evil, Decisions: decided, Deviations: []schema.Deviation{{What: evil, Where: evil, Why: evil, Cites: []string{"a"}}},
@@ -113,7 +125,8 @@ func TestAViewCannotBeBrokenByAField(t *testing.T) {
 		Notes: []string{evil}}
 	plan := schema.Plan{Title: evil, Slug: "x", Goal: evil, Decisions: decided, Risks: []string{evil}, Notes: []string{evil},
 		Tasks: []schema.PlanTask{{ID: "x-T001", Title: evil, Criteria: []string{evil, evil}, NamedTest: evil, Layer: evil, Size: evil,
-			DependsOn: []string{evil}, Text: evil, Contract: evil}}}
+			DependsOn: []string{evil}, Text: evil, Contract: evil},
+			{ID: "x-T002", Title: "the task after", Criteria: []string{"a", "b"}, NamedTest: "t", Layer: "l", Size: "S", Text: "The later task."}}}
 	reuse := schema.ReuseReview{Verdict: evil, Items: []schema.ReuseItem{{Task: evil, Adds: evil, AlreadyDoneBy: evil, SmallestChange: evil}}, Notes: []string{evil}}
 	front := Front{Title: title, Date: day, Related: []string{"a.md\n---\nstatus: accepted"}}
 	views := map[string]func() ([]byte, error){
@@ -123,6 +136,14 @@ func TestAViewCannotBeBrokenByAField(t *testing.T) {
 		"tasks":        func() ([]byte, error) { return Tasks(plan, front) },
 		"reuse review": func() ([]byte, error) { return Render(schema.ContractReuseReview, reuse, front) },
 	}
+	// The view's own words after a field, which a fence or an HTML block the field left open would take in.
+	after := map[string][]string{
+		"design": {"(Owner decisions: a)", "(Owner decisions: b)", "the reason after it", "(Who can answer: " + mdsafe.Line(evil) + ")", "(Who can answer: w)"},
+		"spec":   {"(Owner decisions: a)", "(Owner decisions: b)", "the reason after it", "- Owner decisions: a"},
+		"plan":   {"(Owner decisions: a)", "(Owner decisions: b)", "the reason after it"},
+		"tasks":  {"- **Named test:** " + mdsafe.Line(evil), "The later task."}, "reuse review": {"- Read the plan twice."},
+	}
+	reuse.Notes = append(reuse.Notes, "Read the plan twice.")
 	for name, render := range views {
 		b, err := render()
 		if err != nil {
@@ -152,33 +173,43 @@ func TestAViewCannotBeBrokenByAField(t *testing.T) {
 		if len(fm.Related) != 1 || fm.Related[0] != front.Related[0] {
 			t.Errorf("%s: related = %q", name, fm.Related)
 		}
-		// Outside a fence, the only lines that start a heading are the view's own, and no line opens front matter
-		// or underlines a heading.
-		var fence mdFence
-		outside := map[string]bool{} // the view's own words after a field, which a fence the field left open would take in
+		// Outside a fence, the only lines that start a heading are the view's own, and no line opens front matter,
+		// underlines a heading or starts an HTML block, each read where it stands in the list items it is in.
+		var md mdReader
+		outside := map[string]bool{}
+		var own []string
 		for _, line := range strings.Split(body, "\n") {
-			if fence.line(line) {
+			rel, inFence := md.line(line)
+			if inFence {
 				continue
 			}
 			outside[strings.TrimSpace(line)] = true
-			t2 := strings.TrimLeft(stripMarkers(line), " ")
+			if len(rel)-len(strings.TrimLeft(rel, " ")) >= 4 {
+				continue // code, or the text of the paragraph it is in
+			}
+			t2 := strings.TrimLeft(stripMarkers(rel), " ")
 			switch {
-			case len(line)-len(strings.TrimLeft(line, " ")) >= 4:
-			case strings.HasPrefix(t2, "#") && !ownHeading(line):
+			case strings.HasPrefix(t2, "#") && line == rel && ownHeading(line):
+				own = append(own, line)
+			case strings.HasPrefix(t2, "#"):
 				t.Errorf("%s: a field's line is a heading of its own: %q", name, line)
 			case strings.HasPrefix(t2, "---") || strings.Trim(t2, "=") == "" && t2 != "":
 				t.Errorf("%s: a field's line can start front matter or underline a heading: %q", name, line)
+			case strings.HasPrefix(t2, "<"):
+				t.Errorf("%s: a field's line can start an HTML block: %q", name, line)
 			}
 		}
-		for _, own := range map[string][]string{"design": {"(Owner decisions: a)", "(Who can answer: x --- status: accepted ## Brief ### evil   # also evil === > ## quoted - ## listed | a | b | ```` an open fence)"},
-			"spec": {"(Owner decisions: a)", "- Owner decisions: a"}, "plan": {"(Owner decisions: a)"}, "tasks": {"- **Named test:** x --- status: accepted ## Brief ### evil   # also evil === > ## quoted - ## listed | a | b | ```` an open fence"},
-			"reuse review": {"## Notes"}}[name] {
-			if !outside[own] {
-				t.Errorf("%s: %q is not outside a fence: a field's open fence took it in:\n%s", name, own, got)
+		for _, words := range after[name] {
+			if !outside[words] {
+				t.Errorf("%s: %q is not outside a fence: a field's open fence took it in:\n%s", name, words, got)
 			}
 		}
-		if fence.open != "" {
-			t.Errorf("%s: a fence is left open (%q), so what follows it reads as code:\n%s", name, fence.open, got)
+		if md.fence.open != "" {
+			t.Errorf("%s: a fence is left open (%q), so what follows it reads as code:\n%s", name, md.fence.open, got)
+		}
+		// A CommonMark parser sees the same: no HTML block, and exactly the view's own headings, in order.
+		if headings, html := parsed([]byte(body)); html != 0 || !slices.Equal(headings, own) {
+			t.Errorf("%s: goldmark reads %d HTML block(s) and the headings %q; want none, and the view's own %q", name, html, headings, own)
 		}
 		// A task's row of the plan's table keeps its four cells.
 		if _, row, ok := strings.Cut(got, "| --- | --- | --- | --- |\n"); ok {
@@ -190,6 +221,30 @@ func TestAViewCannotBeBrokenByAField(t *testing.T) {
 			t.Errorf("plan: no table of the order:\n%s", got)
 		}
 	}
+}
+
+// parsed is what goldmark, a CommonMark parser, reads in a view's body: its headings, as "## text", and the number of
+// HTML blocks.
+func parsed(body []byte) (headings []string, html int) {
+	doc := goldmark.New().Parser().Parse(gmtext.NewReader(body))
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch h := n.(type) {
+		case *ast.Heading:
+			var words []string
+			for i := 0; i < h.Lines().Len(); i++ {
+				seg := h.Lines().At(i)
+				words = append(words, string(seg.Value(body)))
+			}
+			headings = append(headings, strings.Repeat("#", h.Level)+" "+strings.TrimSpace(strings.Join(words, " ")))
+		case *ast.HTMLBlock:
+			html++
+		}
+		return ast.WalkContinue, nil
+	})
+	return headings, html
 }
 
 // ownHeading reports whether line is one of the views' own headings: a section, or a task's, whose text is one
@@ -227,6 +282,53 @@ func (f *mdFence) line(line string) bool {
 		return true
 	}
 	return f.open != ""
+}
+
+// mdReader reads a document's lines as CommonMark nests them, enough for these views: each line relative to the
+// content column of the list items it is in, and the code fences in those items, which end with their item.
+type mdReader struct {
+	cols       []int // the content columns of the list items open around the line
+	fence      mdFence
+	fenceDepth int // how many list items the open fence is in
+}
+
+var listMarker = regexp.MustCompile(`^ {0,3}([-*+]|[0-9]{1,9}[.)])( {1,4})`)
+
+// line returns line relative to the list items it is in, and whether it is in a fence or is one.
+func (m *mdReader) line(line string) (string, bool) {
+	if strings.TrimSpace(line) == "" {
+		return "", m.fence.open != ""
+	}
+	ind := len(line) - len(strings.TrimLeft(line, " "))
+	if m.fence.open != "" {
+		if base := m.col(m.fenceDepth); ind >= base {
+			return line, m.fence.line(line[base:])
+		}
+		m.fence.open = "" // a line out of the item ends it, and its fence with it
+	}
+	for len(m.cols) > 0 && ind < m.cols[len(m.cols)-1] {
+		m.cols = m.cols[:len(m.cols)-1]
+	}
+	base := m.col(len(m.cols))
+	rel := line[base:]
+	for {
+		mk := listMarker.FindString(rel)
+		if mk == "" || m.fence.open != "" {
+			break
+		}
+		base += len(mk)
+		m.cols = append(m.cols, base)
+		rel = rel[len(mk):]
+	}
+	m.fenceDepth = len(m.cols)
+	return rel, m.fence.line(rel)
+}
+
+func (m *mdReader) col(depth int) int {
+	if depth == 0 {
+		return 0
+	}
+	return m.cols[depth-1]
 }
 
 var markerAtStart = regexp.MustCompile(`^ {0,3}(> ?|[-*+] +|[0-9]{1,9}[.)] +)`)

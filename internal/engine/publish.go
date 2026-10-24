@@ -253,9 +253,22 @@ func scanDocuments(ctx context.Context, r *run.Run, n schema.Node, docs []docume
 	case err == nil:
 		return nil
 	case errors.As(err, &found):
+		// Approving this stop runs n.From again, with the findings as its rejection (Approve).
+		r.State.Reasons[n.From] = secretRejection(found)
 		return &hardStop{gate: gungnir.GateRealSecrets, err: err}
 	}
 	return &nodeFailure{err}
+}
+
+// secretRejection is what the node whose output the scan stopped is told when it runs again: each finding's rule
+// and place, in the documents Odin rendered from its output. A finding never holds the secret's text.
+func secretRejection(found *scan.FoundError) string {
+	places := make([]string, len(found.Findings))
+	for i, f := range found.Findings {
+		places[i] = fmt.Sprintf("- %s at %s:%d", f.Rule, f.File, f.Line)
+	}
+	return "Odin's secret scan found what looks like a secret in the documents of your last output, so nothing was published:\n\n" +
+		strings.Join(places, "\n") + "\n\nWrite your output again without it. The new output is scanned again before it is published."
 }
 
 // stageDocuments makes stage anew and writes each document's bytes in it, at its path, as a new file.

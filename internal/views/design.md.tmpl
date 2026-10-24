@@ -37,7 +37,7 @@
 {{end}}
 ## Open questions
 
-{{range .Doc.OpenQuestions}}- {{item (printf "**%s:** %s\n(Who can answer: %s)" (line .ID) (closed .Question) (line .WhoCanAnswer)) 2}}
+{{range .Doc.OpenQuestions}}- {{item (printf "%s\n(Who can answer: %s)" (after (printf "**%s:** " (line .ID)) .Question) (line .WhoCanAnswer)) 2}}
 {{else}}None.
 {{end}}
 {{- with .Doc.Notes}}

@@ -181,7 +181,7 @@ func gateSection(r *run.Run, node string) (string, error) {
 			b.WriteString("None.\n")
 		}
 		for _, q := range d.OpenQuestions {
-			b.WriteString("- " + mdsafe.Item(mdsafe.Line(q.ID)+": "+mdsafe.CloseFences(q.Question)+"\n(Who can answer: "+mdsafe.Line(q.WhoCanAnswer)+")", 2) + "\n")
+			b.WriteString("- " + mdsafe.Item(mdsafe.After(mdsafe.Line(q.ID)+": ", q.Question)+"\n(Who can answer: "+mdsafe.Line(q.WhoCanAnswer)+")", 2) + "\n")
 		}
 	case schema.ContractReuseReview:
 		rv, err := loadOutput[schema.ReuseReview](r, node)
@@ -251,9 +251,15 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 		s.Summaries[n.ID] = fmt.Sprintf("accepted by the operator after %d attempt(s), with %d finding(s) open", rec.State.Attempt-1, len(rec.State.Book.Open()))
 		delete(s.Reasons, n.ID)
 		s.Position++
+	case n.Kind == schema.KindPublish && s.PendingGate == gungnir.GateRealSecrets:
+		// The founder's rule (2026-10-24): the output a scan stopped is kept as Odin validated it, so its source runs
+		// again, with the finding as its rejection (set at the stop), and writes it again without what was found. Its
+		// new output is kept, published and scanned again; nothing is published while a finding stands.
+		if err := runAgainFrom(r, n.From); err != nil {
+			return err
+		}
 	case run.Quarantines(s.PendingGate) && n.Repo == "":
-		// A node that works in the project, such as a publish: nothing in a leaf to put back. The person
-		// edited the workspace the stop names, and the node runs again.
+		// A node that works in the project: nothing in a leaf to put back, and the node runs again.
 	case run.Quarantines(s.PendingGate):
 		rec := s.Leaves[n.Repo]
 		l, err := r.Leaf(n.Repo)
@@ -328,29 +334,34 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 		rec.Escalation = nil
 		s.Reasons[n.ID] = reason
 	} else {
-		target := n.Reruns
-		s.Reasons[target] = reason
-		gate := s.Position
-		s.Position = indexOf(nodes, target)
-		// Every loop from the target up to the gate starts over: the work under a loop that passed changes
-		// when a node before it runs again (review I2).
-		past := map[string]bool{}
-		for _, m := range nodes[s.Position:gate] {
-			if m.Kind == schema.KindGate {
-				past[m.ID] = true
-			}
-			if m.Kind == schema.KindLoop {
-				delete(s.Loops, m.ID)
-			}
-			delete(s.Returns, m.ID) // a rejection is a fresh start: a refusal may go back again
-		}
-		dropDecisions(s, past) // the run meets those gates again
-		if err := replan(r, nodes[s.Position:gate]); err != nil {
+		s.Reasons[n.Reruns] = reason
+		if err := runAgainFrom(r, n.Reruns); err != nil {
 			return err
 		}
 	}
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
 	return r.Save()
+}
+
+// runAgainFrom moves the run back from the node it stands at to target, which runs again with its reason in
+// s.Reasons. Every loop from the target up to where the run stood starts over: the work under a loop that passed
+// changes when a node before it runs again (review I2). The nodes before target are kept.
+func runAgainFrom(r *run.Run, target string) error {
+	s, nodes := r.State, r.Nodes()
+	at := s.Position
+	s.Position = indexOf(nodes, target)
+	past := map[string]bool{}
+	for _, m := range nodes[s.Position:at] {
+		if m.Kind == schema.KindGate {
+			past[m.ID] = true
+		}
+		if m.Kind == schema.KindLoop {
+			delete(s.Loops, m.ID)
+		}
+		delete(s.Returns, m.ID) // a rejection is a fresh start: a refusal may go back again
+	}
+	dropDecisions(s, past) // the run meets those gates again
+	return replan(r, nodes[s.Position:at])
 }
 
 // hardStop is a node that stops the run at a hard approval point itself: work it left breaks a
@@ -382,9 +393,13 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 		time.Now().UTC().Format(time.RFC3339), h.err)
 	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
 	switch {
+	case n.Kind == schema.KindPublish && h.gate == gungnir.GateRealSecrets:
+		fmt.Fprintf(&b, "Nothing was published, and nothing is while a finding stands. What the scan found is in the output of %s. "+
+			"Approving runs %s again, the node whose output this is, with the findings above (the rule and the place, never the text) as its rejection: "+
+			"its agent writes the output again without the flagged text, and Odin keeps it, publishes it and scans it again. "+
+			"The stages before %s are kept. To drop the work, start a new run.\n", n.From, n.From, n.From)
 	case run.Quarantines(h.gate) && n.Repo == "":
-		fmt.Fprintf(&b, "Nothing was published. What the scan found is in the output of %s, which Odin keeps as it validated it, in %s; "+
-			"approving runs %s again, with a new scan. To drop the work, start a new run.\n", n.From, filepath.Join(r.Dir, "outputs", n.From+".json"), n.ID)
+		fmt.Fprintf(&b, "Approving runs %s again.\n", n.ID)
 	case run.Quarantines(h.gate):
 		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again; what the node wrote is not saved.\n", n.Repo, n.ID)
 	case h.gate == gungnir.GateBudgetCap && journalCap(h.err) && len(s.PendingSpend) > 0:
