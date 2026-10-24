@@ -11,7 +11,7 @@ import (
 
 // The spec stage of the web realm (spec §4.2): the spec is written in a scratch workspace, a second
 // scratch agent checks it against the design, and the spec gate reads its verdict.
-const conformanceNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n" +
+const conformanceNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.spec/v1 }\n" +
 	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [rejection], output: ygg.conformance/v1 }\n" +
 	"  - { id: spec-gate, kind: gate, gate: spec, reruns: spec, deviation_from: conformance }\n" +
 	"  - { id: spec-docs, kind: publish, from: spec, to: docs }\n"
@@ -19,8 +19,8 @@ const conformanceNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.
 // verdictScript is a spec stage whose conformance reviewer answers with each of verdicts in turn (a verdict
 // is the reviewer's whole final answer, or "" for none at all).
 func verdictScript(verdicts ...string) string {
-	s := "steps:\n  spec:\n    - actions: [ { write: { path: out/specs/spec.md, content: \"# Spec\\n\" } } ]\n      result: { status: ok, summary: wrote the spec, output: '" + specDone + "' }\n" +
-		"    - actions: [ { write: { path: out/specs/spec.md, content: \"# Spec, revised\\n\" } } ]\n      result: { status: ok, summary: revised the spec, output: '" + specDone + "' }\n  conformance:\n"
+	s := "steps:\n  spec:\n    - result: { status: ok, summary: wrote the spec, output: '" + specDoc + "' }\n" +
+		"    - result: { status: ok, summary: revised the spec, output: '" + specRevised + "' }\n  conformance:\n"
 	for _, v := range verdicts {
 		s += "    - result: { status: ok, summary: checked the spec"
 		if v != "" {
@@ -31,8 +31,11 @@ func verdictScript(verdicts ...string) string {
 	return s
 }
 
-// specDone is the answer of the test's spec writer, which declares ygg.implement/v1.
-const specDone = `{"summary": "wrote the spec"}`
+// specRevised is the spec writer's second answer.
+var specRevised = strings.Replace(specDoc, `"summary": "An API and a web app."`, `"summary": "The spec, revised."`, 1)
+
+// publishedSpec is where the spec-docs node publishes the spec's view, on the test's day (onDay).
+const publishedSpec = "docs/2-engineering/specs/2026-10-24-photo-share.md"
 
 const (
 	noDeviation = `{"deviation": false}`
@@ -41,6 +44,7 @@ const (
 
 func TestTheSpecGateOpensByItselfWhenTheSpecDoesNotDeviateFromTheDesign(t *testing.T) {
 	r := start(t, "key-points", "", conformanceNodes, verdictScript(noDeviation))
+	onDay(r)
 	out, err := Advance(bg, r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -55,7 +59,7 @@ func TestTheSpecGateOpensByItselfWhenTheSpecDoesNotDeviateFromTheDesign(t *testi
 	if !strings.Contains(string(gate), "## Design conformance") || !strings.Contains(string(gate), "The spec does not deviate from the design.") {
 		t.Errorf("the gate file lacks the verdict:\n%s", gate)
 	}
-	if _, err := os.Stat(filepath.Join(r.Project, "docs", "specs", "spec.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(r.Project, publishedSpec)); err != nil {
 		t.Errorf("the spec was not published after the gate: %v", err)
 	}
 }
@@ -63,6 +67,7 @@ func TestTheSpecGateOpensByItselfWhenTheSpecDoesNotDeviateFromTheDesign(t *testi
 func TestADeviationStopsTheSpecGateInEveryModeWithTheAmendment(t *testing.T) {
 	for _, mode := range []string{"key-points", "unattended"} {
 		r := start(t, mode, "", conformanceNodes, verdictScript(deviation))
+		onDay(r)
 		out, err := Advance(bg, r)
 		if err != nil || out.Status != run.StatusStopped || out.Gate != "spec-gate" {
 			t.Fatalf("%s: Advance() = %+v, %v; want a stop at the spec gate", mode, out, err)
@@ -73,7 +78,7 @@ func TestADeviationStopsTheSpecGateInEveryModeWithTheAmendment(t *testing.T) {
 				t.Errorf("%s: the gate file lacks %q:\n%s", mode, want, gate)
 			}
 		}
-		if _, err := os.Stat(filepath.Join(r.Project, "docs", "specs", "spec.md")); err == nil {
+		if _, err := os.Stat(filepath.Join(r.Project, publishedSpec)); err == nil {
 			t.Errorf("%s: the spec was published before it was approved", mode)
 		}
 		if err := Approve(bg, r, "spec-gate", "offline mode is in"); err != nil {
@@ -87,6 +92,7 @@ func TestADeviationStopsTheSpecGateInEveryModeWithTheAmendment(t *testing.T) {
 
 func TestARejectedSpecRunsTheConformanceReviewAgain(t *testing.T) {
 	r := start(t, "key-points", "", conformanceNodes, verdictScript(deviation, noDeviation))
+	onDay(r)
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusStopped {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
@@ -103,8 +109,8 @@ func TestARejectedSpecRunsTheConformanceReviewAgain(t *testing.T) {
 	if got := r.State.Attempts["conformance"]; got != 2 {
 		t.Errorf("conformance ran %d times, want 2: the revised spec is reviewed again", got)
 	}
-	if b, _ := os.ReadFile(filepath.Join(r.Project, "docs", "specs", "spec.md")); string(b) != "# Spec, revised\n" {
-		t.Errorf("the published spec = %q", b)
+	if b, _ := os.ReadFile(filepath.Join(r.Project, publishedSpec)); !strings.Contains(string(b), "## Summary\n\nThe spec, revised.\n") {
+		t.Errorf("the published spec = %q; want the revised one", b)
 	}
 }
 
@@ -116,6 +122,7 @@ func TestAVerdictNobodyCanReadIsAskedForOnceMoreAndThenStopsTheRun(t *testing.T)
 		"an unknown field":              `{"deviation": false, "ok": true}`,
 	} {
 		r := start(t, "key-points", "", conformanceNodes, verdictScript(bad, noDeviation))
+		onDay(r)
 		out, err := Advance(bg, r)
 		if err != nil || out.Status != run.StatusDone {
 			t.Fatalf("%s then a good verdict: Advance() = %+v, %v", name, out, err)
@@ -124,11 +131,12 @@ func TestAVerdictNobodyCanReadIsAskedForOnceMoreAndThenStopsTheRun(t *testing.T)
 			t.Errorf("%s: the second try was not told what was wrong", name)
 		}
 		r = start(t, "key-points", "", conformanceNodes, verdictScript(bad, bad))
+		onDay(r)
 		out, err = Advance(bg, r)
 		if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "conformance") {
 			t.Errorf("%s twice: Advance() = %+v, %v; want a failed run, never a pass", name, out, err)
 		}
-		if _, err := os.Stat(filepath.Join(r.Project, "docs", "specs", "spec.md")); err == nil {
+		if _, err := os.Stat(filepath.Join(r.Project, publishedSpec)); err == nil {
 			t.Errorf("%s twice: a spec nobody could check was published", name)
 		}
 	}
@@ -136,6 +144,7 @@ func TestAVerdictNobodyCanReadIsAskedForOnceMoreAndThenStopsTheRun(t *testing.T)
 
 func TestStepByStepModeStopsAtTheSpecGateEvenWithoutADeviation(t *testing.T) {
 	r := start(t, "step-by-step", "", conformanceNodes, verdictScript(noDeviation))
+	onDay(r)
 	out, err := Advance(bg, r)
 	if err != nil || out.Status != run.StatusStopped || out.Gate != "spec-gate" {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -150,6 +159,7 @@ func TestStepByStepModeStopsAtTheSpecGateEvenWithoutADeviation(t *testing.T) {
 // reason, as for a deviation (ruling R14).
 func TestABlockedVerdictStopsTheSpecGateWithItsReason(t *testing.T) {
 	r := start(t, "unattended", "", conformanceNodes, verdictScript(`{"blocked": {"reason": "the spec has no data model section"}}`))
+	onDay(r)
 	out, err := Advance(bg, r)
 	if err != nil || out.Status != run.StatusStopped || out.Gate != "spec-gate" {
 		t.Fatalf("Advance() = %+v, %v; want a stop at the spec gate", out, err)

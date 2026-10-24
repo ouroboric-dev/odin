@@ -132,12 +132,13 @@ func withLoopSources(inputs []string, reviewer bool) []string {
 	return out
 }
 
-// workspaceNote tells a scratch agent what its workspace holds and where its documents go.
+// workspaceNote tells a scratch agent what its workspace holds. Its documents are its answer: Odin publishes the
+// views it renders from the typed output (change typed-boundaries), so out/ holds drafts only.
 func workspaceNote() string {
 	return "## Your workspace\n\nYou work in the folder you start in. It is not a repository, and nothing in it is committed by you.\n" +
 		"- Your inputs are the sections below. An input too large for this prompt is a file under " + scratchInputs + "/, which its section names.\n" +
-		"- Write every document you produce under out/, in the folders it should have in the project (for example out/docs/2-engineering/specs/...). " +
-		"Only out/ leaves this workspace, and only after a person or a check has approved it.\n"
+		"- out/ is for drafts: you may build a large answer there as a JSON file, check it as you go, and then hand it back as your answer says. " +
+		"Nothing in out/ leaves this workspace: Odin publishes the documents it renders from your answer.\n"
 }
 
 // inputFolder is where the input files of one session go: base is the session's workspace, folder the folder in it.

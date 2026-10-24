@@ -1,0 +1,54 @@
+---
+title: "Photo Share spec"
+status: draft
+date: 2026-10-24
+related: ["../../1-product/design/2026-10-24-photo-share.md"]
+---
+
+## Summary
+
+The spec builds Photo Share as an API and a web app.
+
+## Architecture and components
+
+Two leaves: repos/api serves /api/ and repos/web serves the app on port 3000.
+
+## Interfaces and contracts
+
+POST /api/albums creates an album and returns 201 with its id.
+
+## Data model
+
+An album has an id, a name and an owner. A photo has an id, an album id and a file key.
+
+## Acceptance criteria per feature
+
+Creating an album returns 201. A missing album returns 404.
+
+## Security considerations
+
+The server checks the owner on every write. No password is stored in clear text.
+
+## Testing approach
+
+Each leaf has unit tests. The acceptance run opens repos/web.
+
+## Decisions
+
+- **Decided 2026-10-24:** Albums use random ids.
+  Links must not be guessable.
+
+## Deviations from the design doc
+
+- The design asks for a reset link by SMS.
+  - Where: Design, Decisions
+  - Why: The leaves have no SMS service, so the reset link goes by email.
+  - Owner decisions: password-reset
+
+## Leaves
+
+The repositories the product is built in, which Odin writes to the project's leaves.yaml:
+
+- The runtime: niflheim-local 0.1.0
+- repos/api, from helheim-go 0.1.0: The product's API.
+- repos/web, from midgard-react 0.1.0: The product's web app. It consumes repos/api.

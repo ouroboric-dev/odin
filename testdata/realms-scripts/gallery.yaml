@@ -1,104 +1,25 @@
-# The scripted agent's answers for the toy realms' graph: the documents of the three stages, then the
-# four tasks. The plan names two leaves, an API from helheim-toy and a web leaf from midgard-toy that
-# consumes it, and four tasks over them.
+# The scripted agent's answers for the toy realms' graph: the typed outputs of the three stages, then the four
+# tasks. The spec names two leaves, an API from helheim-toy and a web leaf from midgard-toy that consumes it, and
+# the plan four tasks over them. Odin publishes each output and its view, and writes docs/leaves.yaml from the
+# spec's leaves.
 steps:
   design:
-    - actions: [ { write: { path: out/1-product/design.md, content: "# Design\n\nA gallery for photographers.\n" } } ]
-      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
+    - result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Gallery", "slug": "gallery", "summary": "A gallery for photographers.", "goals": "A photographer shows galleries of photos.", "non_goals": "No editing.", "success_criteria": "A client sees the galleries.", "context": "Photographers and their clients.", "product_at_user_level": "A photographer makes a gallery; a client looks at it.", "decisions": [], "open_questions": []}' }
   spec:
-    - actions:
-        - write: { path: out/2-engineering/specs/spec.md, content: "# Spec\n" }
-        - write:
-            path: out/leaves.yaml
-            content: |
-              leaves:
-                repos/api:
-                  realm: helheim-toy
-                  realm_version: 0.1.0
-                  description: The gallery's API.
-                repos/web:
-                  realm: midgard-toy
-                  realm_version: 0.1.0
-                  description: The gallery's web app.
-                  consumes: [repos/api]
-      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
+    - result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Gallery", "slug": "gallery", "summary": "An API and a web app.", "architecture": "Two leaves: repos/api and repos/web.", "interfaces": "The API stores and lists galleries.", "data_model": "A gallery has a name and photos.", "acceptance_criteria": "A gallery can be created and listed.", "security": "A client sees only its own galleries.", "testing": "Each leaf has its tests.", "decisions": [], "deviations": [], "leaves": {"leaves": {"repos/api": {"realm": "helheim-toy", "realm_version": "0.1.0", "description": "The gallery API."}, "repos/web": {"realm": "midgard-toy", "realm_version": "0.1.0", "description": "The gallery web app.", "consumes": ["repos/api"]}}}}' }
   plan:
     # The first plan has a task in a leaf the spec did not name; the plan check sends it back.
-    - actions:
-        - write:
-            path: out/2-engineering/plans/2026-10-17-gallery/tasks.md
-            content: |
-              # Tasks
-
-              ## gallery-T1: the API stores galleries
-
-              - **Acceptance criteria:**
-                - [ ] a gallery can be created
-              - **Named test:** TestCreateGallery
-              - **Layer:** repos/api
-              - **Size:** S
-              - **Depends on:** nothing
-
-              ## gallery-T2: the web app shows them
-
-              - **Acceptance criteria:**
-                - [ ] the page lists galleries
-              - **Named test:** gallery.spec.ts
-              - **Layer:** repos/db
-              - **Size:** M
-              - **Depends on:** gallery-T1
-      result: { status: ok, summary: wrote a plan with a mistake, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}' }
-    - actions:
-        - write:
-            path: out/2-engineering/plans/2026-10-17-gallery/tasks.md
-            content: |
-              # Tasks
-
-              ## gallery-T1: the API stores galleries
-
-              - **Acceptance criteria:**
-                - [ ] a gallery can be created
-              - **Named test:** TestCreateGallery
-              - **Layer:** repos/api
-              - **Size:** S
-              - **Depends on:** nothing
-
-              ## gallery-T2: the web app shows them
-
-              - **Acceptance criteria:**
-                - [ ] the page lists galleries
-              - **Named test:** gallery.spec.ts
-              - **Layer:** repos/web
-              - **Size:** M
-              - **Depends on:** gallery-T1
-
-              ## gallery-T3: the API lists a client's galleries only
-
-              - **Acceptance criteria:**
-                - [ ] another client's galleries are never listed
-              - **Named test:** TestListsOnlyOwn
-              - **Layer:** repos/api
-              - **Size:** S
-              - **Depends on:** gallery-T1
-
-              ## gallery-T4: the web app shows a gallery's photos
-
-              - **Acceptance criteria:**
-                - [ ] the page shows the photos
-              - **Named test:** photos.spec.ts
-              - **Layer:** repos/web
-              - **Size:** S
-              - **Depends on:** gallery-T2
-      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}' }
-  gallery-t1-implement:
+    - result: { status: ok, summary: wrote a plan with a mistake, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Gallery", "slug": "gallery", "goal": "A gallery for photographers.", "decisions": [], "risks": [], "tasks": [{"id": "gallery-T001", "title": "the API stores galleries", "criteria": ["a gallery can be created", "a created gallery can be read"], "named_test": "TestCreateGallery", "layer": "repos/api", "size": "S", "depends_on": [], "text": "Build the API stores galleries."}, {"id": "gallery-T002", "title": "the web app shows them", "criteria": ["the page lists galleries", "an empty list says so"], "named_test": "gallery.spec.ts", "layer": "repos/db", "size": "M", "depends_on": ["gallery-T001"], "text": "Build the web app shows them."}]}' }
+    - result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Gallery", "slug": "gallery", "goal": "A gallery for photographers.", "decisions": [], "risks": [], "tasks": [{"id": "gallery-T001", "title": "the API stores galleries", "criteria": ["a gallery can be created", "a created gallery can be read"], "named_test": "TestCreateGallery", "layer": "repos/api", "size": "S", "depends_on": [], "text": "Build the API stores galleries."}, {"id": "gallery-T002", "title": "the web app shows them", "criteria": ["the page lists galleries", "an empty list says so"], "named_test": "gallery.spec.ts", "layer": "repos/web", "size": "M", "depends_on": ["gallery-T001"], "text": "Build the web app shows them."}, {"id": "gallery-T003", "title": "the API lists the galleries of a client only", "criteria": ["the galleries of another client are never listed", "a client with none gets an empty list"], "named_test": "TestListsOnlyOwn", "layer": "repos/api", "size": "S", "depends_on": ["gallery-T001"], "text": "Build the API lists the galleries of a client only."}, {"id": "gallery-T004", "title": "the web app shows the photos of a gallery", "criteria": ["the page shows the photos", "a gallery with none says so"], "named_test": "photos.spec.ts", "layer": "repos/web", "size": "S", "depends_on": ["gallery-T002"], "text": "Build the web app shows the photos of a gallery."}]}' }
+  gallery-t001-implement:
     - actions: [ { write: { path: api.txt, content: "done\n" } } ]
       result: { status: ok, summary: built the API's galleries, usage: { in: 2000, out: 200, turns: 4 } }
-  gallery-t2-implement:
+  gallery-t002-implement:
     - actions: [ { write: { path: web.txt, content: "done\n" } } ]
       result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
-  gallery-t3-implement:
+  gallery-t003-implement:
     - actions: [ { write: { path: api-own.txt, content: "done\n" } } ]
       result: { status: ok, summary: built the listing, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
-  gallery-t4-implement:
+  gallery-t004-implement:
     - actions: [ { write: { path: photos.txt, content: "done\n" } } ]
       result: { status: ok, summary: built the photos, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }

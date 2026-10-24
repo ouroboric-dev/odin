@@ -1,0 +1,50 @@
+{
+  "title": "Photo Share",
+  "slug": "photo-share",
+  "summary": "The spec builds Photo Share as an API and a web app.",
+  "architecture": "Two leaves: repos/api serves /api/ and repos/web serves the app on port 3000.",
+  "interfaces": "POST /api/albums creates an album and returns 201 with its id.",
+  "data_model": "An album has an id, a name and an owner. A photo has an id, an album id and a file key.",
+  "acceptance_criteria": "Creating an album returns 201. A missing album returns 404.",
+  "security": "The server checks the owner on every write. No password is stored in clear text.",
+  "testing": "Each leaf has unit tests. The acceptance run opens repos/web.",
+  "decisions": [
+    {
+      "date": "2026-10-24",
+      "decision": "Albums use random ids.",
+      "reason": "Links must not be guessable."
+    }
+  ],
+  "deviations": [
+    {
+      "what": "The design asks for a reset link by SMS.",
+      "where": "Design, Decisions",
+      "why": "The leaves have no SMS service, so the reset link goes by email.",
+      "cites": [
+        "password-reset"
+      ]
+    }
+  ],
+  "leaves": {
+    "runtime": {
+      "realm": "niflheim-local",
+      "realm_version": "0.1.0"
+    },
+    "leaves": {
+      "repos/api": {
+        "realm": "helheim-go",
+        "realm_version": "0.1.0",
+        "description": "The product's API."
+      },
+      "repos/web": {
+        "realm": "midgard-react",
+        "realm_version": "0.1.0",
+        "description": "The product's web app.",
+        "consumes": [
+          "repos/api"
+        ]
+      }
+    }
+  },
+  "notes": []
+}

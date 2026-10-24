@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,8 +9,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
-	"slices"
 	"strings"
 	"syscall"
 
@@ -18,26 +17,17 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/run"
+	"github.com/ouroboric-dev/odin/internal/views"
+	"go.yaml.in/yaml/v3"
 )
 
-// What a scratch agent may publish: documents, a few hundred of them. Anything else in out/ is refused,
-// not skipped, so a planner that wrote a script finds out why it was not published.
-const (
-	maxPublishFiles = 500
-	maxPublishFile  = 1 << 20
-	maxPublishBytes = 8 << 20
-)
-
-var (
-	publishExt  = []string{".md", ".yaml", ".yml", ".json", ".txt", ".toml", ".d2", ".mmd"}
-	publishName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-)
-
-// runPublish copies the documents a scratch agent wrote under out/ into the project, under the folder
-// the node names, and commits them in the project umbrella (spec §3.3 rule 1: "Odin commits the
-// planner's output into L1 after the spec approval point"). The files are checked first: only regular
-// files with the names and endings of documents, in bounded number and size, and with no secret in
-// them when the run has a sandbox to scan in. Odin commits with host git, by explicit paths.
+// runPublish publishes the typed output of the scratch agent n.From into the project, under the folder the node
+// names, and commits it in the project umbrella (spec §3.3 rule 1: "Odin commits the planner's output into L1
+// after the spec approval point"). What it publishes is the output's JSON, the bytes Odin kept and validated, and
+// its view, which Odin renders from it (change typed-boundaries, design §2: Markdown is a view); for a spec, also
+// the leaves file, which Odin writes from the spec's typed leaves. Nothing of the node's out/ is published: out/
+// holds the session's drafts. The documents are scanned for secrets first, when the run has a sandbox to scan in.
+// Odin commits with host git, by explicit paths.
 func runPublish(ctx context.Context, r *run.Run, n schema.Node) error {
 	attempt, err := startAttempt(r, n)
 	if err != nil {
@@ -46,16 +36,11 @@ func runPublish(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Log(gungnir.Event{Name: gungnir.EventNodeStarted, Node: n.ID, Attempt: attempt}); err != nil {
 		return err
 	}
-	out := filepath.Join(r.ScratchDir(n.From), "out")
-	files, listed, err := listDocuments(out)
+	docs, view, err := publication(r, n)
 	if err != nil {
-		return &nodeFailure{fmt.Errorf("%s publishes what %s wrote, and %w", n.ID, n.From, err)}
+		return &nodeFailure{fmt.Errorf("%s publishes the output of %s, and %w", n.ID, n.From, err)}
 	}
-	docs, err := readDocuments(out, files, listed)
-	if err != nil {
-		return &nodeFailure{fmt.Errorf("%s publishes what %s wrote, and %w", n.ID, n.From, err)}
-	}
-	if err := scanDocuments(ctx, r, n, files, docs); err != nil {
+	if err := scanDocuments(ctx, r, n, docs); err != nil {
 		return err
 	}
 	project := r.Project
@@ -65,140 +50,201 @@ func runPublish(ctx context.Context, r *run.Run, n schema.Node) error {
 		return &nodeFailure{fmt.Errorf("the project has staged changes Odin didn't make (%s); commit or unstage them first", strings.ReplaceAll(staged, "\n", ", "))}
 	}
 	var paths []string
-	for i, rel := range files {
-		dst := path.Join(n.To, rel)
-		if err := copyDocument(project, docs[i], filepath.Join(project, filepath.FromSlash(dst))); err != nil {
-			return &nodeFailure{fmt.Errorf("publishing %s: %w", dst, err)}
+	for _, d := range docs {
+		if err := copyDocument(project, d.data, filepath.Join(project, filepath.FromSlash(d.path))); err != nil {
+			return &nodeFailure{fmt.Errorf("publishing %s: %w", d.path, err)}
 		}
-		paths = append(paths, dst)
+		paths = append(paths, d.path)
 	}
 	ev := gungnir.Event{Name: gungnir.EventDocsPublished, Node: n.ID, Attempt: attempt}
-	if len(paths) > 0 {
-		if _, err := git.Run(ctx, project, append([]string{"add", "--"}, paths...)...); err != nil {
+	if _, err := git.Run(ctx, project, append([]string{"add", "--"}, paths...)...); err != nil {
+		return err
+	}
+	if changed, err := git.Run(ctx, project, "diff", "--cached", "--name-only"); err != nil {
+		return err
+	} else if changed != "" {
+		msg := fmt.Sprintf("Publish %s's documents (run %s, node %s)", n.From, r.State.ID, n.ID)
+		if _, err := git.Run(ctx, project, append([]string{"commit", "-q", "-m", msg, "--"}, paths...)...); err != nil {
 			return err
 		}
-		if changed, err := git.Run(ctx, project, "diff", "--cached", "--name-only"); err != nil {
+		if ev.Commit, err = git.Run(ctx, project, "rev-parse", "HEAD"); err != nil {
 			return err
-		} else if changed != "" {
-			msg := fmt.Sprintf("Publish %s's documents (run %s, node %s)", n.From, r.State.ID, n.ID)
-			if _, err := git.Run(ctx, project, append([]string{"commit", "-q", "-m", msg, "--"}, paths...)...); err != nil {
-				return err
-			}
-			if ev.Commit, err = git.Run(ctx, project, "rev-parse", "HEAD"); err != nil {
-				return err
-			}
 		}
 	}
-	switch {
-	case len(paths) == 0:
-		ev.Note = n.From + " wrote nothing under out/"
-	case ev.Commit == "":
+	if ev.Commit == "" {
 		ev.Note = fmt.Sprintf("%d file(s) under %s, unchanged", len(paths), n.To)
-	default:
-		ev.Note = fmt.Sprintf("%d file(s) under %s: %s", len(paths), n.To, strings.Join(paths[:min(len(paths), 5)], ", "))
+	} else {
+		ev.Note = fmt.Sprintf("%d file(s) under %s: %s", len(paths), n.To, strings.Join(paths, ", "))
 	}
+	ref := r.State.Outputs[n.From]
+	ref.View = view
+	r.State.Outputs[n.From] = ref
 	r.State.Summaries[n.ID] = ev.Note
 	return r.Log(ev)
 }
 
-// listDocuments lists the files under out as slash paths, sorted, and refuses what a document is not: a
-// symlink, a special file, a hidden name, an odd character, an ending that is not a document's, a file
-// over the size limit, or more files or bytes than the limits.
-func listDocuments(out string) ([]string, []fs.FileInfo, error) {
-	if st, err := os.Lstat(out); err != nil || !st.IsDir() {
-		return nil, nil, fmt.Errorf("its output folder %s is not there (the node has not run)", out)
-	}
-	var files []string
-	infos := map[string]fs.FileInfo{}
-	var total int64
-	err := filepath.WalkDir(out, func(p string, d fs.DirEntry, err error) error {
+// document is one file a publish node writes: its path in the project, as a slash path, and its bytes.
+type document struct {
+	path string
+	data []byte
+}
+
+// publication is what node n publishes of the output of n.From, at the paths the documents had when the agents
+// wrote them, under n.To, with the run's date: the JSON and the view, and view, the view's path (a plan's is
+// plan.md). A blocked output is not published: it holds no document to read.
+func publication(r *run.Run, n schema.Node) ([]document, string, error) {
+	c := schema.Contract(r.State.Outputs[n.From].Contract)
+	date := dateOf(r.Setup)
+	switch c {
+	case schema.ContractDesign:
+		d, raw, err := loadOutputBytes[schema.Design](r, n.From)
 		if err != nil {
-			return err
+			return nil, "", err
 		}
-		rel, err := filepath.Rel(out, p)
-		if err != nil || rel == "." {
-			return err
+		if err := notBlocked(n.From, d.Blocked); err != nil {
+			return nil, "", err
 		}
-		for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
-			if !publishName.MatchString(seg) {
-				return fmt.Errorf("%s has the name %q; a document's folders and files are named with letters, digits, dots, dashes and underscores, and do not start with a dot", rel, seg)
+		base := path.Join(n.To, "1-product", "design", date+"-"+d.Slug)
+		md, err := views.Render(c, d, front(r, n, d.Title+" design", date, base+".md"))
+		return []document{{base + ".json", raw}, {base + ".md", md}}, base + ".md", err
+	case schema.ContractSpec:
+		sp, raw, err := loadOutputBytes[schema.Spec](r, n.From)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := notBlocked(n.From, sp.Blocked); err != nil {
+			return nil, "", err
+		}
+		base := path.Join(n.To, "2-engineering", "specs", date+"-"+sp.Slug)
+		md, err := views.Render(c, sp, front(r, n, sp.Title+" spec", date, base+".md"))
+		if err != nil {
+			return nil, "", err
+		}
+		leaves, err := leavesFile(sp.Leaves, base+".json")
+		return []document{{base + ".json", raw}, {base + ".md", md}, {path.Join(n.To, "leaves.yaml"), leaves}}, base + ".md", err
+	case schema.ContractPlan:
+		p, raw, err := loadOutputBytes[schema.Plan](r, n.From)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := notBlocked(n.From, p.Blocked); err != nil {
+			return nil, "", err
+		}
+		dir := path.Join(n.To, "2-engineering", "plans", date+"-"+p.Slug)
+		md, err := views.Render(c, p, front(r, n, p.Title+" plan", date, path.Join(dir, "plan.md")))
+		if err != nil {
+			return nil, "", err
+		}
+		tasks, err := views.Tasks(p, front(r, n, p.Title+" tasks", date, path.Join(dir, "tasks.md")))
+		return []document{{path.Join(dir, "plan.json"), raw}, {path.Join(dir, "plan.md"), md}, {path.Join(dir, "tasks.md"), tasks}}, path.Join(dir, "plan.md"), err
+	case schema.ContractReuseReview:
+		rv, raw, err := loadOutputBytes[schema.ReuseReview](r, n.From)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := notBlocked(n.From, rv.Blocked); err != nil {
+			return nil, "", err
+		}
+		// A reuse review is named for the plan it reviews, and sits beside the other reviews.
+		title, slug, err := reviewed(r, n.From)
+		if err != nil {
+			return nil, "", err
+		}
+		base := path.Join(n.To, "2-engineering", "reviews", date+"-"+slug+"-reuse-review")
+		md, err := views.Render(c, rv, front(r, n, title+" reuse review", date, base+".md"))
+		return []document{{base + ".json", raw}, {base + ".md", md}}, base + ".md", err
+	}
+	// The graph check refuses a publish node whose source has no view, when the run starts.
+	return nil, "", fmt.Errorf("its output, a %s, has no view", c)
+}
+
+// notBlocked refuses a blocked output: it says why the session could not do its work, and is no document.
+func notBlocked(node string, b *gungnir.Blocked) error {
+	if b != nil {
+		return fmt.Errorf("%s is blocked: %s; nothing is published", node, b.Reason)
+	}
+	return nil
+}
+
+// reviewed is the title and the slug of the output that node reviews: the plan a reuse review is of.
+func reviewed(r *run.Run, node string) (title, slug string, err error) {
+	nodes := r.Nodes()
+	i := indexOf(nodes, node)
+	if i < 0 || nodes[i].Reviews == "" {
+		return "", "", fmt.Errorf("%s reviews no node, and its review is named for the plan it reviews", node)
+	}
+	of := nodes[i].Reviews
+	switch c := schema.Contract(r.State.Outputs[of].Contract); c {
+	case schema.ContractPlan:
+		p, err := loadOutput[schema.Plan](r, of)
+		return p.Title, p.Slug, err
+	case schema.ContractSpec:
+		sp, err := loadOutput[schema.Spec](r, of)
+		return sp.Title, sp.Slug, err
+	case schema.ContractDesign:
+		d, err := loadOutput[schema.Design](r, of)
+		return d.Title, d.Slug, err
+	default:
+		return "", "", fmt.Errorf("%s reviews %s, whose output (%s) has no title or slug to name its review for", node, of, c)
+	}
+}
+
+// front is the front matter of the view of n.From, at view: its title, the run's date, and links to the views
+// already published of the outputs the node read, relative to the view.
+func front(r *run.Run, n schema.Node, title, date, view string) views.Front {
+	related := []string{}
+	nodes := r.Nodes()
+	if i := indexOf(nodes, n.From); i >= 0 {
+		for _, in := range sessionInputs(nodes[i], nil) {
+			if ref, ok := r.State.Outputs[in]; ok && ref.View != "" {
+				if rel, err := filepath.Rel(path.Dir(view), ref.View); err == nil {
+					related = append(related, filepath.ToSlash(rel))
+				}
 			}
 		}
-		if d.IsDir() {
-			return nil
-		}
-		if !d.Type().IsRegular() {
-			return fmt.Errorf("%s is %s, not a regular file", rel, d.Type())
-		}
-		if !slices.Contains(publishExt, strings.ToLower(filepath.Ext(rel))) {
-			return fmt.Errorf("%s does not end like a document (%s)", rel, strings.Join(publishExt, ", "))
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		total += info.Size()
-		switch {
-		case info.Size() > maxPublishFile:
-			return fmt.Errorf("%s is %d bytes; a document is at most %d", rel, info.Size(), maxPublishFile)
-		case len(files) >= maxPublishFiles:
-			return fmt.Errorf("it wrote more than %d files", maxPublishFiles)
-		case total > maxPublishBytes:
-			return fmt.Errorf("it wrote more than %d bytes", maxPublishBytes)
-		}
-		files = append(files, filepath.ToSlash(rel))
-		infos[filepath.ToSlash(rel)] = info
-		return nil
-	})
-	slices.Sort(files)
-	listed := make([]fs.FileInfo, len(files))
-	for i, f := range files {
-		listed[i] = infos[f]
 	}
-	return files, listed, err
+	return views.Front{Title: title, Date: date, Related: related}
 }
 
-// readDocuments reads each listed document once, as the regular file the listing found, within the limits:
-// these bytes are the ones scanned and published, whatever happens in out/ after.
-func readDocuments(out string, files []string, listed []fs.FileInfo) ([][]byte, error) {
-	docs := make([][]byte, len(files))
-	var total int64
-	for i, rel := range files {
-		b, err := readRegular(out, filepath.FromSlash(rel), listed[i], maxPublishFile)
-		if err != nil {
-			return nil, err
-		}
-		if total += int64(len(b)); total > maxPublishBytes {
-			return nil, fmt.Errorf("it wrote more than %d bytes", maxPublishBytes)
-		}
-		docs[i] = b
+// leavesFile is leaves.yaml, written from the spec's typed leaves: the tasks and init nodes read it, and the
+// project keeps it as it kept the file the spec stage wrote before its output was typed.
+func leavesFile(l schema.Leaves, from string) ([]byte, error) {
+	var b bytes.Buffer
+	b.WriteString("# Written by Odin from the leaves of the spec, " + path.Base(from) + ".\n")
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(l); err != nil {
+		return nil, err
 	}
-	return docs, nil
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
 }
 
-// publishStage is the folder of the scratch workspace where Odin writes the documents it read, for the
-// scan: out/ as Odin read it, not as it is when the scan runs.
+// publishStage is the folder of the source's scratch workspace where Odin writes the documents it will publish,
+// for the scan: the bytes it will commit, not anything an agent can change after.
 const publishStage = ".publish"
 
-// scanDocuments looks for secrets in the documents in the scratch sandbox of the node that wrote them,
-// where gitleaks is pinned (spec §14). A run with no sandbox has nowhere to run the scanner, and only
-// scripted agents. Secrets are a hard stop at real-secrets-or-user-data with nothing published; a scan
-// that could not run fails the node, because no answer is never "clean". The scan reads docs, the bytes
-// Odin read and will publish: Odin writes them under publishStage in the workspace, at their paths in
-// out/, and runs the scan there, so its report names them as out/ does.
-func scanDocuments(ctx context.Context, r *run.Run, n schema.Node, files []string, docs [][]byte) error {
+// scanDocuments looks for secrets in the documents, in the scratch sandbox of the node whose output they are,
+// where gitleaks is pinned (spec §14). A run with no sandbox has nowhere to run the scanner, and only scripted
+// agents. Secrets are a hard stop at real-secrets-or-user-data with nothing published; a scan that could not run
+// fails the node, because no answer is never "clean". Odin writes the documents under publishStage in the
+// workspace, at their paths in the project, and runs the scan there, so its report names them as the project will.
+func scanDocuments(ctx context.Context, r *run.Run, n schema.Node, docs []document) error {
 	runner, err := r.ScratchRunner(ctx, n.From)
 	if err != nil {
 		return sandboxStart(err)
 	}
-	if runner == nil || len(files) == 0 {
+	if runner == nil || len(docs) == 0 {
 		return nil
 	}
-	listed := make([]string, len(files))
-	for i, f := range files {
-		listed[i] = path.Join("out", f)
+	listed := make([]string, len(docs))
+	data := make([][]byte, len(docs))
+	for i, d := range docs {
+		listed[i], data[i] = d.path, d.data
 	}
-	if err := stageDocuments(filepath.Join(r.ScratchDir(n.From), publishStage), listed, docs); err != nil {
+	if err := stageDocuments(filepath.Join(r.ScratchDir(n.From), publishStage), listed, data); err != nil {
 		return err
 	}
 	err = scan.Run(ctx, inDir{runner, publishStage}, listed)
@@ -272,7 +318,7 @@ func noSymlinks(project, path string) error {
 	return nil
 }
 
-// copyDocument writes data, a document as readDocuments read it, to dst, making dst's folders. Nothing on
+// copyDocument writes data, a document as publication made it, to dst, making dst's folders. Nothing on
 // the way to dst may be a symlink: a document must land where the node says, inside the project.
 func copyDocument(project string, data []byte, dst string) error {
 	if err := noSymlinks(project, dst); err != nil {

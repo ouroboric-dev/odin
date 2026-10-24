@@ -1,0 +1,20 @@
+{{- /* The plan's tasks (ygg.plan/v1), one section each, in the form tasks.md had: the task's text and contract whole. */ -}}
+{{front .Front}}
+{{range $i, $t := .Doc.Tasks}}{{if $i}}
+{{end}}## {{line .ID}}: {{line .Title}}
+
+- **Acceptance criteria:**
+{{range .Criteria}}  - [ ] {{item . 4}}
+{{end}}- **Named test:** {{line .NamedTest}}
+- **Layer:** {{line .Layer}}
+- **Size:** {{line .Size}}
+- **Depends on:** {{deps .DependsOn}}
+
+### The text
+
+{{text .Text}}
+{{with .Contract}}
+### The contract
+
+{{fenced .}}{{end}}{{else}}None.
+{{end}}

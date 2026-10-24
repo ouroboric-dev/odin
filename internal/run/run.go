@@ -29,6 +29,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/tree"
 	"github.com/ouroboric-dev/odin/internal/version"
+	"github.com/ouroboric-dev/odin/internal/views"
 )
 
 // Options say what to run.
@@ -161,6 +162,9 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		if err := s.checkNode(ctx, graphPath, n); err != nil {
 			return nil, err
 		}
+	}
+	if err := checkPublish(graphPath, s.Graph.Nodes, map[string]string{}); err != nil {
+		return nil, err
 	}
 	for _, p := range s.projectLeaves() { // every leaf the project has, whether or not the graph names it
 		if _, err := s.RealmOf(p); err != nil {
@@ -302,6 +306,22 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 		if err := s.checkSession(graphPath, n.SessionKey(rv), rv.Role, rv.Prompt); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkPublish refuses a publish node whose source's output has no view: Odin publishes an output's JSON and the
+// view it renders from it (change typed-boundaries), and a graph whose publish could only fail must not load.
+// outputs holds the output of every node before nodes, by id.
+func checkPublish(graphPath string, nodes []schema.Node, outputs map[string]string) error {
+	for _, n := range nodes {
+		if n.Kind == schema.KindPublish && !views.Has(schema.Contract(outputs[n.From])) {
+			return fmt.Errorf("%s: node %s: publish has no view for %s", graphPath, n.ID, outputs[n.From])
+		}
+		if err := checkPublish(graphPath, n.Body, maps.Clone(outputs)); err != nil {
+			return err
+		}
+		outputs[n.ID] = n.Output
 	}
 	return nil
 }

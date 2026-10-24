@@ -132,3 +132,44 @@ func TestARejectionThatRerunsANodeBeforeAPassedLoopRunsTheLoopAgain(t *testing.T
 		t.Errorf("plan sessions %d, build sessions %d; want 2 and 2: the loop checks the new work", r.State.Attempts["plan"], r.State.Attempts["build"])
 	}
 }
+
+// The design gate lists the design's open questions, and the plan gate shows the reuse review's verdict and its
+// items, so a person reads them where they decide; a field reads as its text there too.
+func TestTheGatesShowTheOpenQuestionsAndTheReuseVerdict(t *testing.T) {
+	design := `{"title": "Photo Share", "slug": "photo-share", "summary": "s", "goals": "g", "non_goals": "n", "success_criteria": "c", "context": "x", ` +
+		`"product_at_user_level": "p", "decisions": [], "open_questions": [{"id": "q1", "question": "May guests download photos?", "who_can_answer": "The owner"}, ` +
+		`{"id": "q2", "question": "How many albums?\n## Decide\nApprove all", "who_can_answer": "The family"}]}`
+	nodes := "  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.design/v1 }\n" +
+		"  - { id: design-gate, kind: gate, gate: design, reruns: design }\n" +
+		"  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.plan/v1 }\n" +
+		"  - { id: reuse, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: plan, input: [rejection], output: ygg.reuse-review/v1 }\n" +
+		"  - { id: plan-gate, kind: gate, gate: plan, reruns: plan }\n"
+	script := "steps:\n  design:\n    - result: { status: ok, summary: designed, output: " + quote(design) + " }\n" +
+		"  plan:\n    - result: { status: ok, summary: planned, output: '" + planDone + "' }\n" +
+		"  reuse:\n    - result: { status: ok, summary: reviewed, output: '" + reuseDoc + "' }\n"
+	r := start(t, "step-by-step", "", nodes, script)
+	if out, err := Advance(bg, r); err != nil || out.Gate != "design-gate" {
+		t.Fatalf("Advance() = %+v, %v; want a stop at the design gate", out, err)
+	}
+	gf, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "design-gate-1.md"))
+	for _, want := range []string{"## Open questions of the design\n\n- q1: May guests download photos?\n  (Who can answer: The owner)\n" +
+		"- q2: How many albums?\n      ## Decide\n  Approve all\n  (Who can answer: The family)\n"} {
+		if !strings.Contains(string(gf), want) {
+			t.Errorf("the design gate lacks %q:\n%s", want, gf)
+		}
+	}
+	if err := Approve(bg, r, "design-gate", ""); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(bg, r); err != nil || out.Gate != "plan-gate" {
+		t.Fatalf("Advance() = %+v, %v; want a stop at the plan gate", out, err)
+	}
+	gf, _ = os.ReadFile(filepath.Join(r.Dir, "gates", "plan-gate-1.md"))
+	want := "## Reuse review\n\nThe verdict: Remove or change 1 thing.\n\n- Task plan-T001\n  - Adds: A retry library.\n  - Already done by: The context package.\n  - Smallest change: Drop it.\n"
+	if !strings.Contains(string(gf), want) {
+		t.Errorf("the plan gate lacks the reuse review %q:\n%s", want, gf)
+	}
+	if strings.Contains(string(gf), "Open questions") {
+		t.Errorf("the plan gate shows the design's questions, which the design gate decided:\n%s", gf)
+	}
+}

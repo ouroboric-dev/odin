@@ -124,6 +124,7 @@ type OutputRef struct {
 	Path     string `json:"path"` // relative to the run folder: outputs/<key>.json
 	SHA256   string `json:"sha256"`
 	Attempt  int    `json:"attempt"`
+	View     string `json:"view,omitempty"` // where a publish node put its view in the project, from the project; a later view links to it
 }
 
 // LoopRecord is where one loop node stands (spec §4.2): Jormungandr's state, which holds the attempt,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -101,7 +102,7 @@ func changeBlock(ctx context.Context, r *run.Run, n schema.Node, base string) (s
 		more := len(statLines) - 1 - maxChangeStat
 		statLines = append(append(statLines[:maxChangeStat:maxChangeStat], fmt.Sprintf("... and %d more files (the summary counts them all)", more)), statLines[len(statLines)-1])
 	}
-	b.WriteString(fenced("", strings.Join(statLines, "\n")+"\n") + "\n")
+	b.WriteString(mdsafe.Fenced("", strings.Join(statLines, "\n")+"\n") + "\n")
 
 	var patch []byte
 	cut := false
@@ -136,7 +137,7 @@ func changeBlock(ctx context.Context, r *run.Run, n schema.Node, base string) (s
 		}
 	}
 	if len(shown) > 0 {
-		b.WriteString(fenced("diff", strings.Join(shown, "")))
+		b.WriteString(mdsafe.Fenced("diff", strings.Join(shown, "")))
 	}
 	if len(binary) > 0 {
 		fmt.Fprintf(&b, "\nBinary files, named and not shown: %s\n", strings.Join(binary, ", "))
@@ -151,24 +152,6 @@ func changeBlock(ctx context.Context, r *run.Run, n schema.Node, base string) (s
 }
 
 var errPatchCut = errors.New("patch cut")
-
-// fenced is a code block whose fence is longer than any run of backticks in text, so text cannot close it.
-func fenced(lang, text string) string {
-	run, longest := 0, 0
-	for _, c := range text {
-		if c == '`' {
-			run++
-			longest = max(longest, run)
-		} else {
-			run = 0
-		}
-	}
-	fence := strings.Repeat("`", max(3, longest+1))
-	if !strings.HasSuffix(text, "\n") {
-		text += "\n"
-	}
-	return fence + lang + "\n" + text + fence + "\n"
-}
 
 // splitPatch cuts a patch into one piece for each file. A line of the patch's content always starts with a
 // space, + or -, so "diff --git " at a line's start begins a file.

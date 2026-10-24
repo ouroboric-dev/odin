@@ -59,10 +59,14 @@ func TestAScratchAgentWorksInAWorkspaceOfItsOwnAndWritesUnderOut(t *testing.T) {
 		t.Errorf("the agent changed the project's docs/input.md: %q", b)
 	}
 	prompt := promptOf(t, r, "design-1")
-	for _, want := range []string{"## Your workspace", "Write every document you produce under out/", "## Input: brief\n\nBuild a gallery.\n"} {
+	for _, want := range []string{"## Your workspace", "out/ is for drafts", "Nothing in out/ leaves this workspace", "## Input: brief\n\nBuild a gallery.\n"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt lacks %q:\n%s", want, prompt)
 		}
+	}
+	// out/ is drafts only: Odin publishes the views of the typed output, so no session is told to write its documents there.
+	if strings.Contains(prompt, "Write every document") {
+		t.Errorf("the prompt still asks for documents under out/:\n%s", prompt)
 	}
 	if len(r.State.Leaves) != 0 {
 		t.Errorf("a scratch node is not a leaf: leaves %v", r.State.Leaves)

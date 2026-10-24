@@ -1,0 +1,60 @@
+---
+title: "Photo Share tasks"
+status: draft
+date: 2026-10-24
+related: ["../../specs/2026-10-24-photo-share.md"]
+---
+
+## photo-share-T001: Task 1
+
+- **Acceptance criteria:**
+  - [ ] It does the first thing.
+  - [ ] It does the second thing.
+- **Named test:** api/auth_test.go:TestSignup
+- **Layer:** repos/api
+- **Size:** M
+- **Depends on:** nothing
+
+### The text
+
+    ---
+title: x
+    ---
+    ## Brief
+
+The signup route takes an email and a password.
+
+```json
+{"email": "a@b.c", "password": "s3cret-pass"}
+```
+
+The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. T
+
+### The contract
+
+```
+openapi: 3.0.3
+info:
+  title: Auth
+  version: 1.0.0
+paths:
+  /api/auth/signup:
+    post:
+      responses:
+        '201':
+          description: created
+```
+
+## photo-share-T002: Task 2
+
+- **Acceptance criteria:**
+  - [ ] It does the first thing.
+  - [ ] It does the second thing.
+- **Named test:** api/auth_test.go:TestSignup
+- **Layer:** repos/api
+- **Size:** M
+- **Depends on:** photo-share-T001
+
+### The text
+
+The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and 

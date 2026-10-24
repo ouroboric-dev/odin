@@ -207,35 +207,41 @@ func keepOutput(r *run.Run, node string, c schema.Contract, raw []byte, attempt 
 // loadOutput reads back the output kept for node and decodes it as its contract. A file whose hash is not the
 // one run.json recorded is refused: what a later stage reads is what Odin validated.
 func loadOutput[T any](r *run.Run, node string) (T, error) {
+	v, _, err := loadOutputBytes[T](r, node)
+	return v, err
+}
+
+// loadOutputBytes is loadOutput, with the bytes it read and decoded: the document as Odin kept it.
+func loadOutputBytes[T any](r *run.Run, node string) (T, []byte, error) {
 	var zero T
 	ref, ok := r.State.Outputs[node]
 	if !ok {
-		return zero, fmt.Errorf("%s has no output kept in this run", node)
+		return zero, nil, fmt.Errorf("%s has no output kept in this run", node)
 	}
 	rel, err := outputPath(node)
 	if err != nil {
-		return zero, err
+		return zero, nil, err
 	}
 	if ref.Path != rel {
-		return zero, fmt.Errorf("run.json keeps the output of %s at %q, not at %s", node, ref.Path, rel)
+		return zero, nil, fmt.Errorf("run.json keeps the output of %s at %q, not at %s", node, ref.Path, rel)
 	}
 	dir := filepath.Join(r.Dir, "outputs")
 	st, err := os.Lstat(filepath.Join(dir, filepath.Base(rel)))
 	if err != nil {
-		return zero, fmt.Errorf("the output of %s: %w", node, err)
+		return zero, nil, fmt.Errorf("the output of %s: %w", node, err)
 	}
 	data, err := readRegular(dir, filepath.Base(rel), st, maxOutput)
 	if err != nil {
-		return zero, fmt.Errorf("the output of %s: %w", node, err)
+		return zero, nil, fmt.Errorf("the output of %s: %w", node, err)
 	}
 	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != ref.SHA256 {
-		return zero, fmt.Errorf("the output of %s changed since Odin kept it (%s)", node, rel)
+		return zero, nil, fmt.Errorf("the output of %s changed since Odin kept it (%s)", node, rel)
 	}
 	v, err := schema.Decode[T](schema.Contract(ref.Contract), data)
 	if err != nil {
-		return zero, fmt.Errorf("the output of %s: %w", node, err)
+		return zero, nil, fmt.Errorf("the output of %s: %w", node, err)
 	}
-	return v, nil
+	return v, data, nil
 }
 
 // outputPath is where the output of session key is kept, relative to the run folder. A key is a node id or a

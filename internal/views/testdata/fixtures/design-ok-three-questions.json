@@ -1,0 +1,29 @@
+{
+  "title": "Photo Share",
+  "slug": "photo-share",
+  "summary": "Photo Share lets a family keep photos in albums and share an album by link.",
+  "goals": "A person uploads photos, groups them in albums and shares an album with a link.",
+  "non_goals": "No editing of photos, because the brief asks for storage and sharing only.",
+  "success_criteria": "A page of 50 photos shows within two seconds on a phone.",
+  "context": "The users are a family. They use phones. We assumed one language, English.",
+  "product_at_user_level": "A person signs in, makes an album and adds photos. A wrong link shows a page that says the album is gone.",
+  "decisions": [
+    {
+      "date": "2026-10-24",
+      "decision": "An album link works until its owner turns it off.",
+      "reason": "The brief does not say how long a link lives, and a family reopens old links.",
+      "cites": ["links-last"]
+    },
+    {
+      "date": "2026-10-24",
+      "decision": "Only the owner deletes photos.",
+      "reason": "Guests only look."
+    }
+  ],
+  "open_questions": [
+    { "id": "q1", "question": "May guests download photos?", "who_can_answer": "The product owner" },
+    { "id": "q2", "question": "How many photos may one album hold?", "who_can_answer": "The product owner" },
+    { "id": "q3", "question": "Is a second language needed?", "who_can_answer": "The family" }
+  ],
+  "notes": ["The brief names no budget."]
+}

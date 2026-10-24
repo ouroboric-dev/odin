@@ -13,6 +13,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/gate"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -128,6 +129,13 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, v
 	for _, m := range nodes[start:s.Position] {
 		fmt.Fprintf(&b, "- %s (%s, attempt %d): %s\n", m.ID, m.Kind, s.Attempts[m.ID], s.Summaries[m.ID])
 	}
+	for _, m := range nodes[start:s.Position] {
+		section, err := gateSection(r, m.ID)
+		if err != nil {
+			return "", &nodeFailure{err}
+		}
+		b.WriteString(section)
+	}
 	if verdict != nil {
 		b.WriteString("\n" + conformanceSection(*verdict))
 	}
@@ -152,6 +160,50 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, v
 		return "", err
 	}
 	return rel, os.WriteFile(filepath.Join(r.Dir, rel), []byte(b.String()), 0o644)
+}
+
+// gateSection is what a gate shows of the output node kept, for the person who decides there to read: a design's
+// open questions, and a reuse review's verdict and its items. It is "" for any other output. The fields are made
+// safe as in a view (mdsafe), so none can pass for a section of the gate file.
+func gateSection(r *run.Run, node string) (string, error) {
+	var b strings.Builder
+	switch schema.Contract(r.State.Outputs[node].Contract) {
+	case schema.ContractDesign:
+		d, err := loadOutput[schema.Design](r, node)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("\n## Open questions of the design\n\n")
+		if d.Blocked != nil {
+			b.WriteString(mdsafe.Text("The design is blocked: "+d.Blocked.Reason) + "\n\n")
+		}
+		if len(d.OpenQuestions) == 0 {
+			b.WriteString("None.\n")
+		}
+		for _, q := range d.OpenQuestions {
+			b.WriteString("- " + mdsafe.Item(mdsafe.Line(q.ID)+": "+mdsafe.CloseFences(q.Question)+"\n(Who can answer: "+mdsafe.Line(q.WhoCanAnswer)+")", 2) + "\n")
+		}
+	case schema.ContractReuseReview:
+		rv, err := loadOutput[schema.ReuseReview](r, node)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("\n## Reuse review\n\n")
+		if rv.Blocked != nil {
+			b.WriteString(mdsafe.Text("The reuse review is blocked: "+rv.Blocked.Reason) + "\n\n")
+		}
+		if rv.Verdict != "" {
+			b.WriteString(mdsafe.Text("The verdict: "+rv.Verdict) + "\n\n")
+		}
+		if len(rv.Items) == 0 {
+			b.WriteString("It lists no findings.\n")
+		}
+		for _, it := range rv.Items {
+			b.WriteString("- " + mdsafe.Item("Task "+it.Task, 2) + "\n  - " + mdsafe.Item("Adds: "+it.Adds, 4) + "\n  - " +
+				mdsafe.Item("Already done by: "+it.AlreadyDoneBy, 4) + "\n  - " + mdsafe.Item("Smallest change: "+it.SmallestChange, 4) + "\n")
+		}
+	}
+	return b.String(), nil
 }
 
 func pending(r *run.Run, gateID string) error {
@@ -331,7 +383,8 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
 	switch {
 	case run.Quarantines(h.gate) && n.Repo == "":
-		fmt.Fprintf(&b, "Nothing was published. The documents are in %s; remove what the scan found, and then approve: %s runs again.\n", filepath.Join(r.ScratchDir(n.From), "out"), n.ID)
+		fmt.Fprintf(&b, "Nothing was published. What the scan found is in the output of %s, which Odin keeps as it validated it, in %s; "+
+			"approving runs %s again, with a new scan. To drop the work, start a new run.\n", n.From, filepath.Join(r.Dir, "outputs", n.From+".json"), n.ID)
 	case run.Quarantines(h.gate):
 		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again; what the node wrote is not saved.\n", n.Repo, n.ID)
 	case h.gate == gungnir.GateBudgetCap && journalCap(h.err) && len(s.PendingSpend) > 0:

@@ -17,6 +17,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/lock"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -162,6 +163,8 @@ func planLeaves(r *run.Run, n schema.Node) (leaves []string, spec *schema.Leaves
 		}
 	}
 	if n.Leaves != "" {
+		// The leaves file is the one Odin wrote from the spec's typed leaves when it published the spec (spec-docs),
+		// read back as data Odin wrote, not as anything an agent wrote.
 		data, rerr := readLeavesFile(r, n.Leaves)
 		if rerr != nil {
 			return nil, nil, fmt.Sprintf("the leaves file %s can't be read (%v), so the tasks' leaves can't be checked. The spec stage names the product's leaves there.", n.Leaves, rerr), nil
@@ -214,7 +217,7 @@ func taskInput(r *run.Run, n schema.Node) string {
 	}
 	f := r.State.Features[i]
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n%s\n\nAcceptance criteria:\n", safeText(f.ID+": "+clip(f.Title, maxTaskTitle)), safeText("You work in the leaf "+f.Layer+"."))
+	fmt.Fprintf(&b, "%s\n\n%s\n\nAcceptance criteria:\n", mdsafe.Text(f.ID+": "+clip(f.Title, maxTaskTitle)), mdsafe.Text("You work in the leaf "+f.Layer+"."))
 	var criteria []string
 	for j, c := range f.Criteria {
 		if j == maxTaskCriteria {
@@ -223,16 +226,16 @@ func taskInput(r *run.Run, n schema.Node) string {
 		}
 		criteria = append(criteria, clip(c, maxTaskField))
 	}
-	b.WriteString(bullets(criteria))
-	fmt.Fprintf(&b, "\n%s\n", safeText("The test that proves it: "+clip(f.Test, maxTaskField)))
+	b.WriteString(mdsafe.Bullets(criteria))
+	fmt.Fprintf(&b, "\n%s\n", mdsafe.Text("The test that proves it: "+clip(f.Test, maxTaskField)))
 	if len(f.DependsOn) > 0 {
-		fmt.Fprintf(&b, "\n%s\n", safeText("It builds on: "+strings.Join(f.DependsOn, ", ")+" (already landed)."))
+		fmt.Fprintf(&b, "\n%s\n", mdsafe.Text("It builds on: "+strings.Join(f.DependsOn, ", ")+" (already landed)."))
 	}
 	if strings.TrimSpace(f.Text) != "" {
-		b.WriteString("\n### The text\n\n" + safeText(f.Text) + "\n")
+		b.WriteString("\n### The text\n\n" + mdsafe.Text(f.Text) + "\n")
 	}
 	if strings.TrimSpace(f.Contract) != "" {
-		b.WriteString("\n### The contract\n\n" + fenced("", f.Contract))
+		b.WriteString("\n### The contract\n\n" + mdsafe.Fenced("", f.Contract))
 	}
 	return b.String()
 }

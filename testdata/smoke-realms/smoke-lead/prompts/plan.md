@@ -1,23 +1,41 @@
-Read docs/leaves.yaml. Write one file, out/plan/tasks.md, with exactly this content and nothing else in it:
+Your answer is one ygg.plan/v1 document, with exactly this content and nothing else in it:
 
-# Tasks
+{
+  "title": "Smoke",
+  "slug": "smoke",
+  "goal": "Each leaf says hello.",
+  "decisions": [],
+  "risks": [],
+  "tasks": [
+    {
+      "id": "smoke-T001",
+      "title": "the api says hello",
+      "criteria": [
+        "hello.txt holds the word hello",
+        "the unit check passes"
+      ],
+      "named_test": "the unit check",
+      "layer": "repos/api",
+      "size": "S",
+      "depends_on": [],
+      "text": "Write hello.txt with the word hello in it."
+    },
+    {
+      "id": "smoke-T002",
+      "title": "the web leaf says hello",
+      "criteria": [
+        "hello.txt holds the word hello",
+        "the unit check passes"
+      ],
+      "named_test": "the unit check",
+      "layer": "repos/web",
+      "size": "S",
+      "depends_on": [
+        "smoke-T001"
+      ],
+      "text": "Write hello.txt with the word hello in it."
+    }
+  ]
+}
 
-## smoke-T1: the api says hello
-
-- **Acceptance criteria:**
-  - [ ] hello.txt holds the word hello
-- **Named test:** the unit check
-- **Layer:** repos/api
-- **Size:** S
-- **Depends on:** nothing
-
-## smoke-T2: the web leaf says hello
-
-- **Acceptance criteria:**
-  - [ ] hello.txt holds the word hello
-- **Named test:** the unit check
-- **Layer:** repos/web
-- **Size:** S
-- **Depends on:** smoke-T1
-
-Do nothing else: no other files, no commands that change anything else. Then reply with the word done.
+Do nothing else: no files, no commands that change anything. Hand the document back as the section on your answer says.

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -44,7 +44,7 @@ func inputBody(r *run.Run, n schema.Node, who, name string, extra map[string]str
 			return "", missingInput(who, name)
 		}
 		// The brief is an instruction: it passes as it is, but for a code fence it leaves open, which is closed.
-		return withNewline(closeFences(r.Setup.BriefText)), nil
+		return withNewline(mdsafe.CloseFences(r.Setup.BriefText)), nil
 	case schema.SourceDecisions:
 		return renderDecisions(decisionsOf(s))
 	case schema.SourceTask:
@@ -95,7 +95,7 @@ func reasonBody(what, text string) string {
 	if strings.TrimSpace(text) == "" {
 		return none
 	}
-	return what + "\n\n" + safeText(text) + "\n"
+	return what + "\n\n" + mdsafe.Text(text) + "\n"
 }
 
 // keptInput reads the output node kept in this run as the Go type of its contract, so the rules the schema can't
@@ -142,7 +142,7 @@ func keptInput(r *run.Run, node string) (schema.Contract, any, error) {
 
 // renderContract renders v, a document of contract c, as the body of its section: each top-level field the
 // document holds, in the order of the contract's schema, under "### <field>". Text is a field's text, made safe
-// (safeText); a list of strings is a bullet list; a number or a boolean is its value; an object, or a list that
+// (mdsafe.Text); a list of strings is a bullet list; a number or a boolean is its value; an object, or a list that
 // holds one, is a JSON block, which keeps the structure exactly and holds no line that could start a heading. A
 // document with no field is None.
 func renderContract(c schema.Contract, v any) (string, error) {
@@ -203,7 +203,7 @@ func renderField(raw json.RawMessage) (string, error) {
 		if strings.TrimSpace(x) == "" {
 			return "", nil
 		}
-		return safeText(x) + "\n", nil
+		return mdsafe.Text(x) + "\n", nil
 	case json.Number, bool:
 		return fmt.Sprint(x) + "\n", nil
 	case []any:
@@ -218,7 +218,7 @@ func renderField(raw json.RawMessage) (string, error) {
 			}
 			items = append(items, s)
 		}
-		return bullets(items), nil
+		return mdsafe.Bullets(items), nil
 	}
 	return jsonBlock(v)
 }
@@ -272,120 +272,6 @@ func jsonBlock(v any) (string, error) {
 		return "", err
 	}
 	return "```json\n" + b.String() + "```\n", nil
-}
-
-// bullets is a bullet list of texts, each made safe: the lines after an item's first are indented under it.
-func bullets(items []string) string {
-	var b strings.Builder
-	for _, it := range items {
-		lines := strings.Split(safeText(it), "\n")
-		b.WriteString("- " + lines[0] + "\n")
-		for _, l := range lines[1:] {
-			b.WriteString("  " + l + "\n")
-		}
-	}
-	return b.String()
-}
-
-// safeText is a field's text, written so that no line of it can start a heading or front matter of its own
-// (review focus 4): a line that starts, after any spaces and any blockquote or list markers, with # or ---, or
-// that is all = or all -, which would underline the line before it as a heading, is indented by four spaces,
-// which makes it text of the block it is in. A code fence the text opens and does not close is closed at its end,
-// so the sections after it are not read as code. Line breaks are \n.
-func safeText(s string) string {
-	return followFences(s, true)
-}
-
-// closeFences is s with a code fence it opens and does not close closed at its end, and nothing else changed: for
-// an instruction, such as the brief, which passes as it is.
-func closeFences(s string) string {
-	return followFences(s, false)
-}
-
-// followFences follows the code fences of s as CommonMark reads them, closes one left open at its end, and, with guard,
-// indents each line outside the fence lines that could start a block of its own (startsBlock).
-func followFences(s string, guard bool) string {
-	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	open := "" // the fence the text has opened, while it is open
-	for i, line := range lines {
-		switch {
-		case open == "" && fenceOpener(line) != "":
-			open = fenceOpener(line)
-			continue
-		case open != "" && closesFence(line, open):
-			open = ""
-			continue
-		}
-		if guard && startsBlock(strings.TrimLeft(containerFree(line), " \t")) {
-			lines[i] = "    " + line
-		}
-	}
-	if open != "" {
-		lines = append(lines, open)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// fenceOpener is the fence line opens, as CommonMark reads one: three or more backticks or tildes after at most
-// three spaces, where a backtick fence's info string holds no backtick; "" when it opens none.
-func fenceOpener(line string) string {
-	t := strings.TrimLeft(line, " ")
-	if len(line)-len(t) > 3 {
-		return ""
-	}
-	run := fenceRun(t)
-	if run == "" || (run[0] == '`' && strings.Contains(t[len(run):], "`")) {
-		return ""
-	}
-	return run
-}
-
-// closesFence reports whether line closes the fence open: a run of its character at least as long, after at most
-// three spaces, with nothing after it.
-func closesFence(line, open string) bool {
-	t := strings.TrimLeft(line, " ")
-	if len(line)-len(t) > 3 {
-		return false
-	}
-	run := fenceRun(t)
-	return run != "" && run[0] == open[0] && len(run) >= len(open) && strings.TrimSpace(t[len(run):]) == ""
-}
-
-// fenceRun is the run of three or more backticks or tildes t starts with, or "".
-func fenceRun(t string) string {
-	if t == "" || (t[0] != '`' && t[0] != '~') {
-		return ""
-	}
-	n := len(t) - len(strings.TrimLeft(t, t[:1]))
-	if n < 3 {
-		return ""
-	}
-	return t[:n]
-}
-
-// containerMarker is a blockquote or list marker at the start of a line: what follows it can be a heading too.
-var containerMarker = regexp.MustCompile(`^[ \t]*(> ?|[-*+][ \t]+|[0-9]{1,9}[.)][ \t]+)`)
-
-// containerFree is line without the blockquote and list markers it starts with.
-func containerFree(line string) string {
-	for {
-		next := containerMarker.ReplaceAllString(line, "")
-		if next == line {
-			return line
-		}
-		line = next
-	}
-}
-
-// startsBlock reports whether a line, without its leading spaces and markers, could be a heading, front matter
-// or a heading's underline.
-func startsBlock(t string) bool {
-	if strings.HasPrefix(t, "#") || strings.HasPrefix(t, "---") {
-		return true
-	}
-	u := strings.TrimRight(t, " \t")
-	return u != "" && (strings.Trim(u, "=") == "" || strings.Trim(u, "-") == "")
 }
 
 func withNewline(s string) string {
@@ -447,7 +333,7 @@ func implementerFindings(in jormungandr.Input) (string, error) {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString("### The last attempt failed\n\nYour last session ended with:\n\n" + safeText(in.LastFailure) +
+		b.WriteString("### The last attempt failed\n\nYour last session ended with:\n\n" + mdsafe.Text(in.LastFailure) +
 			"\n\nThe repository is as the last attempt that finished left it.\n")
 	}
 	return b.String(), nil

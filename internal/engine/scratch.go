@@ -14,10 +14,11 @@ import (
 )
 
 // runScratch runs a scratch agent node (spec §3.3 rule 1): a planner gets a workspace of its own, not an
-// umbrella and not a leaf. The workspace holds an empty out/ folder, where the agent writes what it produces, and
-// the files of its inputs over the bound: what it reads is in its prompt, which promptFor builds from its declared
-// inputs. Odin publishes out/ into the project later (a publish node), after the approval point. A workspace is
-// made again for every attempt and every retry, so a half-written one never reaches the next.
+// umbrella and not a leaf. The workspace holds an empty out/ folder, for the agent's drafts, and the files of its
+// inputs over the bound: what it reads is in its prompt, which promptFor builds from its declared inputs. What it
+// produces is its typed output; Odin publishes that and its view into the project later (a publish node), after
+// the approval point, and nothing of out/. A workspace is made again for every attempt and every retry, so a
+// half-written one never reaches the next.
 func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
 	dir := r.ScratchDir(n.ID)

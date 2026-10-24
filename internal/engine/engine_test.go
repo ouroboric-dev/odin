@@ -39,6 +39,17 @@ type setup struct {
 // with the config's path in r.Setup.ConfigPath, so a test can edit it before it opens the run again.
 func startWith(t *testing.T, o setup) *run.Run {
 	t.Helper()
+	r, err := run.Start(context.Background(), startOptions(t, o))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	return r
+}
+
+// startOptions makes the realm, the config and a fresh project of a test run, and returns the options that start it.
+func startOptions(t *testing.T, o setup) run.Options {
+	t.Helper()
 	realm, cfg := t.TempDir(), t.TempDir()
 	project := treetest.Project(t, "repos/app")
 	if o.mode == "" {
@@ -70,12 +81,7 @@ func startWith(t *testing.T, o setup) *run.Run {
 			t.Fatal(err)
 		}
 	}
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Hooks: o.hooks})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.Close() })
-	return r
+	return run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Hooks: o.hooks}
 }
 
 func ledgerText(t *testing.T, r *run.Run) string {

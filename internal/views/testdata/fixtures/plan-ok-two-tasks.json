@@ -1,0 +1,52 @@
+{
+  "title": "Photo Share",
+  "slug": "photo-share",
+  "goal": "A family keeps photos and shares albums.",
+  "decisions": [
+    {
+      "date": "2026-10-24",
+      "decision": "Accounts use email.",
+      "reason": "The brief names email.",
+      "cites": [
+        "email-sign-in"
+      ]
+    }
+  ],
+  "risks": [
+    "The photo store may be slow."
+  ],
+  "tasks": [
+    {
+      "id": "photo-share-T001",
+      "title": "Task 1",
+      "criteria": [
+        "It does the first thing.",
+        "It does the second thing."
+      ],
+      "named_test": "api/auth_test.go:TestSignup",
+      "layer": "repos/api",
+      "size": "M",
+      "depends_on": [],
+      "text": "---\ntitle: x\n---\n## Brief\n\nThe signup route takes an email and a password.\n\n```json\n{\"email\": \"a@b.c\", \"password\": \"s3cret-pass\"}\n```\n\nThe route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. The route makes an account and answers 201. T",
+      "contract": "openapi: 3.0.3\ninfo:\n  title: Auth\n  version: 1.0.0\npaths:\n  /api/auth/signup:\n    post:\n      responses:\n        '201':\n          description: created\n"
+    },
+    {
+      "id": "photo-share-T002",
+      "title": "Task 2",
+      "criteria": [
+        "It does the first thing.",
+        "It does the second thing."
+      ],
+      "named_test": "api/auth_test.go:TestSignup",
+      "layer": "repos/api",
+      "size": "M",
+      "depends_on": [
+        "photo-share-T001"
+      ],
+      "text": "The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and makes an account. The signup route takes an email and a password and "
+    }
+  ],
+  "notes": [
+    "One layer only."
+  ]
+}

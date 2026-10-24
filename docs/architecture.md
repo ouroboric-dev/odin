@@ -42,9 +42,17 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   it as `start.sh` at the project's root, mode 0755, in a commit of its own, and adds `.data/` to the
   project's `.gitignore`; a `start.sh` that differs is replaced in a new commit, one that matches adds none,
   and a project with no product start keeps its own `start.sh`.
-- Runs the stages before the code: a scratch agent works in a workspace of its own (the brief, copies
-  of what it reads, an `out/` folder); `publish` copies its documents into the project and commits them,
-  after checking they are documents and hold no secret; `tasks` reads `tasks.md`, applies the Definition
+- Runs the stages before the code: a scratch agent works in a workspace of its own (an `out/` folder for its
+  drafts, and the files of its inputs over the bound); `publish` commits its typed output into the project, after
+  checking it holds no secret: the output's JSON, the bytes Odin kept, beside its view, the Markdown Odin renders
+  from it (`internal/views`, change typed-boundaries: nothing reads a view back). The paths are the ones the
+  prompts gave: under the node's `to`, `1-product/design/<date>-<slug>`, `2-engineering/specs/<date>-<slug>`,
+  `2-engineering/plans/<date>-<slug>/{plan.json,plan.md,tasks.md}` and
+  `2-engineering/reviews/<date>-<slug>-reuse-review` (the slug of the plan it reviews), with the run's `date`. A
+  spec's publish also writes `leaves.yaml` from the spec's typed leaves. Each view starts with front matter Odin
+  writes (`title`, `status: draft`, `date`, `related`, which links the views of the outputs the node read), each
+  value a quoted scalar. A blocked output is not published, and a publish node whose source's output has no view
+  is refused when the run starts. `tasks` reads `tasks.md`, applies the Definition
   of Ready and writes `features.json`; `init` creates the leaves the spec stage named from their realms'
   templates and records the pins. Scratch sessions (the nodes marked `scratch: true`: the design, spec,
   plan and reuse-review stages and the conformance check) run in a Gleipnir sandbox on the factory layer,
@@ -106,7 +114,9 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Reads the design-conformance verdict (the `ygg.conformance/v1` output of a scratch reviewer that reviews
   another scratch agent's output, which it reads as its input) and gives it to the spec gate: a deviation
   stops the gate in every mode, with the proposed amendment in the gate file, and so does a verdict that says
-  the reviewer is blocked, with its reason (spec §4.2, §4.6).
+  the reviewer is blocked, with its reason (spec §4.2, §4.6). A gate file also shows what a person decides on
+  there: the open questions of a design, and the verdict and the items of a reuse review, of the nodes since
+  the gate before.
 - Builds every session's prompt from the inputs its node declares (change typed-boundaries, `promptFor` in
   `internal/engine/prompt.go`): the role's prompt file and its skills, as they are; for a scratch node, a note on
   its workspace; one section `## Input: <name>` for each input, in the declared order; then how to hand back the
@@ -117,7 +127,8 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   fence no run of backticks in it can close; the change, the open findings and the check results from the loop;
   the date from Odin's clock (`Setup.Clock`). No line of a field's text can start a heading or front matter: one
   that starts with `#` or `---`, after any blockquote or list markers, or that underlines, is indented four spaces,
-  and a fence it leaves open (read as CommonMark reads one) is closed.
+  and a fence it leaves open (read as CommonMark reads one) is closed. Prompts, views and gate files share this
+  one rule (`internal/mdsafe`).
   A declared input with no value fails the node before any session; `decisions`, `rejection`, `refusal`,
   `open_findings` and `check_results` may be empty, and say "None.". An input over 96 KiB goes to a file the
   section names: `inputs/<name>.md` in a scratch workspace, and in a repo `.ygg-inputs/<name>.md`, which the repo's
