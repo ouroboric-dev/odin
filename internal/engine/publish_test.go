@@ -86,7 +86,7 @@ func readProject(t *testing.T, r *run.Run, rel string) []byte {
 
 func TestPublishWritesTheJSONAndItsView(t *testing.T) {
 	nodes := publishNodes +
-		"  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [design, rejection], output: ygg.spec/v1 }\n" +
+		"  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [design, decisions, rejection, refusal], output: ygg.spec/v1 }\n" +
 		"  - { id: spec-docs, kind: publish, from: spec, to: docs }\n" +
 		"  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true, input: [spec, rejection], output: ygg.plan/v1 }\n" +
 		"  - { id: reuse, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: plan, input: [rejection], output: ygg.reuse-review/v1 }\n" +
@@ -209,7 +209,7 @@ func TestABlockedOutputStopsAtItsPublishForAPerson(t *testing.T) {
 	} {
 		t.Run(c.node, func(t *testing.T) {
 			docs := c.node + "-docs"
-			nodes := "  - { id: " + c.node + ", kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: " + c.contract + " }\n" +
+			nodes := "  - { id: " + c.node + ", kind: agent, role: planner, prompt: p.md, scratch: true, input: [decisions, rejection, refusal], output: " + c.contract + " }\n" +
 				"  - { id: " + docs + ", kind: publish, from: " + c.node + ", to: docs }\n"
 			blocked := func(reason string) string {
 				return "    - result: { status: ok, summary: could not, output: '{\"blocked\": {\"reason\": \"" + reason + "\"}}' }\n"
@@ -252,16 +252,16 @@ func TestABlockedOutputStopsAtItsPublishForAPerson(t *testing.T) {
 
 			// The person answers: the stage runs again with the answer as its rejection, and a second blocked answer
 			// stops again.
-			if err := Approve(bg, r, docs, "Use an email and a password."); err != nil {
+			if err := Approve(bg, r, docs, Note(docs, "Use an email and a password.")); err != nil {
 				t.Fatal(err)
 			}
 			stopped(2, "Still no way to sign in.")
-			if p := promptOf(t, r, c.node+"-2"); !strings.Contains(p, "## Input: rejection\n\nA person sent the last attempt back") || !strings.Contains(p, "Use an email and a password.") {
-				t.Errorf("the second attempt's prompt lacks the person's note:\n%s", p)
+			if p := promptOf(t, r, c.node+"-2"); !strings.Contains(p, "## Input: rejection\n\nA person sent the last attempt back") || !strings.Contains(p, "The product owner's decisions:\n\n- note-"+docs+": Use an email and a password.\n") {
+				t.Errorf("the second attempt's prompt lacks the person's note, as the decision it is:\n%s", p)
 			}
 
 			// With no note, the stage is told a person read the reason and sent it back.
-			if err := Approve(bg, r, docs, ""); err != nil {
+			if err := Approve(bg, r, docs, Note(docs, "")); err != nil {
 				t.Fatal(err)
 			}
 			if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
@@ -371,16 +371,21 @@ func TestASecretInAnOutputRunsItsStageAgainAndNothingIsPublishedWhileItStands(t 
 			t.Errorf("the gate file lacks %q:\n%s", want, gf)
 		}
 	}
-	if err := Approve(bg, r, "design-docs", ""); err != nil {
+	said := schema.Decisions{Decisions: []schema.Decision{{ID: "no-keys", Text: "Name the key's variable; never write a key."}}}
+	if err := Approve(bg, r, "design-docs", said); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() after approval = %+v, %v; want design run again and its new output published", out, err)
 	}
+	if len(r.State.Decisions) != 0 {
+		t.Errorf("what a person gave at the secret stop is kept as a gate's decisions: %+v", r.State.Decisions)
+	}
 	// The stage ran again, told where the scan found what and by which rule, never the secret itself.
 	prompt := promptOf(t, r, "design-2")
 	rejection, _, _ := strings.Cut(prompt[strings.Index(prompt, "## Input: rejection"):], "\n## Your answer")
-	for _, want := range []string{"## Input: rejection\n\nA person sent the last attempt back", "secret scan", "aws-access-token at " + designJSON + ":1", designMD} {
+	for _, want := range []string{"## Input: rejection\n\nA person sent the last attempt back", "secret scan", "aws-access-token at " + designJSON + ":1", designMD,
+		"before it is published.\n\nWhat the person who approved the stop said:\n\nThe product owner's decisions:\n\n- no-keys: Name the key's variable; never write a key.\n"} {
 		if !strings.Contains(rejection, want) {
 			t.Errorf("the rejection lacks %q:\n%s", want, rejection)
 		}
@@ -410,7 +415,7 @@ func TestASecretThatIsStillThereStopsThePublishAgain(t *testing.T) {
 	if out, err := Advance(bg, r); err != nil || out.Gate != "design-docs" {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if err := Approve(bg, r, "design-docs", ""); err != nil {
+	if err := Approve(bg, r, "design-docs", Note("design-docs", "")); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Advance(bg, r)

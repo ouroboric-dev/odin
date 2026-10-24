@@ -82,7 +82,7 @@ func TestEachAttemptOfAScratchAgentStartsFromAFreshWorkspace(t *testing.T) {
 	if err != nil || out.Status != run.StatusStopped {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if err := Reject(ctx, r, "design-gate", "shorter, please"); err != nil {
+	if err := Reject(ctx, r, "design-gate", Reason("shorter, please")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusStopped {

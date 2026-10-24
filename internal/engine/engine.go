@@ -82,6 +82,9 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 			} else {
 				err = runAgent(ctx, r, n)
 			}
+			if err == nil {
+				err = ownerCheck(r, n) // a spec must cite every owner decision (ownercheck.go)
+			}
 		case schema.KindLoop:
 			err = runLoop(ctx, r, n)
 		case schema.KindExec:

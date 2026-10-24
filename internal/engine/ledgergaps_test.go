@@ -71,7 +71,7 @@ func TestAWaiverIsForOneMoveWhateverBecomesOfIt(t *testing.T) {
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusStopped {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if err := Approve(bg, r, "move", "the index shrank on purpose"); err != nil {
+	if err := Approve(bg, r, "move", Note("move", "the index shrank on purpose")); err != nil {
 		t.Fatal(err)
 	}
 	if !r.State.Waived["move"] {
@@ -106,7 +106,7 @@ func TestAMoveThatCommittedBeforeTheRunRecordedItIsLoggedOnTheNextAttempt(t *tes
 		}
 	}
 	r.State.Attempts["move"] = 1
-	if err := Approve(bg, r, "pointer-gate", ""); err != nil {
+	if err := Approve(bg, r, "pointer-gate", Note("pointer-gate", "")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {

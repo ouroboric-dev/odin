@@ -125,7 +125,7 @@ func TestADisputeThatNamesACheckTheLoopDoesNotRunStopsTheRunAtOnce(t *testing.T)
 		t.Error("the ledger lacks the escalation reason finding-disputed")
 	}
 	// The operator overrules: approve lets the work go on, and the finding stays on record.
-	if err := Approve(context.Background(), r, "build", "findIndex exists"); err != nil {
+	if err := Approve(context.Background(), r, "build", Note("build", "findIndex exists")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

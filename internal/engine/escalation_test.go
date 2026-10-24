@@ -66,10 +66,10 @@ func TestRejectingAnEscalatedLoopGivesItAFullSetOfAttemptsWithTheOperatorsGuidan
 	if out, _ := Advance(context.Background(), r); out.Status != run.StatusStopped {
 		t.Fatalf("Advance() = %+v", out)
 	}
-	if err := Reject(context.Background(), r, "build", "  "); err == nil {
+	if err := Reject(context.Background(), r, "build", Reason("  ")); err == nil {
 		t.Error("a rejection with no reason was accepted")
 	}
-	if err := Reject(context.Background(), r, "build", "The check wants the word done, in lower case."); err != nil {
+	if err := Reject(context.Background(), r, "build", Reason("The check wants the word done, in lower case.")); err != nil {
 		t.Fatal(err)
 	}
 	if rec := r.State.Loops["build"]; rec.Escalation != nil || rec.State.Limit != 6 || rec.State.Attempt != 4 {
@@ -93,7 +93,7 @@ func TestApprovingAnExhaustedLoopGoesOnWithTheFindingsOpen(t *testing.T) {
 	script := neverPasses() + "  after:\n    - result: { status: ok, summary: went on, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})
 	Advance(context.Background(), r)
-	if err := Approve(context.Background(), r, "build", "the check is too strict; ship it"); err != nil {
+	if err := Approve(context.Background(), r, "build", Note("build", "the check is too strict; ship it")); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Advance(context.Background(), r)
@@ -134,7 +134,7 @@ func TestAMalformedReviewerOutputStopsTheLoopAndIsNeverAPass(t *testing.T) {
 	}
 	// Nobody can approve on the reviewer's behalf, and the refusal changes nothing.
 	before := ledgerText(t, r)
-	if err := Approve(context.Background(), r, "build", "just go"); err == nil || !strings.Contains(err.Error(), "can't be read") {
+	if err := Approve(context.Background(), r, "build", Note("build", "just go")); err == nil || !strings.Contains(err.Error(), "can't be read") {
 		t.Errorf("Approve() = %v, want a refusal", err)
 	}
 	if Approvable(r) || !Rejectable(r) || ledgerText(t, r) != before {
@@ -145,7 +145,7 @@ func TestAMalformedReviewerOutputStopsTheLoopAndIsNeverAPass(t *testing.T) {
 		t.Errorf("the gate file offers an approval:\n%s", gate)
 	}
 	// Sending it back asks the reviewer again, and the loop goes on from there.
-	if err := Reject(context.Background(), r, "build", "I fixed the reviewer's prompt."); err != nil {
+	if err := Reject(context.Background(), r, "build", Reason("I fixed the reviewer's prompt.")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone || r.State.Attempts["build"] != 1 {
@@ -181,7 +181,7 @@ func TestASendBackAfterAPassedLoopStartsTheLoopOver(t *testing.T) {
 	if out, _ := Advance(context.Background(), r); out.Status != run.StatusStopped || out.Gate != "feature-gate" {
 		t.Fatalf("Advance() = %+v", out)
 	}
-	if err := Reject(context.Background(), r, "feature-gate", "Add a footer."); err != nil {
+	if err := Reject(context.Background(), r, "feature-gate", Reason("Add a footer.")); err != nil {
 		t.Fatal(err)
 	}
 	if _, kept := r.State.Loops["build"]; kept || r.State.Position != 0 {
@@ -208,7 +208,7 @@ func TestAnEscalatedLoopSurvivesAReopenedRun(t *testing.T) {
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped {
 		t.Errorf("Advance() = %+v, %v; a resume of a stopped run reports its stop", out, err)
 	}
-	if err := Approve(context.Background(), r, "build", ""); err != nil {
+	if err := Approve(context.Background(), r, "build", Note("build", "")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

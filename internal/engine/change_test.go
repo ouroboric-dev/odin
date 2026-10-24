@@ -67,7 +67,7 @@ func TestTheChangeStartsAtTheLoopsBaseAcrossAResume(t *testing.T) {
 		t.Fatal("the loop recorded no base")
 	}
 	r = raiseCap(t, r, "tokens: 110", "tokens: 1000")
-	if err := Approve(context.Background(), r, "build", "raised it"); err != nil {
+	if err := Approve(context.Background(), r, "build", Note("build", "raised it")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

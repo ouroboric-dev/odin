@@ -125,7 +125,7 @@ func TestAResumeMakesTheSameNodesAndGoesOnWhereTheRunStopped(t *testing.T) {
 	if len(r.Nodes()) != 10 || r.Nodes()[r.State.Position].ID != "p-t001-feature-gate" {
 		t.Fatalf("after Open: %d nodes, position %d", len(r.Nodes()), r.State.Position)
 	}
-	if err := Approve(ctx, r, "p-t001-feature-gate", ""); err != nil {
+	if err := Approve(ctx, r, "p-t001-feature-gate", Note("p-t001-feature-gate", "")); err != nil {
 		t.Fatal(err)
 	}
 	out, err = Advance(ctx, r)
@@ -135,7 +135,7 @@ func TestAResumeMakesTheSameNodesAndGoesOnWhereTheRunStopped(t *testing.T) {
 	if r.State.Features[0].Status != schema.TaskDone || r.State.Features[1].Status != schema.TaskDoing {
 		t.Errorf("statuses: %+v", r.State.Features)
 	}
-	if err := Approve(ctx, r, "p-t002-feature-gate", ""); err != nil {
+	if err := Approve(ctx, r, "p-t002-feature-gate", Note("p-t002-feature-gate", "")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusDone {
@@ -261,7 +261,7 @@ func TestARejectionBeforeTheTasksNodeExpandsTheTasksAgainAgainstTheNewPlan(t *te
 	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusStopped || out.Gate != "final" {
 		t.Fatalf("Advance() = %+v, %v; want a stop at final", out, err)
 	}
-	if err := Reject(ctx, r, "final", "plan two tasks instead"); err != nil {
+	if err := Reject(ctx, r, "final", Reason("plan two tasks instead")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusStopped || out.Gate != "final" {

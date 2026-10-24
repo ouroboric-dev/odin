@@ -5,9 +5,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/tree"
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
@@ -239,5 +242,125 @@ func TestAResumeOfARunLedByARealmExitsTwoWithTheWayOn(t *testing.T) {
 	code, out, errOut := ygg(t, "status", id, "--project", dir)
 	if code != ExitRefused || out != "" || !strings.Contains(errOut, "can't be resumed") || !strings.Contains(errOut, "start a new run with --graph") {
 		t.Errorf("status: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+// writeFile writes body to name in a folder of the test's own and returns its path.
+func writeFile(t *testing.T, name, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// stoppedToy starts the toy graph step by step, so it stops at every gate, the first being design-gate, and returns the project, the run's id and its folder.
+func stoppedToy(t *testing.T) (dir, id, runDir string) {
+	t.Helper()
+	dir, config := project(t, "script.yaml", "")
+	if code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t), "--mode", "step-by-step"); code != ExitStopped {
+		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
+	}
+	id = runID(t, dir)
+	return dir, id, filepath.Join(dir, ".factory", "runs", id)
+}
+
+// gateDecisions is what run.json keeps of the gates' decisions.
+func gateDecisions(t *testing.T, runDir string) []run.GateDecisions {
+	t.Helper()
+	s, err := run.LoadState(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.Decisions
+}
+
+func TestApproveTakesADecisionsFile(t *testing.T) {
+	dir, id, runDir := stoppedToy(t)
+	good := writeFile(t, "decisions.json", `{"decisions": [{"id": "password-reset", "text": "The reset link goes by email.\nNever by SMS."}, `+
+		`{"id": "storage-cap", "text": "Each family has 10 GB."}]}`)
+	link := filepath.Join(t.TempDir(), "link.json")
+	if err := os.Symlink(good, link); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := os.ReadFile(filepath.Join(runDir, "run.json"))
+	ledgerBefore, _ := os.ReadFile(filepath.Join(runDir, "ledger.jsonl"))
+	for name, c := range map[string]struct {
+		args []string
+		want string
+	}{
+		"a file and a note":          {[]string{"approve", id, "design-gate", "--decisions", good, "--note", "x"}, "not both"},
+		"a file and a reason":        {[]string{"reject", id, "design-gate", "--decisions", good, "--reason", "x"}, "not both"},
+		"a reason in an approval":    {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "r.json", `{"reason": "x", "decisions": [{"id": "a", "text": "b"}]}`)}, "reason belongs to a rejection"},
+		"a rejection with no reason": {[]string{"reject", id, "design-gate", "--decisions", good}, "a rejection needs a reason"},
+		"a symbolic link":            {[]string{"approve", id, "design-gate", "--decisions", link}, "symbolic link"},
+		"a folder":                   {[]string{"approve", id, "design-gate", "--decisions", t.TempDir()}, "not a regular file"},
+		"a file over 64 KiB":         {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "big.json", `{"decisions": [{"id": "a", "text": "`+strings.Repeat("x", 70<<10)+`"}]}`)}, "64 KiB"},
+		"not the contract":           {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "bad.json", `{"decisions": [{"id": "a", "text": "b", "why": "c"}]}`)}, "ygg.decisions/v1"},
+		"an id used twice":           {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "twice.json", `{"decisions": [{"id": "a", "text": "b"}, {"id": "a", "text": "c"}]}`)}, "used twice"},
+		"a file that says nothing":   {[]string{"approve", id, "design-gate", "--decisions", writeFile(t, "empty.json", `{}`)}, "holds no decision"},
+		"no such file":               {[]string{"approve", id, "design-gate", "--decisions", filepath.Join(t.TempDir(), "none.json")}, "none.json"},
+	} {
+		code, _, errOut := ygg(t, append(c.args, "--project", dir)...)
+		if code != ExitRefused || !strings.Contains(errOut, c.want) {
+			t.Errorf("%s: exit %d, %q; want %d and a refusal that says %q", name, code, errOut, ExitRefused, c.want)
+		}
+	}
+	if s, _ := os.ReadFile(filepath.Join(runDir, "run.json")); string(s) != string(state) {
+		t.Error("a refused decision changed run.json")
+	}
+	if l, _ := os.ReadFile(filepath.Join(runDir, "ledger.jsonl")); string(l) != string(ledgerBefore) {
+		t.Error("a refused decision changed the ledger")
+	}
+
+	code, out, errOut := ygg(t, "approve", id, "design-gate", "--decisions", good, "--project", dir)
+	if code != ExitStopped || !strings.Contains(out, "stopped at approval point spec-gate") {
+		t.Fatalf("approve --decisions: exit %d:\n%s%s", code, out, errOut)
+	}
+	want := []run.GateDecisions{{Gate: "design-gate", Decisions: schema.Decisions{Decisions: []schema.Decision{
+		{ID: "password-reset", Text: "The reset link goes by email.\nNever by SMS."}, {ID: "storage-cap", Text: "Each family has 10 GB."}}}}}
+	if got := gateDecisions(t, runDir); !reflect.DeepEqual(got, want) {
+		t.Errorf("run.json keeps %+v; want %+v", got, want)
+	}
+	l, _ := os.ReadFile(filepath.Join(runDir, "ledger.jsonl"))
+	if !strings.Contains(string(l), `"event":"gate_approved","ygg.gate.name":"design-gate","ygg.note":"{\"decisions\":[{\"id\":\"password-reset\",\"text\":\"The reset link goes by email.\\nNever by SMS.\"}`) {
+		t.Errorf("the gate_approved event does not carry the decisions:\n%s", l)
+	}
+
+	// A rejection's file holds its reason, which goes back to the node; its decisions are the gate's.
+	reject := writeFile(t, "reject.json", `{"reason": "Name the users.", "decisions": [{"id": "two-users", "text": "The owner and a guest."}]}`)
+	if code, out, errOut := ygg(t, "reject", id, "spec-gate", "--decisions", reject, "--project", dir); code != ExitStopped {
+		t.Fatalf("reject --decisions: exit %d:\n%s%s", code, out, errOut)
+	}
+	if got := gateDecisions(t, runDir); len(got) != 2 || got[1].Gate != "spec-gate" || got[1].Decisions.Decisions[0].ID != "two-users" {
+		t.Errorf("run.json keeps %+v; want the spec gate's decision after the design gate's", got)
+	}
+}
+
+func TestANoteIsOneDecision(t *testing.T) {
+	dir, id, runDir := stoppedToy(t)
+	for _, note := range []string{"a\nb", "a\tb", "a\u2028b"} {
+		if code, _, errOut := ygg(t, "approve", id, "design-gate", "--note", note, "--project", dir); code != ExitRefused || !strings.Contains(errOut, "one line") {
+			t.Errorf("--note %q: exit %d, %q; want a refusal: a note is one line, and a decisions file holds more", note, code, errOut)
+		}
+	}
+	if code, out, errOut := ygg(t, "approve", id, "design-gate", "--note", "Use the warm palette.", "--project", dir); code != ExitStopped {
+		t.Fatalf("approve --note: exit %d:\n%s%s", code, out, errOut)
+	}
+	want := []run.GateDecisions{{Gate: "design-gate", Decisions: schema.Decisions{Decisions: []schema.Decision{{ID: "note-design-gate", Text: "Use the warm palette."}}}}}
+	if got := gateDecisions(t, runDir); !reflect.DeepEqual(got, want) {
+		t.Errorf("run.json keeps %+v; want the note as one decision with the id note-design-gate", got)
+	}
+	// --reason is a file with only the reason.
+	if code, out, errOut := ygg(t, "reject", id, "spec-gate", "--reason", "Name the users.", "--project", dir); code != ExitStopped {
+		t.Fatalf("reject --reason: exit %d:\n%s%s", code, out, errOut)
+	}
+	l, _ := os.ReadFile(filepath.Join(runDir, "ledger.jsonl"))
+	if !strings.Contains(string(l), `"event":"gate_rejected","ygg.gate.name":"spec-gate","ygg.note":"{\"reason\":\"Name the users.\"}"`) {
+		t.Errorf("the gate_rejected event does not carry the reason as a decisions file:\n%s", l)
+	}
+	if got := gateDecisions(t, runDir); !reflect.DeepEqual(got, want) {
+		t.Errorf("run.json keeps %+v after a rejection with only a reason; want the design gate's note alone", got)
 	}
 }

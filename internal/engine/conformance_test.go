@@ -11,7 +11,7 @@ import (
 
 // The spec stage of the web realm (spec §4.2): the spec is written in a scratch workspace, a second
 // scratch agent checks it against the design, and the spec gate reads its verdict.
-const conformanceNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.spec/v1 }\n" +
+const conformanceNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [decisions, rejection, refusal], output: ygg.spec/v1 }\n" +
 	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [rejection], output: ygg.conformance/v1 }\n" +
 	"  - { id: spec-gate, kind: gate, gate: spec, reruns: spec, deviation_from: conformance }\n" +
 	"  - { id: spec-docs, kind: publish, from: spec, to: docs }\n"
@@ -81,7 +81,7 @@ func TestADeviationStopsTheSpecGateInEveryModeWithTheAmendment(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(r.Project, publishedSpec)); err == nil {
 			t.Errorf("%s: the spec was published before it was approved", mode)
 		}
-		if err := Approve(bg, r, "spec-gate", "offline mode is in"); err != nil {
+		if err := Approve(bg, r, "spec-gate", Note("spec-gate", "offline mode is in")); err != nil {
 			t.Fatal(err)
 		}
 		if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
@@ -96,7 +96,7 @@ func TestARejectedSpecRunsTheConformanceReviewAgain(t *testing.T) {
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusStopped {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if err := Reject(bg, r, "spec-gate", "drop offline mode from the spec"); err != nil {
+	if err := Reject(bg, r, "spec-gate", Reason("drop offline mode from the spec")); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Advance(bg, r)

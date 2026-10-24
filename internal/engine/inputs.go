@@ -46,7 +46,7 @@ func inputBody(r *run.Run, n schema.Node, who, name string, extra map[string]str
 		// The brief is an instruction: it passes as it is, but for a code fence it leaves open, which is closed.
 		return withNewline(mdsafe.CloseFences(r.Setup.BriefText)), nil
 	case schema.SourceDecisions:
-		return renderDecisions(decisionsOf(s))
+		return decisionsBody(r)
 	case schema.SourceTask:
 		block := taskInput(r, n)
 		if block == "" {
@@ -54,7 +54,11 @@ func inputBody(r *run.Run, n schema.Node, who, name string, extra map[string]str
 		}
 		return block, nil
 	case schema.SourceRejection:
-		return reasonBody("A person sent the last attempt back at an approval point, and this is why:", s.Reasons[n.ID]), nil
+		// Odin wrote the rejection safe already (rejectionText): the person's fields, or its own words.
+		if strings.TrimSpace(s.Reasons[n.ID]) == "" {
+			return none, nil
+		}
+		return "A person sent the last attempt back at an approval point, and this is why:\n\n" + withNewline(s.Reasons[n.ID]), nil
 	case schema.SourceRefusal:
 		return reasonBody("A later step of the factory refused the last attempt's work. Fix what it says; do not say it is fixed: the step looks again after your work and decides.", s.Refusals[n.ID]), nil
 	case schema.SourceDate:
@@ -279,29 +283,6 @@ func withNewline(s string) string {
 		return s
 	}
 	return s + "\n"
-}
-
-// decisionsOf is what the run holds of the operator's gate decisions, as a ygg.decisions/v1 document: each note an
-// approval gave, in the order they were given, with its gate as its id.
-func decisionsOf(s *run.State) schema.Decisions {
-	var d schema.Decisions
-	for _, x := range s.Decisions {
-		d.Decisions = append(d.Decisions, schema.Decision{ID: x.Gate, Text: x.Note})
-	}
-	return d
-}
-
-// renderDecisions is the section of the decisions input: None. before any approval gave a note.
-func renderDecisions(d schema.Decisions) (string, error) {
-	if len(d.Decisions) == 0 && len(d.Answers) == 0 {
-		return none, nil
-	}
-	body, err := renderContract(schema.ContractDecisions, d)
-	if err != nil {
-		return "", err
-	}
-	return "Decisions the product owner gave at the approval points of this run. They hold for this product: where one " +
-		"differs from an earlier document, the decision wins, and the difference is written down as the product owner's decision.\n\n" + body, nil
 }
 
 // implementerFindings is the open_findings section of an implementer: the findings open against the work, the

@@ -90,7 +90,7 @@ func TestAMoveThatChangesAContractAnExtractedEdgeReachesStopsAtTheGate(t *testin
 		if text := ledgerText(t, r); !strings.Contains(text, `"ygg.pointer.evidence":"extracted","ygg.verdict":"fail"`) {
 			t.Errorf("%s: the ledger doesn't record the failed check", mode)
 		}
-		if err := Approve(bg, r, "contract-gate", "the contract change is in the spec"); err != nil {
+		if err := Approve(bg, r, "contract-gate", Note("contract-gate", "the contract change is in the spec")); err != nil {
 			t.Fatal(err)
 		}
 		if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
@@ -196,7 +196,7 @@ func TestThePointerDoesNotMoveToACommitTheGateDidNotJudge(t *testing.T) {
 	if _, err := l.Git(bg, "checkout", "-q", "--detach", later); err != nil {
 		t.Fatal(err)
 	}
-	if err := Approve(bg, r, "contract-gate", "the contract change is in the spec"); err != nil {
+	if err := Approve(bg, r, "contract-gate", Note("contract-gate", "the contract change is in the spec")); err != nil {
 		t.Fatal(err)
 	}
 	out, _ := Advance(bg, r)

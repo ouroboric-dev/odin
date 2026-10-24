@@ -145,7 +145,7 @@ func TestThePlanIsTheOutputOdinKept(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.Dir, "outputs", "plan.json"), []byte(changed), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Approve(context.Background(), r, "plan-gate", ""); err != nil {
+	if err := Approve(context.Background(), r, "plan-gate", Note("plan-gate", "")); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Advance(context.Background(), r)
@@ -204,7 +204,7 @@ func TestARejectionGivesARefusalItsReturnsAgain(t *testing.T) {
 	if err != nil || out.Status != run.StatusStopped || out.Gate != "plan-gate" || r.State.Returns["ready"] != 1 {
 		t.Fatalf("Advance() = %+v, %v (returns %v)", out, err, r.State.Returns)
 	}
-	if err := Reject(context.Background(), r, "plan-gate", "the plan is thin"); err != nil {
+	if err := Reject(context.Background(), r, "plan-gate", Reason("the plan is thin")); err != nil {
 		t.Fatal(err)
 	}
 	if r.State.Returns["ready"] != 0 {

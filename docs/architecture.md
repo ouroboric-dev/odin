@@ -53,16 +53,17 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   writes (`title`, `status: draft`, `date`, `related`, which links the views of the outputs the node read), each
   value a quoted scalar. A blocked output is not published: the publish stops the run at
   `external-input` for a person, before any scan, with the node and its reason in the gate file, and approving runs the
-  source again with the person's note as its `rejection` (with no note, that a person read the reason and sent it
-  back; ruling R43). When the secret scan finds something, nothing is published
+  source again with what the person gave as its `rejection` (with nothing given, that a person read the reason and
+  sent it back; ruling R43). When the secret scan finds something, nothing is published
   and the run stops at the hard approval point; approving runs the source node again with the findings (the rule
-  and the place, never the text) as its `rejection`, and its new output is kept, published and scanned again. A
+  and the place, never the text), and then what the person gave, as its `rejection`, and its new output is kept,
+  published and scanned again. A
   publish node whose source declares no output, has no view, or takes no `rejection` is refused when the run
   starts. `tasks` reads the plan node's kept output (`ygg.plan/v1`, as Odin validated it; nothing reads a `tasks.md`),
   applies the Definition of Ready and writes `features.json` with every field of each task. A task that is not ready,
   such as one whose text or contract is over its bound or whose contract is not OpenAPI, goes back to the planner as
-  its `refusal`; a blocked plan stops the run at `external-input` for a person, as at a publish, whose note at
-  approval goes to the planner as its `rejection` (a second line, for a graph that reads the plan before publishing
+  its `refusal`; a blocked plan stops the run at `external-input` for a person, as at a publish, and what they give
+  at approval goes to the planner as its `rejection` (a second line, for a graph that reads the plan before publishing
   it; R44). The `task` input of every session of a task holds its title, layer, criteria, named
   test and dependencies, then its text under "What the plan says" and its contract under "The contract", in a
   `yaml` fence, whole: Odin never cuts a task's words (B-176). `init` creates the leaves the spec stage named from
@@ -93,15 +94,33 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   that does not fit is left out whole and named, and later files that fit are shown. A binary file (a NUL byte) is
   named, not shown. A diff that cannot be computed gives one line and a `loop_attempt` line `change not computed:`;
   the review goes on. Scratch reviewers outside the loop do not get it.
-- Gives the note of a gate approval to every later session (spec §7.2, finding F1). `Approve` refuses a note
-  with a control character (the rule of `ygg-proof-run.sh`) or a line or paragraph separator (U+2028, U+2029),
-  and keeps a note that is not blank in `State.Decisions`, as `{gate, note}` in the order given, only when the
-  stopped node is a gate: a note at an escalation, `policy-violation` or `shrink-guard` stays on the
-  `gate_approved` event. A second approval of the same gate, after a `back_to` return past it, replaces the
-  gate's note; a blank one keeps it, since the earlier decision still holds. A session that declares
-  `decisions` gets them as a `ygg.decisions/v1` list, each note with its gate as its id (`decisionsOf`,
-  `internal/engine/inputs.go`; typed-T19 gives a gate a decisions file). A rejection that goes back past gates drops their
-  notes; a resume keeps them from `run.json`.
+- Takes a person's gate decisions as data (spec §7.2, change typed-boundaries, `internal/engine/decisions.go`).
+  `ygg approve RUN GATE --decisions FILE` and `ygg reject RUN GATE --decisions FILE` read a `ygg.decisions/v1` file
+  (a regular file, never a symbolic link, at most 64 KiB): decisions under ids the operator chooses and keeps across
+  runs, answers to this run's design's open questions by their ids, and for a rejection the reason, which it needs
+  and an approval may not hold. `--note TEXT` is shorthand for a file with one decision, `note-<gate>`, and
+  `--reason TEXT` for a file with only the reason; each is one line (the rule of `ygg-proof-run.sh`), and a file
+  with a shorthand is refused. `Approve` and `Reject` check what is given before anything is recorded: the contract
+  (unique decision ids, a note of at most 4 KiB), and each answer names an open question of a design the run kept,
+  once (ruling R45). The `gate_approved` or `gate_rejected` event carries the file as one line of JSON in its note.
+  At a gate node the decisions and answers are the product owner's, kept in `State.Decisions` as
+  `{gate, decisions}` in the order given; a gate met again (a `back_to` return past it, a rejection there and then an
+  approval) adds to what it was given, an id given again replacing the earlier one, and nothing given keeps it. At
+  any other stop they stay on the event. A session that declares `decisions` gets every gate's decisions and then
+  their answers as the lists of `ygg.decisions/v1`, each with its id and its gate, an answer with its question.
+  Every stage that runs again after a person decided (a gate's or a loop's rejection, the secret-scan stop, a
+  blocked output) gets as its `rejection` what they gave, rendered by one function (`rejectionText`): the reason,
+  each decision with its id, each answer with its question, every field made safe. A rejection that goes back past
+  gates drops their decisions; a resume keeps them from `run.json`.
+- Checks that the spec cites every owner decision (design §4, `internal/engine/ownercheck.go`). Right after an
+  agent node keeps a `ygg.spec/v1` output, before the conformance review, the ids of every decision in
+  `State.Decisions` must each be cited by one of the spec's decisions or deviations. A spec that misses some goes
+  back to its own node once, with "the spec does not cite the product owner's decisions IDS: cite each in a decision
+  or a deviation" as its `refusal` and a `node_returned` event (`State.Returns` counts it; a rejection that runs the
+  spec again starts it over). A second miss stops the next gate in every mode, whose file lists the ids under "Owner
+  decisions the spec does not cite"; with no gate after the spec, the node fails. A blocked spec is left to its
+  publish, and an open question with no answer stays allowed. A spec node that does not declare `decisions` and
+  `refusal` is refused when the run starts.
 - Starts each leaf's sandbox on its realm's stack, with the services `services.For` gives the leaf (spec
   §6.1, §9.2, §9.4): for its realm and the realm of each leaf it consumes, the runtime realm's provider of
   each need, under the name it has in the runtime realm's pack, and the services an older pack names itself.

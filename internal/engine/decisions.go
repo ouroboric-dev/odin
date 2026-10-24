@@ -1,41 +1,194 @@
 package engine
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"slices"
 	"strings"
-	"unicode"
+	"syscall"
 
+	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-// The operator's gate decisions reach a session as its decisions input, a ygg.decisions/v1 document (decisionsOf,
-// in inputs.go). Until a gate takes a decisions file (typed-T19), the run holds each approval's note, kept here.
+// What a person gives at a stop is data too (change typed-boundaries, design §4): a ygg.decisions/v1 file of owner
+// decisions under ids the operator chooses and keeps across runs, answers to the design's open questions, and for a
+// rejection its reason. At a gate node the decisions and answers are the product owner's, kept in State.Decisions:
+// every later session reads them (the decisions input) and the spec must cite each decision (ownercheck.go). At a
+// stop that runs a stage again, what the person gave is that stage's rejection (rejectionText).
 
-// checkNote refuses a note that is not one line: a note with a newline, a carriage return, a tab or any
-// other control character, or a line or paragraph separator (U+2028, U+2029), could start a heading of
-// its own in a prompt. It is the rule that
-// ygg-proof-run.sh applies to --note and --reason.
-func checkNote(note string) error {
-	breaks := func(r rune) bool { return unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp) }
-	if strings.IndexFunc(note, breaks) >= 0 {
-		return fmt.Errorf("the note has a control character or a line or paragraph separator; a note is one line of text")
+// maxDecisionsFile bounds a decisions file: far more than a person writes at a gate.
+const maxDecisionsFile = 64 << 10
+
+// ReadDecisions reads the decisions file at path: a regular file, never a symbolic link, of at most 64 KiB, that holds
+// one ygg.decisions/v1 document. Whether it may hold a reason depends on the decision, which Approve and Reject check.
+func ReadDecisions(path string) (schema.Decisions, error) {
+	var d schema.Decisions
+	fi, err := os.Lstat(path)
+	switch {
+	case err != nil:
+		return d, err
+	case fi.Mode()&os.ModeSymlink != 0:
+		return d, fmt.Errorf("%s is a symbolic link; give the decisions file itself", path)
+	case !fi.Mode().IsRegular():
+		return d, fmt.Errorf("%s is not a regular file; a decisions file is one", path)
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return d, fmt.Errorf("%s is a symbolic link; give the decisions file itself", path)
+	}
+	if err != nil {
+		return d, err
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return d, fmt.Errorf("%s is not a regular file; a decisions file is one", path)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxDecisionsFile+1))
+	if err != nil {
+		return d, err
+	}
+	if len(data) > maxDecisionsFile {
+		return d, fmt.Errorf("%s is over 64 KiB; a decisions file is smaller", path)
+	}
+	if d, err = schema.Decode[schema.Decisions](schema.ContractDecisions, data); err != nil {
+		return d, fmt.Errorf("%s: %w", path, err)
+	}
+	return d, nil
+}
+
+// Note is the shorthand --note TEXT at the stop gate: a decisions file with one decision, note-<gate>. A blank note
+// gives nothing.
+func Note(gate, text string) schema.Decisions {
+	if strings.TrimSpace(text) == "" {
+		return schema.Decisions{}
+	}
+	return schema.Decisions{Decisions: []schema.Decision{{ID: "note-" + gate, Text: text}}}
+}
+
+// Reason is the shorthand --reason TEXT: a decisions file with only the reason.
+func Reason(text string) schema.Decisions { return schema.Decisions{Reason: text} }
+
+// given reports whether a person gave anything.
+func given(d schema.Decisions) bool {
+	return len(d.Decisions) > 0 || len(d.Answers) > 0 || d.Reason != ""
+}
+
+// checkGiven refuses what a person gave at a stop of r before anything is recorded: a rejection needs a reason and an
+// approval holds none; what is given must be a ygg.decisions/v1 document (so a shorthand is held to the file's rules,
+// such as a note of at most 4 KiB); and each answer names an open question of this run's design, once (ruling R45:
+// two answers to one question would leave the stage to choose).
+func checkGiven(r *run.Run, d schema.Decisions, rejection bool) error {
+	switch {
+	case rejection && strings.TrimSpace(d.Reason) == "":
+		return errors.New("a rejection needs a reason, in the file or as --reason; it goes back to the node as input")
+	case !rejection && d.Reason != "":
+		return errors.New("reason belongs to a rejection; an approval's file holds decisions and answers")
+	case !given(d):
+		return nil
+	}
+	data, err := json.Marshal(d)
+	if err != nil {
+		return err
+	}
+	if _, err := schema.Decode[schema.Decisions](schema.ContractDecisions, data); err != nil {
+		return err
+	}
+	if len(d.Answers) == 0 {
+		return nil
+	}
+	questions, order, designs, err := designQuestions(r)
+	if err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, a := range d.Answers {
+		_, ok := questions[a.Question]
+		switch {
+		case seen[a.Question]:
+			return fmt.Errorf("%s is answered twice; give one answer to each question", a.Question)
+		case designs == 0:
+			return fmt.Errorf("the answer to %s names no open question: this run has no design whose open questions it could answer", a.Question)
+		case len(order) == 0:
+			return fmt.Errorf("the answer to %s names no open question: this run's design has none", a.Question)
+		case !ok:
+			return fmt.Errorf("the answer to %s names no open question of this run's design, whose open questions are %s", a.Question, strings.Join(order, ", "))
+		}
+		seen[a.Question] = true
 	}
 	return nil
 }
 
-// keepDecision keeps note as the product owner's decision at gate, when it is not blank. It replaces the
-// note an earlier approval of the same gate gave: a back_to return past the gate (land or move back to
-// implement) meets it again, and its latest note holds. A blank note restates nothing, so the earlier
-// decision still holds.
-func keepDecision(s *run.State, gate, note string) {
-	if note = strings.TrimSpace(note); note != "" {
-		s.Decisions = slices.DeleteFunc(s.Decisions, func(d run.Decision) bool { return d.Gate == gate })
-		s.Decisions = append(s.Decisions, run.Decision{Gate: gate, Note: note})
+// designQuestions are the open questions of the designs this run kept: the question of each id, the ids in order,
+// and how many designs there are.
+func designQuestions(r *run.Run) (map[string]string, []string, int, error) {
+	var keys []string
+	for key, ref := range r.State.Outputs {
+		if schema.Contract(ref.Contract) == schema.ContractDesign {
+			keys = append(keys, key)
+		}
 	}
+	slices.Sort(keys)
+	questions := map[string]string{}
+	var order []string
+	for _, key := range keys {
+		d, err := loadOutput[schema.Design](r, key)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		for _, q := range d.OpenQuestions {
+			if _, ok := questions[q.ID]; !ok {
+				order = append(order, q.ID)
+			}
+			questions[q.ID] = q.Question
+		}
+	}
+	return questions, order, len(keys), nil
 }
 
-// dropDecisions drops the notes of the gates with these ids: the run meets them again.
+// noteOf is what a stop's ledger event carries of what a person gave: the decisions file as one line of JSON, or ""
+// for nothing.
+func noteOf(d schema.Decisions) string {
+	if !given(d) {
+		return ""
+	}
+	b, err := json.Marshal(d)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// keepDecisions keeps the decisions and answers a person gave at gate, the product owner's word, in State.Decisions.
+// A gate met again (a back_to return past it, or a rejection there and then an approval) adds them to what it was
+// given before: a decision or an answer with the id of an earlier one replaces it, and the gate moves to the end, the
+// order in which they were given. Nothing given restates nothing, and the earlier decisions hold. A rejection's
+// reason is not kept: it goes to the node the gate runs again.
+func keepDecisions(s *run.State, gate string, d schema.Decisions) {
+	if len(d.Decisions) == 0 && len(d.Answers) == 0 {
+		return
+	}
+	var kept schema.Decisions
+	if i := slices.IndexFunc(s.Decisions, func(g run.GateDecisions) bool { return g.Gate == gate }); i >= 0 {
+		kept = s.Decisions[i].Decisions
+		s.Decisions = slices.Delete(s.Decisions, i, i+1)
+	}
+	for _, x := range d.Decisions {
+		kept.Decisions = slices.DeleteFunc(kept.Decisions, func(k schema.Decision) bool { return k.ID == x.ID })
+		kept.Decisions = append(kept.Decisions, x)
+	}
+	for _, x := range d.Answers {
+		kept.Answers = slices.DeleteFunc(kept.Answers, func(k schema.Answer) bool { return k.Question == x.Question })
+		kept.Answers = append(kept.Answers, x)
+	}
+	s.Decisions = append(s.Decisions, run.GateDecisions{Gate: gate, Decisions: kept})
+}
+
+// dropDecisions drops what the gates with these ids were given: the run meets them again.
 func dropDecisions(s *run.State, gates map[string]bool) {
 	kept := s.Decisions[:0]
 	for _, d := range s.Decisions {
@@ -44,4 +197,93 @@ func dropDecisions(s *run.State, gates map[string]bool) {
 		}
 	}
 	s.Decisions = kept
+}
+
+// rejectionText is the rejection of a stage that runs again after a person decided at a stop: a gate's or a loop's
+// rejection, or an approval at the secret-scan stop or at a blocked output's (rulings R43, R44, R45). It is the
+// reason, then each decision with its id, then each answer with its question, every field made safe (mdsafe), so the
+// text goes into a prompt as it is; with nothing given it is otherwise.
+func rejectionText(r *run.Run, d schema.Decisions, otherwise string) (string, error) {
+	if !given(d) {
+		return otherwise, nil
+	}
+	var parts []string
+	if strings.TrimSpace(d.Reason) != "" {
+		parts = append(parts, mdsafe.Text(d.Reason))
+	}
+	if len(d.Decisions) > 0 {
+		parts = append(parts, "The product owner's decisions:\n\n"+strings.TrimSuffix(decisionItems(d.Decisions, ""), "\n"))
+	}
+	if len(d.Answers) > 0 {
+		questions, _, _, err := designQuestions(r)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, "Answers to the design's open questions:\n\n"+strings.TrimSuffix(answerItems(d.Answers, "", questions), "\n"))
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// decisionsBody is the section of the decisions input: every gate's decisions and then their answers, in the order
+// given, each with its id and the gate it was given at, as the lists of ygg.decisions/v1; None. before any.
+func decisionsBody(r *run.Run) (string, error) {
+	var decisions, answers strings.Builder
+	var questions map[string]string
+	for _, g := range r.State.Decisions {
+		decisions.WriteString(decisionItems(g.Decisions.Decisions, g.Gate))
+		if len(g.Decisions.Answers) == 0 {
+			continue
+		}
+		if questions == nil {
+			var err error
+			if questions, _, _, err = designQuestions(r); err != nil {
+				return "", err
+			}
+		}
+		answers.WriteString(answerItems(g.Decisions.Answers, g.Gate, questions))
+	}
+	if decisions.Len() == 0 && answers.Len() == 0 {
+		return none, nil
+	}
+	b := "Decisions the product owner gave at the approval points of this run. They hold for this product: where one " +
+		"differs from an earlier document, the decision wins, and the difference is written down as the product owner's decision, " +
+		"citing its id.\n"
+	if decisions.Len() > 0 {
+		b += "\n### decisions\n\n" + decisions.String()
+	}
+	if answers.Len() > 0 {
+		b += "\n### answers\n\n" + answers.String()
+	}
+	return b, nil
+}
+
+// decisionItems is a list item for each decision: its id, the gate it was given at (unless gate is ""), and its text.
+func decisionItems(ds []schema.Decision, gate string) string {
+	var b strings.Builder
+	for _, d := range ds {
+		b.WriteString("- " + mdsafe.Item(mdsafe.After(mdsafe.Line(d.ID)+givenAt(gate)+": ", d.Text), 2) + "\n")
+	}
+	return b.String()
+}
+
+// answerItems is a list item for each answer: its question's id, the gate it was given at (unless gate is ""), the
+// answer, and the question as the design asks it.
+func answerItems(as []schema.Answer, gate string, questions map[string]string) string {
+	var b strings.Builder
+	for _, a := range as {
+		q, ok := questions[a.Question]
+		if !ok {
+			q = "(no longer an open question of this run's design)"
+		}
+		b.WriteString("- " + mdsafe.Item(mdsafe.After(mdsafe.Line(a.Question)+givenAt(gate)+": ", a.Text)+"\nThe question: "+mdsafe.Line(q), 2) + "\n")
+	}
+	return b.String()
+}
+
+// givenAt names the gate a decision was given at, or nothing for "".
+func givenAt(gate string) string {
+	if gate == "" {
+		return ""
+	}
+	return " (at " + mdsafe.Line(gate) + ")"
 }

@@ -314,8 +314,9 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 // output, or one with no view (Odin publishes an output's JSON and the view it renders from it, change
 // typed-boundaries); and one whose source takes no rejection, which it is given when a person approves its run again
 // after the secret scan stops the publish, or after the source's output is blocked (ruling R43). It refuses a tasks
-// node whose plan node takes no rejection too: a blocked plan is sent back to it with a person's note (R44). before
-// holds the nodes before nodes, by id.
+// node whose plan node takes no rejection too: a blocked plan is sent back to it with a person's note (R44); and an
+// agent whose output is a spec that does not take the decisions and a refusal: Odin checks that the spec cites every
+// owner decision, and sends it back with the ids it misses (typed-T19). before holds the nodes before nodes, by id.
 func checkPublish(graphPath string, nodes []schema.Node, before map[string]schema.Node) error {
 	for _, n := range nodes {
 		if n.Kind == schema.KindPublish {
@@ -336,6 +337,11 @@ func checkPublish(graphPath string, nodes []schema.Node, before map[string]schem
 				return fmt.Errorf("%s: node %s: tasks reads %s, which must declare rejection: a blocked plan is sent back to it with a person's note",
 					graphPath, n.ID, n.From)
 			}
+		}
+		if n.Kind == schema.KindAgent && schema.Contract(n.Output) == schema.ContractSpec &&
+			(!slices.Contains(n.Input, schema.SourceDecisions) || !slices.Contains(n.Input, schema.SourceRefusal)) {
+			return fmt.Errorf("%s: node %s: Odin checks that the spec cites every owner decision, and sends it back with the ids it misses, "+
+				"so %s must declare the inputs decisions and refusal", graphPath, n.ID, n.ID)
 		}
 		if err := checkPublish(graphPath, n.Body, maps.Clone(before)); err != nil {
 			return err

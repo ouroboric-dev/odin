@@ -8,7 +8,7 @@ nodes:
   - { id: design, kind: agent, role: planner, prompt: prompts/design.md, scratch: true, input: [rejection], output: ygg.design/v1 }
   - { id: design-gate, kind: gate, gate: design }
   - { id: design-docs, kind: publish, from: design, to: docs }
-  - { id: spec, kind: agent, role: planner, prompt: prompts/spec.md, scratch: true, input: [design, rejection], output: ygg.spec/v1 }
+  - { id: spec, kind: agent, role: planner, prompt: prompts/spec.md, scratch: true, input: [design, decisions, rejection, refusal], output: ygg.spec/v1 }
   - { id: spec-gate, kind: gate, gate: spec }
   - { id: spec-docs, kind: publish, from: spec, to: docs }
   - { id: plan, kind: agent, role: planner, prompt: prompts/plan.md, scratch: true, input: [rejection, refusal], output: ygg.plan/v1 }

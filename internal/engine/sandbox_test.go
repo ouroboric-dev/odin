@@ -258,7 +258,7 @@ func TestASecretInAnAgentsWorkStopsTheRunBeforeAnythingIsCommitted(t *testing.T)
 	r = again
 	// Approving puts the leaf back, without saving the secret anywhere, and runs the node again.
 	fake.Scan.Exit, fake.Scan.Report = 0, ""
-	if err := Approve(context.Background(), r, "a", "false positive: a test key"); err != nil {
+	if err := Approve(context.Background(), r, "a", Note("a", "false positive: a test key")); err != nil {
 		t.Fatal(err)
 	}
 	if refs, _ := git.Run(context.Background(), r.RepoDir("repos/app"), "-c", "safe.directory=*", "--git-dir="+r.Setup.Repos["repos/app"].GitDir, "for-each-ref", "refs/ygg/"); refs != "" {

@@ -17,6 +17,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/git"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/views"
 	"go.yaml.in/yaml/v3"
@@ -266,11 +267,12 @@ func scanDocuments(ctx context.Context, r *run.Run, n schema.Node, docs []docume
 }
 
 // secretRejection is what the node whose output the scan stopped is told when it runs again: each finding's rule
-// and place, in the documents Odin rendered from its output. A finding never holds the secret's text.
+// and place, in the documents Odin rendered from its output, safe for a prompt as it is (the rejection input). A
+// finding never holds the secret's text.
 func secretRejection(found *scan.FoundError) string {
 	places := make([]string, len(found.Findings))
 	for i, f := range found.Findings {
-		places[i] = fmt.Sprintf("- %s at %s:%d", f.Rule, f.File, f.Line)
+		places[i] = fmt.Sprintf("- %s at %s:%d", mdsafe.Line(f.Rule), mdsafe.Line(f.File), f.Line)
 	}
 	return "Odin's secret scan found what looks like a secret in the documents of your last output, so nothing was published:\n\n" +
 		strings.Join(places, "\n") + "\n\nWrite your output again without it. The new output is scanned again before it is published."

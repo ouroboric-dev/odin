@@ -115,13 +115,13 @@ func TestApprovingBudgetCapDoesNotWaiveTheCapButRaisingItDoes(t *testing.T) {
 	if out, _ := Advance(context.Background(), r); out.Status != run.StatusStopped {
 		t.Fatalf("Advance() = %+v", out)
 	}
-	if err := Approve(context.Background(), r, "b", "go on"); err != nil {
+	if err := Approve(context.Background(), r, "b", Note("b", "go on")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateBudgetCap {
 		t.Fatalf("Advance() = %+v, %v; approving does not lift a cap that is still reached", out, err)
 	}
-	if err := Reject(context.Background(), r, "b", "no"); err == nil {
+	if err := Reject(context.Background(), r, "b", Reason("no")); err == nil {
 		t.Error("a hard stop took a rejection")
 	}
 	// The operator raises the cap in factory.yaml; the run is opened again and approved.
@@ -130,7 +130,7 @@ func TestApprovingBudgetCapDoesNotWaiveTheCapButRaisingItDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	r = reopen(t, r)
-	if err := Approve(context.Background(), r, "b", "raised the cap"); err != nil {
+	if err := Approve(context.Background(), r, "b", Note("b", "raised the cap")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -276,7 +276,7 @@ func TestASpendTheJournalCannotTakeStopsAtBudgetCapWithTheWorkSetAside(t *testin
 		t.Fatal(err)
 	}
 	r = reopen(t, r)
-	if err := Approve(context.Background(), r, "a", "the journal is fixed"); err != nil {
+	if err := Approve(context.Background(), r, "a", Note("a", "the journal is fixed")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

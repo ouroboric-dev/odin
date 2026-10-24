@@ -99,9 +99,9 @@ type State struct {
 	PlanSHA256      string                 `json:"plan_sha256,omitempty"`   // that output's SHA-256, as Odin kept it
 	Expanded        map[string]bool        `json:"expanded,omitempty"`      // foreach node ids already expanded into the nodes of each task
 	NewLeaves       map[string]bool        `json:"new_leaves,omitempty"`    // leaf paths this run's init creates: only these get the realm's template
-	Returns         map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
+	Returns         map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node; a spec node: how many times the owner-decision check sent it back
 	Refusals        map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
-	Decisions       []Decision             `json:"decisions,omitempty"`     // the notes of gate approvals, in the order given: every later session reads them
+	Decisions       []GateDecisions        `json:"decisions,omitempty"`     // what people gave at the gates, in the order given: every later session reads it
 	Outputs         map[string]OutputRef   `json:"outputs"`                 // session key: its last typed output, kept in outputs/ (change typed-boundaries)
 	Ledger          ledger.Anchor          `json:"ledger"`
 	Error           string                 `json:"error,omitempty"`
@@ -110,11 +110,12 @@ type State struct {
 	Updated         time.Time              `json:"updated"`
 }
 
-// Decision is the note an operator gave when approving a gate node (spec §7.2): the product owner's
-// decision, which every later session reads.
-type Decision struct {
-	Gate string `json:"gate"`
-	Note string `json:"note"`
+// GateDecisions is what a person gave at a gate node, approving or rejecting it (spec §7.2, change typed-boundaries):
+// the product owner's decisions and answers, which every later session reads and the spec must cite. A rejection's
+// reason is not kept here: it goes to the node the gate runs again.
+type GateDecisions struct {
+	Gate      string           `json:"gate"`
+	Decisions schema.Decisions `json:"decisions"`
 }
 
 // OutputRef is where a session's typed output is kept: the document, as the session handed it back and Odin

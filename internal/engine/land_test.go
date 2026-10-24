@@ -90,10 +90,10 @@ func TestAShrunkGeneratedFileStopsAtTheShrinkGuard(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(r.Dir, "gates", "move-1.md")); err != nil || !strings.Contains(string(b), "keeps 1 of its 10 rows") {
 		t.Errorf("gate file = %q, %v", b, err)
 	}
-	if err := Reject(bg, r, "move", "no"); err == nil {
+	if err := Reject(bg, r, "move", Reason("no")); err == nil {
 		t.Error("Reject() of a hard stop succeeded; a hard stop takes approve, or a new run")
 	}
-	if err := Approve(bg, r, "move", "the index shrank on purpose"); err != nil {
+	if err := Approve(bg, r, "move", Note("move", "the index shrank on purpose")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
@@ -129,7 +129,7 @@ func TestAPlantedRepositoryStopsAtPolicyViolation(t *testing.T) {
 	if _, err := os.Stat(planted); err != nil {
 		t.Error("Open() cleaned the quarantined leaf before anyone decided; the evidence is gone")
 	}
-	if err := Approve(bg, reopened, "a", "investigated"); err != nil {
+	if err := Approve(bg, reopened, "a", Note("a", "investigated")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(planted); err == nil {
