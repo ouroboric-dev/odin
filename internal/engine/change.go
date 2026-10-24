@@ -70,6 +70,14 @@ func reviewChange(ctx context.Context, r *run.Run, n schema.Node, base string, a
 	return fmt.Sprintf("The diff could not be computed (%s); read the change in the leaf.\n", why), nil
 }
 
+// clip is s, trimmed, cut to n runes with an ellipsis when it is longer: the reason in a line of the ledger.
+func clip(s string, n int) string {
+	if r := []rune(strings.TrimSpace(s)); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return strings.TrimSpace(s)
+}
+
 // changeBlock is the change input of a task reviewer's prompt: the diff from the loop's base to the
 // leaf's commit, changed files with their line counts first, then the patch. A read-only reviewer has no shell
 // to run git diff. Host git computes it with nothing of the leaf running. The patch is filled greedily up to

@@ -312,8 +312,10 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 
 // checkPublish refuses a publish node that could only fail, before anything runs: one whose source declares no
 // output, or one with no view (Odin publishes an output's JSON and the view it renders from it, change
-// typed-boundaries); and one whose source takes no rejection, which it is given when the secret scan stops the publish
-// and a person approves its run again. before holds the nodes before nodes, by id.
+// typed-boundaries); and one whose source takes no rejection, which it is given when a person approves its run again
+// after the secret scan stops the publish, or after the source's output is blocked (ruling R43). It refuses a tasks
+// node whose plan node takes no rejection too: a blocked plan is sent back to it with a person's note (R44). before
+// holds the nodes before nodes, by id.
 func checkPublish(graphPath string, nodes []schema.Node, before map[string]schema.Node) error {
 	for _, n := range nodes {
 		if n.Kind == schema.KindPublish {
@@ -326,6 +328,13 @@ func checkPublish(graphPath string, nodes []schema.Node, before map[string]schem
 			case !slices.Contains(from.Input, schema.SourceRejection):
 				return fmt.Errorf("%s: node %s: when the secret scan stops it, publish runs %s again with the finding as its rejection, so %s must declare the input rejection",
 					graphPath, n.ID, n.From, n.From)
+			}
+		}
+		if n.Kind == schema.KindTasks {
+			// An unknown from is the graph check's to refuse (gungnir CheckTypes).
+			if from, ok := before[n.From]; ok && !slices.Contains(from.Input, schema.SourceRejection) {
+				return fmt.Errorf("%s: node %s: tasks reads %s, which must declare rejection: a blocked plan is sent back to it with a person's note",
+					graphPath, n.ID, n.From)
 			}
 		}
 		if err := checkPublish(graphPath, n.Body, maps.Clone(before)); err != nil {

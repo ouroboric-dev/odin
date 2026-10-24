@@ -154,13 +154,6 @@ func writeFeatures(r *run.Run) error {
 	return f.Save(filepath.Join(r.Project, filepath.FromSlash(FeaturesFile)))
 }
 
-func clip(s string, n int) string {
-	if r := []rune(strings.TrimSpace(s)); len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return strings.TrimSpace(s)
-}
-
 // taskInput is the section of the task input: what the session's task is, as the plan states it (spec §4.4: a
 // session reads its task from features.json, and Odin, the only reader of that file, puts the task in the prompt).
 // It is empty for a node that works for no task. In order: the title, the layer, the criteria, the named test and

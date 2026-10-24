@@ -18,3 +18,20 @@ func TestAPublishOfANodeWithNoOutputSaysSo(t *testing.T) {
 		t.Errorf("checkPublish() of an unknown node = %v", err)
 	}
 }
+
+// A tasks node's planner must take a rejection, at the top of a graph and in a foreach body alike.
+func TestATasksNodeWhosePlannerTakesNoRejectionIsRefused(t *testing.T) {
+	plan := schema.Node{ID: "plan", Kind: schema.KindAgent, Input: []string{"refusal"}, Output: string(schema.ContractPlan)}
+	ready := schema.Node{ID: "ready", Kind: schema.KindTasks, From: "plan"}
+	want := "graph.yaml: node ready: tasks reads plan, which must declare rejection: a blocked plan is sent back to it with a person's note"
+	if err := checkPublish("graph.yaml", []schema.Node{plan, ready}, map[string]schema.Node{}); err == nil || err.Error() != want {
+		t.Errorf("checkPublish() = %v; want %q", err, want)
+	}
+	if err := checkPublish("graph.yaml", []schema.Node{plan, {ID: "each", Kind: schema.KindForeach, Body: []schema.Node{ready}}}, map[string]schema.Node{}); err == nil || err.Error() != want {
+		t.Errorf("checkPublish() of a body = %v; want %q", err, want)
+	}
+	plan.Input = []string{"rejection", "refusal"}
+	if err := checkPublish("graph.yaml", []schema.Node{plan, ready}, map[string]schema.Node{}); err != nil {
+		t.Errorf("checkPublish() of a planner that takes a rejection = %v", err)
+	}
+}

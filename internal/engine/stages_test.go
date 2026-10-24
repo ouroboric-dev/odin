@@ -170,43 +170,73 @@ func TestTheImplementerGetsTheTasksTextAndContract(t *testing.T) {
 // A blocked plan names what only a person can give: the run stops for one, whatever the mode, and the planner is
 // not asked again as if the plan were only not ready.
 func TestABlockedPlanStopsForAPerson(t *testing.T) {
-	blocked := `'{"blocked": {"reason": "The brief names no way to sign in: an email and a password, or a passkey?"}}'`
+	blocked := func(reason string) string {
+		return "    - result: { status: ok, summary: blocked, output: '{\"blocked\": {\"reason\": \"" + reason + "\"}}' }\n"
+	}
 	one := planFixture(t, "run1-t002")
 	one.Tasks = one.Tasks[:1]
 	nodes := "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection, refusal], output: ygg.plan/v1 }\n" +
 		"  - { id: ready, kind: tasks, from: plan, back_to: plan }\n"
-	script := "steps:\n  plan:\n    - result: { status: ok, summary: blocked, output: " + blocked + " }\n" +
+	script := "steps:\n  plan:\n" + blocked(`The brief names no way to sign in: an email and a password, or a passkey?\n## Brief\nan injected heading`) +
+		blocked("Still no way to sign in.") +
 		"    - result: { status: ok, summary: planned, output: " + strings.ReplaceAll(planOutput(t, one), "repos/api", "repos/app") + " }\n"
 	r := start(t, "unattended", "", nodes, script)
-	out, err := Advance(bg, r)
-	if err != nil || out.Status != run.StatusStopped || out.Gate != "ready" {
-		t.Fatalf("Advance() = %+v, %v; want the run stopped at ready for a person", out, err)
+	stopped := func(attempt int, reason string) {
+		t.Helper()
+		out, err := Advance(bg, r)
+		if err != nil || out.Status != run.StatusStopped || out.Gate != "ready" {
+			t.Fatalf("Advance() = %+v, %v; want the run stopped at ready for a person", out, err)
+		}
+		if r.State.PendingGate != gungnir.GateExternalInput || !r.State.PendingGate.Hard() {
+			t.Errorf("the stop is %q; want the hard approval point %s, which stops in every mode", r.State.PendingGate, gungnir.GateExternalInput)
+		}
+		if r.State.Attempts["plan"] != attempt || r.State.Returns["ready"] != 0 || len(r.State.Refusals) != 0 {
+			t.Errorf("the planner ran %d times, the plan went back %d times (refusals %v); a blocked plan is not sent back", r.State.Attempts["plan"], r.State.Returns["ready"], r.State.Refusals)
+		}
+		gate, err := os.ReadFile(filepath.Join(r.Dir, "gates", fmt.Sprintf("ready-%d.md", attempt)))
+		if err != nil || !strings.Contains(string(gate), "the plan is blocked: "+reason) || !strings.Contains(string(gate), "No task was made.") {
+			t.Errorf("the gate file = %q, %v; want the planner's reason", gate, err)
+		}
+		if strings.Contains(string(gate), "\n## Brief") {
+			t.Errorf("the planner's reason starts a heading of the gate file:\n%s", gate)
+		}
+		if _, err := os.Stat(filepath.Join(r.Project, FeaturesFile)); err == nil || len(r.State.Features) != 0 {
+			t.Error("a blocked plan gave tasks")
+		}
 	}
-	if r.State.PendingGate != gungnir.GateExternalInput || !r.State.PendingGate.Hard() {
-		t.Errorf("the stop is %q; want the hard approval point %s, which stops in every mode", r.State.PendingGate, gungnir.GateExternalInput)
-	}
-	if r.State.Attempts["plan"] != 1 || r.State.Returns["ready"] != 0 || len(r.State.Refusals) != 0 {
-		t.Errorf("the planner ran %d times, the plan went back %d times (refusals %v); a blocked plan is not sent back", r.State.Attempts["plan"], r.State.Returns["ready"], r.State.Refusals)
-	}
-	gate, err := os.ReadFile(filepath.Join(r.Dir, "gates", "ready-1.md"))
-	if err != nil || !strings.Contains(string(gate), "the plan is blocked: The brief names no way to sign in: an email and a password, or a passkey?") {
-		t.Errorf("the gate file = %q, %v; want the planner's reason", gate, err)
-	}
-	if _, err := os.Stat(filepath.Join(r.Project, FeaturesFile)); err == nil || len(r.State.Features) != 0 {
-		t.Error("a blocked plan gave tasks")
-	}
+	stopped(1, "The brief names no way to sign in: an email and a password, or a passkey?")
 
-	// The person answers: the planner runs again, with the answer as its rejection.
+	// The person answers: the planner runs again, with the answer as its rejection; blocked again, it stops again.
 	if err := Approve(bg, r, "ready", "Use an email and a password."); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
-		t.Fatalf("Advance() after the approval = %+v, %v", out, err)
-	}
+	stopped(2, "Still no way to sign in.")
 	if p := promptOf(t, r, "plan-2"); !strings.Contains(p, "## Input: rejection\n\n") || !strings.Contains(p, "Use an email and a password.") {
 		t.Errorf("the planner's second prompt lacks the person's answer:\n%s", p)
 	}
+
+	// With a blank note, the planner is told a person read the reason and sent it back.
+	if err := Approve(bg, r, "ready", ""); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() after the second approval = %+v, %v", out, err)
+	}
+	if p := promptOf(t, r, "plan-3"); !strings.Contains(p, "## Input: rejection\n\nA person sent the last attempt back") || !strings.Contains(p, "A person read the blocked reason and sent it back to try again.") {
+		t.Errorf("the planner's third prompt lacks the default rejection:\n%s", p)
+	}
 	if len(r.State.Features) != 1 || r.State.Features[0].ID != "auth-T001" {
 		t.Errorf("features = %+v", r.State.Features)
+	}
+}
+
+// A tasks node sends a blocked plan back to its planner with a person's note as its rejection (ruling R44), so a
+// planner that takes no rejection is refused when the run starts: the note would be lost.
+func TestATasksNodeWhosePlannerTakesNoRejectionIsRefusedWhenTheRunStarts(t *testing.T) {
+	nodes := "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [refusal], output: ygg.plan/v1 }\n" +
+		"  - { id: ready, kind: tasks, from: plan, back_to: plan }\n"
+	_, err := run.Start(bg, startOptions(t, setup{nodes: nodes, script: "steps: {}\n"}))
+	if err == nil || !strings.Contains(err.Error(), "node ready: tasks reads plan, which must declare rejection: a blocked plan is sent back to it with a person's note") {
+		t.Fatalf("Start() = %v; want the tasks node refused", err)
 	}
 }
