@@ -98,13 +98,19 @@ var _ jormungandr.Steps = (*loopSteps)(nil)
 // attempt left it: what it wrote is discarded, so the next attempt does not build on half a thought.
 func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.Input) (schema.Implement, error) {
 	r, n := l.r, l.n
-	text, err := promptFor(r, n, nil, map[string]string{
-		schema.SourceOpenFindings: implementerFindings(in),
-		schema.SourceCheckResults: checkResults(l.checks[attempt-1]),
-	})
+	findings, err := implementerFindings(in)
 	if err != nil {
 		return schema.Implement{}, err
 	}
+	checks, err := checkResults(l.checks[attempt-1])
+	if err != nil {
+		return schema.Implement{}, err
+	}
+	text, err := promptFor(r, n, nil, map[string]string{schema.SourceOpenFindings: findings, schema.SourceCheckResults: checks})
+	if err != nil {
+		return schema.Implement{}, err
+	}
+	defer dropInputs(r, n) // on every way out; the session's own path drops them before the checkpoint
 	text = jormungandr.WithDisputeFormat(text, in.Open, n.Checks)
 	started := func() error {
 		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: attempt,
@@ -206,12 +212,19 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 			rv = c
 		}
 	}
-	extra := map[string]string{schema.SourceOpenFindings: reviewerFindings(open)}
+	findings, err := reviewerFindings(open)
+	if err != nil {
+		return schema.Review{}, err
+	}
 	var ran []checkView
 	for _, c := range passed {
 		ran = append(ran, checkView{Check: c, Passed: true})
 	}
-	extra[schema.SourceCheckResults] = checkResults(ran)
+	checks, err := checkResults(ran)
+	if err != nil {
+		return schema.Review{}, err
+	}
+	extra := map[string]string{schema.SourceOpenFindings: findings, schema.SourceCheckResults: checks}
 	if slices.Contains(sessionInputs(n, &rv), schema.SourceChange) {
 		change, err := reviewChange(ctx, r, n, l.base, attempt)
 		if err != nil {
@@ -224,6 +237,7 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if err != nil {
 		return schema.Review{}, err
 	}
+	defer dropInputs(r, n) // on every way out, a snapshot that fails too
 	before, err := snapshot(ctx, r, n.Repo)
 	if err != nil {
 		return schema.Review{}, err

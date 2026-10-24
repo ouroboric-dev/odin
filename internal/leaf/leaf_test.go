@@ -429,7 +429,7 @@ func TestTidyRemovesWhatChecksWroteAndKeepsIgnoredFilesAndEvidence(t *testing.T)
 func TestAnExcludedFolderIsNeverCommitted(t *testing.T) {
 	l := api(t)
 	for range 2 {
-		if err := l.Exclude("/.ygg-inputs/"); err != nil {
+		if err := l.repo.Exclude("/.ygg-inputs/"); err != nil {
 			t.Fatal(err)
 		}
 	}

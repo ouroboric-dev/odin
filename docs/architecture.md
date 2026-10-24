@@ -111,17 +111,19 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   `internal/engine/prompt.go`): the role's prompt file and its skills, as they are; for a scratch node, a note on
   its workspace; one section `## Input: <name>` for each input, in the declared order; then how to hand back the
   answer (`jormungandr.AnswerInstructions`, or a reviewer's `ReviewRequest`), through `submit` when the role's
-  adapter has it. The brief passes as it is. Every other input is rendered from its typed value (`inputs.go`): an
+  adapter has it. The brief passes as it is, but for a code fence it leaves open, which is closed. Every other input is rendered from its typed value (`inputs.go`): an
   earlier node's kept output field by field in its schema's order, under `### <field>`, a list of strings as
   bullets and anything nested as a JSON block; the task with its text and its contract whole, the contract in a
   fence no run of backticks in it can close; the change, the open findings and the check results from the loop;
   the date from Odin's clock (`Setup.Clock`). No line of a field's text can start a heading or front matter: one
-  that starts with `#` or `---`, or that underlines, is indented four spaces, and a fence it leaves open is closed.
+  that starts with `#` or `---`, after any blockquote or list markers, or that underlines, is indented four spaces,
+  and a fence it leaves open (read as CommonMark reads one) is closed.
   A declared input with no value fails the node before any session; `decisions`, `rejection`, `refusal`,
   `open_findings` and `check_results` may be empty, and say "None.". An input over 96 KiB goes to a file the
-  section names: `inputs/<name>.md` in a scratch workspace, and in a repo `.ygg-inputs/<name>.md`, which the leaf's
-  git ignores by a rule in its git dir (`Leaf.Exclude`) and which Odin removes after the session, before the
-  checkpoint (ruling R36). A scratch workspace holds `out/` and those files, and nothing of the project. A loop
+  section names: `inputs/<name>.md` in a scratch workspace, and in a repo `.ygg-inputs/<name>.md`, which the repo's
+  git ignores by a rule in its git dir (`git.Repo.Exclude`) and which Odin removes after the session, before the
+  checkpoint, and on every other way out (ruling R36). A loop with no base commit gives its reviewers a change that
+  says so. A scratch workspace holds `out/` and those files, and nothing of the project. A loop
   outside a foreach body can't declare its own sources, so its sessions get the open findings, the check results
   and, for a reviewer, the change without declaring them. A foreach body's input that names a body node names the
   task's copy of it.

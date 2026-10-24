@@ -53,6 +53,9 @@ func recordBase(ctx context.Context, r *run.Run, n schema.Node, rec *run.LoopRec
 // review: the section says so in one line, the ledger records it, and the reviewer reads the leaf.
 func reviewChange(ctx context.Context, r *run.Run, n schema.Node, base string, attempt int) (string, error) {
 	block, err := changeBlock(ctx, r, n, base)
+	if err == nil && base == "" {
+		err = fmt.Errorf("no base to diff against: the run tracks no leaf at %s, so the loop recorded no commit to start from", n.Repo)
+	}
 	if err == nil {
 		return block, nil
 	}

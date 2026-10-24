@@ -13,6 +13,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
+	"github.com/ouroboric-dev/odin/internal/git"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -35,7 +36,7 @@ const (
 // holds the values only the caller has: the task's change, the open findings and the check results. A declared
 // input with no value is a *nodeFailure, before any session starts. An input over maxInlineInput is written to
 // the session's workspace, and its section names the file.
-func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]string) (string, error) {
+func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]string) (_ string, err error) {
 	who, role, realm, file, skillNames, output := n.ID, n.Role, n.Realm, n.Prompt, n.Skills, n.Output
 	if rv != nil {
 		// A reviewer's prompt comes from the graph pack.
@@ -62,6 +63,11 @@ func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]
 	if err != nil {
 		return "", err
 	}
+	defer func() {
+		if err != nil { // a prompt that could not be built leaves no input file behind
+			err = errors.Join(err, dropInputs(r, n))
+		}
+	}()
 	for _, name := range inputs {
 		body, err := inputBody(r, n, who, name, extra)
 		if err != nil {
@@ -147,15 +153,11 @@ func inputFiles(r *run.Run, n schema.Node) (*inputFolder, error) {
 		f := &inputFolder{base: r.ScratchDir(n.ID), folder: scratchInputs}
 		return f, os.RemoveAll(filepath.Join(f.base, f.folder))
 	}
-	f := &inputFolder{base: r.RepoDir(n.Repo), folder: repoInputs}
-	if _, ok := r.State.Leaves[n.Repo]; ok {
-		f.exclude = func() error {
-			l, err := r.Leaf(n.Repo)
-			if err != nil {
-				return err
-			}
-			return l.Exclude("/" + repoInputs + "/")
-		}
+	repo := r.Setup.Repos[n.Repo]
+	f := &inputFolder{base: repo.Dir, folder: repoInputs}
+	if repo.GitDir != "" {
+		// A leaf's git dir, or an umbrella's: either way Odin's, and outside the working copy.
+		f.exclude = func() error { return git.Repo{GitDir: repo.GitDir, WorkTree: repo.Dir}.Exclude("/" + repoInputs + "/") }
 	}
 	return f, dropInputs(r, n)
 }

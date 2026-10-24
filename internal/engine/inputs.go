@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -42,7 +43,8 @@ func inputBody(r *run.Run, n schema.Node, who, name string, extra map[string]str
 		if strings.TrimSpace(r.Setup.BriefText) == "" {
 			return "", missingInput(who, name)
 		}
-		return withNewline(r.Setup.BriefText), nil // the brief is an instruction: it passes as it is
+		// The brief is an instruction: it passes as it is, but for a code fence it leaves open, which is closed.
+		return withNewline(closeFences(r.Setup.BriefText)), nil
 	case schema.SourceDecisions:
 		return renderDecisions(decisionsOf(s))
 	case schema.SourceTask:
@@ -286,27 +288,36 @@ func bullets(items []string) string {
 }
 
 // safeText is a field's text, written so that no line of it can start a heading or front matter of its own
-// (review focus 4): a line that starts, after any spaces, with # or ---, or that is all = or all -, which would
-// underline the line before it as a heading, is indented by four spaces, which makes it text of the block it is
-// in. A code fence the text opens and does not close is closed at its end, so the sections after it are not
-// read as code. Line breaks are \n.
+// (review focus 4): a line that starts, after any spaces and any blockquote or list markers, with # or ---, or
+// that is all = or all -, which would underline the line before it as a heading, is indented by four spaces,
+// which makes it text of the block it is in. A code fence the text opens and does not close is closed at its end,
+// so the sections after it are not read as code. Line breaks are \n.
 func safeText(s string) string {
+	return followFences(s, true)
+}
+
+// closeFences is s with a code fence it opens and does not close closed at its end, and nothing else changed: for
+// an instruction, such as the brief, which passes as it is.
+func closeFences(s string) string {
+	return followFences(s, false)
+}
+
+// followFences follows the code fences of s as CommonMark reads them, closes one left open at its end, and, with guard,
+// indents each line outside the fence lines that could start a block of its own (startsBlock).
+func followFences(s string, guard bool) string {
 	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	open := "" // the fence the text has opened, while it is open
 	for i, line := range lines {
-		t := strings.TrimLeft(line, " \t")
-		if f := fenceRun(t); f != "" && len(line)-len(t) < 4 && !strings.Contains(line[:len(line)-len(t)], "\t") {
-			switch {
-			case open == "":
-				open = f
-				continue
-			case f[0] == open[0] && len(f) >= len(open) && strings.TrimSpace(t[len(f):]) == "":
-				open = ""
-				continue
-			}
+		switch {
+		case open == "" && fenceOpener(line) != "":
+			open = fenceOpener(line)
+			continue
+		case open != "" && closesFence(line, open):
+			open = ""
+			continue
 		}
-		if startsBlock(t) {
+		if guard && startsBlock(strings.TrimLeft(containerFree(line), " \t")) {
 			lines[i] = "    " + line
 		}
 	}
@@ -314,6 +325,31 @@ func safeText(s string) string {
 		lines = append(lines, open)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// fenceOpener is the fence line opens, as CommonMark reads one: three or more backticks or tildes after at most
+// three spaces, where a backtick fence's info string holds no backtick; "" when it opens none.
+func fenceOpener(line string) string {
+	t := strings.TrimLeft(line, " ")
+	if len(line)-len(t) > 3 {
+		return ""
+	}
+	run := fenceRun(t)
+	if run == "" || (run[0] == '`' && strings.Contains(t[len(run):], "`")) {
+		return ""
+	}
+	return run
+}
+
+// closesFence reports whether line closes the fence open: a run of its character at least as long, after at most
+// three spaces, with nothing after it.
+func closesFence(line, open string) bool {
+	t := strings.TrimLeft(line, " ")
+	if len(line)-len(t) > 3 {
+		return false
+	}
+	run := fenceRun(t)
+	return run != "" && run[0] == open[0] && len(run) >= len(open) && strings.TrimSpace(t[len(run):]) == ""
 }
 
 // fenceRun is the run of three or more backticks or tildes t starts with, or "".
@@ -328,8 +364,22 @@ func fenceRun(t string) string {
 	return t[:n]
 }
 
-// startsBlock reports whether a line, without its leading spaces, could be a heading, front matter or a heading's
-// underline.
+// containerMarker is a blockquote or list marker at the start of a line: what follows it can be a heading too.
+var containerMarker = regexp.MustCompile(`^[ \t]*(> ?|[-*+][ \t]+|[0-9]{1,9}[.)][ \t]+)`)
+
+// containerFree is line without the blockquote and list markers it starts with.
+func containerFree(line string) string {
+	for {
+		next := containerMarker.ReplaceAllString(line, "")
+		if next == line {
+			return line
+		}
+		line = next
+	}
+}
+
+// startsBlock reports whether a line, without its leading spaces and markers, could be a heading, front matter
+// or a heading's underline.
 func startsBlock(t string) bool {
 	if strings.HasPrefix(t, "#") || strings.HasPrefix(t, "---") {
 		return true
@@ -370,12 +420,15 @@ func renderDecisions(d schema.Decisions) (string, error) {
 
 // implementerFindings is the open_findings section of an implementer: the findings open against the work, the
 // disputes of the last attempt that did not hold, and how the last session ended when it failed. "" is none.
-func implementerFindings(in jormungandr.Input) string {
+func implementerFindings(in jormungandr.Input) (string, error) {
 	var b strings.Builder
 	if len(in.Open) > 0 {
 		b.WriteString("The checks and reviewers found these problems in the work so far. Fix every one. Do not say any of them " +
 			"is fixed: the check or reviewer that raised it looks again after your work and decides.\n\n")
-		block, _ := jsonBlock(in.Open)
+		block, err := jsonBlock(in.Open)
+		if err != nil {
+			return "", err
+		}
 		b.WriteString(block)
 	}
 	if len(in.Rejected) > 0 {
@@ -384,7 +437,10 @@ func implementerFindings(in jormungandr.Input) string {
 		}
 		b.WriteString("### Your disputes that did not hold\n\nYou said these findings are wrong. No check settled it, so each finding " +
 			"stays open. Fix it, or dispute it again with a check of this loop whose result lists the test among the tests that passed.\n\n")
-		block, _ := jsonBlock(in.Rejected)
+		block, err := jsonBlock(in.Rejected)
+		if err != nil {
+			return "", err
+		}
 		b.WriteString(block)
 	}
 	if strings.TrimSpace(in.LastFailure) != "" {
@@ -394,18 +450,21 @@ func implementerFindings(in jormungandr.Input) string {
 		b.WriteString("### The last attempt failed\n\nYour last session ended with:\n\n" + safeText(in.LastFailure) +
 			"\n\nThe repository is as the last attempt that finished left it.\n")
 	}
-	return b.String()
+	return b.String(), nil
 }
 
 // reviewerFindings is the open_findings section of a reviewer: the findings it reported before and still holds
 // open. "" is none.
-func reviewerFindings(open []gungnir.Finding) string {
+func reviewerFindings(open []gungnir.Finding) (string, error) {
 	if len(open) == 0 {
-		return ""
+		return "", nil
 	}
-	block, _ := jsonBlock(open)
+	block, err := jsonBlock(open)
+	if err != nil {
+		return "", err
+	}
 	return "These are the findings you reported before and still hold open. Report each of these again, with the same id: " +
-		"as open if the problem is still there, or as fixed with proof if it is gone. One you leave out is an error.\n\n" + block
+		"as open if the problem is still there, or as fixed with proof if it is gone. One you leave out is an error.\n\n" + block, nil
 }
 
 // checkView is how one check of the loop ended, as a session reads it: until the checks' results are typed
@@ -416,10 +475,13 @@ type checkView struct {
 }
 
 // checkResults is the check_results section: "" is none.
-func checkResults(checks []checkView) string {
+func checkResults(checks []checkView) (string, error) {
 	if len(checks) == 0 {
-		return ""
+		return "", nil
 	}
-	block, _ := jsonBlock(checks)
-	return "How the checks of this loop ended when they last ran on the work:\n\n" + block
+	block, err := jsonBlock(checks)
+	if err != nil {
+		return "", err
+	}
+	return "How the checks of this loop ended when they last ran on the work:\n\n" + block, nil
 }

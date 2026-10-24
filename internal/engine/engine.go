@@ -219,6 +219,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err != nil {
 		return err
 	}
+	defer dropInputs(r, n) // on every way out, a snapshot that fails too; the session's own path drops them before the checkpoint
 	var before string
 	if n.ReadOnly {
 		if before, err = snapshot(ctx, r, n.Repo); err != nil {
