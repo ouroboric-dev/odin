@@ -30,13 +30,17 @@ func reachGate(ctx context.Context, r *run.Run, n schema.Node) (bool, error) {
 	var facts gate.Facts
 	var verdict *gungnir.Conformance
 	if n.DeviationFrom != "" {
-		v, err := readConformance(r, n.DeviationFrom)
+		v, err := loadOutput[gungnir.Conformance](r, n.DeviationFrom)
 		if err != nil {
 			return false, &nodeFailure{err}
 		}
-		verdict, facts.Deviation = &v, v.Deviation
+		// A blocked verdict checked nothing, so it stops the gate as a deviation does (ruling R14).
+		verdict, facts.Deviation = &v, v.Deviation || v.Blocked != nil
 		result := "no deviation"
-		if v.Deviation {
+		switch {
+		case v.Blocked != nil:
+			result = "blocked: " + firstLine(v.Blocked.Reason)
+		case v.Deviation:
 			result = "deviation: " + firstLine(v.Amendment)
 		}
 		if err := r.Log(gungnir.Event{Name: gungnir.EventConformanceChecked, Node: n.DeviationFrom, Attempt: attempt, Result: result}); err != nil {

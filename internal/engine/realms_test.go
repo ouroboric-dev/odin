@@ -121,7 +121,7 @@ func tryRealms(t *testing.T, o realmsSetup) (*run.Run, error) {
 
 // planStep is the session of the scratch planner that a task shape starts with, for a test that writes the
 // plan's tasks.md into the project itself.
-const planStep = "  plan:\n    - result: { status: ok, summary: planned }\n"
+const planStep = "  plan:\n    - result: { status: ok, summary: planned, output: '" + planDone + "' }\n"
 
 // withPlanStep adds planStep to script when the nodes start with the scratch planner and the script has no
 // step of its own for it.
@@ -150,16 +150,16 @@ func twoRealms() []realmFiles {
 func TestANodeReadsItsPromptAndRunsItsChecksFromItsOwnRealm(t *testing.T) {
 	r := startRealms(t, realmsSetup{realms: twoRealms(), leaves: map[string]string{"repos/api": "helheim-go", "repos/web": "midgard-react"},
 		nodes:  "  - { id: web-build, kind: agent, role: implementer, prompt: p.md, repo: repos/web, input: [rejection], output: ygg.implement/v1 }\n  - { id: api-touch, kind: exec, run: [echo, api], repo: repos/api }\n",
-		script: "steps:\n  api-build:\n    - result: { status: ok, summary: built }\n  web-build:\n    - result: { status: ok, summary: built }\n"})
+		script: "steps:\n  api-build:\n    - result: { status: ok, summary: built, output: '{\"summary\": \"done\"}' }\n  web-build:\n    - result: { status: ok, summary: built, output: '{\"summary\": \"done\"}' }\n"})
 	ctx := context.Background()
-	api := schema.Node{ID: "api-build", Kind: schema.KindAgent, Role: "implementer", Prompt: "prompts/implementer.md", Repo: "repos/api", Realm: "helheim-go", Checks: []string{"unit"}}
+	api := schema.Node{ID: "api-build", Kind: schema.KindAgent, Role: "implementer", Prompt: "prompts/implementer.md", Repo: "repos/api", Realm: "helheim-go", Checks: []string{"unit"}, Output: string(schema.ContractImplement)}
 	if err := runAgent(ctx, r, api); err != nil {
 		t.Fatalf("runAgent() = %v", err)
 	}
 	if got := transcriptPrompt(t, r, "api-build"); !strings.Contains(got, "Other realm's implementer prompt.") {
 		t.Errorf("the api's implementer got %q; its prompt is in the realm of its leaf", got)
 	}
-	web := schema.Node{ID: "web-build", Kind: schema.KindAgent, Role: "implementer", Prompt: "p.md", Repo: "repos/web"}
+	web := schema.Node{ID: "web-build", Kind: schema.KindAgent, Role: "implementer", Prompt: "p.md", Repo: "repos/web", Output: string(schema.ContractImplement)}
 	if err := runAgent(ctx, r, web); err != nil {
 		t.Fatalf("runAgent() = %v", err)
 	}

@@ -13,9 +13,9 @@ import (
 const specAndReview = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n" +
 	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [rejection], output: ygg.conformance/v1 }\n"
 
-const specAndReviewScript = "steps:\n  spec:\n    - actions: [ { write: { path: out/docs/spec.md, content: \"# The spec\\n\" } } ]\n      result: { status: ok, summary: wrote the spec }\n" +
+const specAndReviewScript = "steps:\n  spec:\n    - actions: [ { write: { path: out/docs/spec.md, content: \"# The spec\\n\" } } ]\n      result: { status: ok, summary: wrote the spec, output: '{\"summary\": \"done\"}' }\n" +
 	"  conformance:\n    - actions:\n        - run: { argv: [sh, -c, \"cat reviewed/docs/spec.md > out/seen.md; echo changed > reviewed/docs/spec.md\"] }\n" +
-	"      result: { status: ok, summary: read the spec }\n"
+	"      result: { status: ok, summary: read the spec, output: '{\"deviation\": false}' }\n"
 
 func TestAScratchReviewerFindsTheOutputOfTheAgentItReviewsAsACopy(t *testing.T) {
 	r, _ := startSandboxedWith(t, specAndReview, specAndReviewScript, run.Hooks{})
@@ -42,7 +42,7 @@ func TestAScratchReviewerFindsTheOutputOfTheAgentItReviewsAsACopy(t *testing.T) 
 
 func TestAReviewerIsRefusedAnOutputThatCouldLeadOutOfTheRun(t *testing.T) {
 	script := "steps:\n  spec:\n    - actions:\n        - write: { path: out/docs/spec.md, content: \"# The spec\\n\" }\n        - run: { argv: [ln, -s, /etc/passwd, out/docs/link.md] }\n" +
-		"      result: { status: ok, summary: wrote the spec }\n  conformance:\n    - result: { status: ok, summary: read it }\n"
+		"      result: { status: ok, summary: wrote the spec, output: '{\"summary\": \"done\"}' }\n  conformance:\n    - result: { status: ok, summary: read it, output: '{\"deviation\": false}' }\n"
 	r, _ := startSandboxedWith(t, specAndReview, script, run.Hooks{})
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "link.md") {

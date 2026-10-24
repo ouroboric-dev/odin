@@ -26,7 +26,7 @@ func disputeOf(check, test string) string {
 // implementer disputes it with disputes in every attempt but the first.
 func disputeScript(disputes string, attempts int) string {
 	var b strings.Builder
-	b.WriteString("steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n")
+	b.WriteString("steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n")
 	for i := 2; i <= attempts; i++ {
 		b.WriteString("    - result: { status: ok, output: " + disputes + " }\n")
 	}
@@ -135,7 +135,7 @@ func TestADisputeThatNamesACheckTheLoopDoesNotRunStopsTheRunAtOnce(t *testing.T)
 
 func TestADisputeOfACheckThatFailedDoesNotHoldAndSaysSo(t *testing.T) {
 	// Attempt 2 breaks the work, so unit fails in it, and the implementer disputes all the same.
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: " + disputeOf("unit", "TestFindIndex") + " }\n" +
 		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: " + disputeOf("unit", "TestFindIndex") + " }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [ " + findIndexClaim + " ] }\n    - result: { status: ok, report: [ " + findIndexClaim + " ] }\n"

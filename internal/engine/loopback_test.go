@@ -22,9 +22,9 @@ const loopOfBuild = "  - { id: build, kind: loop, repo: repos/app, role: planner
 
 // fixScript has the implementer write out.txt in attempt 1 and fixed.txt in the attempts after it.
 const fixScript = "steps:\n  build:\n" +
-	"    - actions: [ { write: { path: out.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote out.txt }\n" +
-	"    - actions: [ { write: { path: fixed.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote fixed.txt }\n" +
-	"    - actions: [ { write: { path: more.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote more.txt }\n"
+	"    - actions: [ { write: { path: out.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote out.txt, output: '{\"summary\": \"done\"}' }\n" +
+	"    - actions: [ { write: { path: fixed.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote fixed.txt, output: '{\"summary\": \"done\"}' }\n" +
+	"    - actions: [ { write: { path: more.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote more.txt, output: '{\"summary\": \"done\"}' }\n"
 
 func TestAMergeGateThatRefusesTheChecksSendsTheWorkBackIntoTheLoop(t *testing.T) {
 	nodes := loopOfBuild + "  - { id: merge, kind: merge, repo: repos/app, checks: [late], back_to: build }\n"
@@ -142,8 +142,8 @@ func checkNotSentBack(t *testing.T, r *run.Run, out Outcome, err error, want str
 const sandboxedGate = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit], input: [rejection, refusal], output: ygg.implement/v1 }\n" +
 	"  - { id: merge, kind: merge, repo: repos/app, checks: [junk], back_to: build }\n"
 
-const loopBuildScript = "steps:\n  build:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built }\n" +
-	"    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built again }\n"
+const loopBuildScript = "steps:\n  build:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built, output: '{\"summary\": \"done\"}' }\n" +
+	"    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built again, output: '{\"summary\": \"done\"}' }\n"
 
 func TestACheckTheRealmDoesNotDefineFailsTheGateAndIsNotSentBack(t *testing.T) {
 	nodes := loopOfBuild + "  - { id: merge, kind: merge, repo: repos/app, checks: [late], back_to: build }\n"

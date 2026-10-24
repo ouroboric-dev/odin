@@ -1017,7 +1017,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
-		Waived: map[string]bool{}, Judged: map[string]string{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, NewLeaves: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Created: now, Updated: now,
+		Waived: map[string]bool{}, Judged: map[string]string{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, NewLeaves: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Outputs: map[string]OutputRef{}, Created: now, Updated: now,
 	}}
 	started := gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256, FactoryVersion: r.State.Factory,
 		Note: graphNote(setup.GraphPack) + "; " + realmNote(setup.Realms)}
@@ -1149,6 +1149,11 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	s, err := LoadState(dir)
 	if err != nil {
 		return nil, err
+	}
+	if s.Outputs == nil {
+		// Its sessions answered in prose, which nothing reads any more, and its graph declares no node's input
+		// and output: none of it can go on (change typed-boundaries).
+		return nil, fmt.Errorf("run %s was started before typed boundaries; start a new run", s.ID)
 	}
 	if mode == "" {
 		mode = s.Mode

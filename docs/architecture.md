@@ -97,10 +97,16 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   order, on its acceptance stack and with the services `services.For` gives every leaf of the project, in
   a snapshot of its own at `snapshot/<node>/<realm>`; the first failure is the move's, and a project where
   no realm has the check is refused. What a leaf's working copy holds beyond its commits never reaches it.
-- Reads the design-conformance verdict (`out/conformance.json` of a scratch reviewer that reviews another
-  scratch agent's output, which it finds as `reviewed/`) and gives it to the spec gate: a deviation stops the
-  gate in every mode, with the proposed amendment in the gate file; a verdict that cannot be read is asked
-  for once more and then stops the run, never a pass (spec §4.2, §4.6).
+- Reads every agent session's output through one channel (change typed-boundaries): the document the
+  session handed to the `submit` tool, or else its whole final answer as exactly one JSON document, decoded
+  against the node's contract. An output that does not validate is asked for once more, in a new session told
+  each error; a second one fails the node. Nothing is read out of prose. The output that validated is kept in
+  `outputs/<node>.json` of the run folder, with its hash in `run.json`, and a later stage reads it from there.
+  A run started before this change keeps no outputs, and a resume refuses it.
+- Reads the design-conformance verdict (the `ygg.conformance/v1` output of a scratch reviewer that reviews
+  another scratch agent's output, which it finds as `reviewed/`) and gives it to the spec gate: a deviation
+  stops the gate in every mode, with the proposed amendment in the gate file, and so does a verdict that says
+  the reviewer is blocked, with its reason (spec §4.2, §4.6).
 - Checks the graphs with `ygg doctor`: each pack in `graphs.dir` must load, hold a graph and have the
   name of its folder, or `--graph <name>` could not find it. When `graphs.dir` is `realms.dir`, a pack with
   no graph is a realm and is not an error. It warns when `factory.yaml` has no `graphs`

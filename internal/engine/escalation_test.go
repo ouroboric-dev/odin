@@ -22,7 +22,7 @@ func passesAt(done int) string {
 		if i == done {
 			word = "done"
 		}
-		b.WriteString("    - actions: [ " + write("build.txt", word) + " ]\n      result: { status: ok, usage: { in: 10, out: 1, turns: 1 } }\n")
+		b.WriteString("    - actions: [ " + write("build.txt", word) + " ]\n      result: { status: ok, usage: { in: 10, out: 1, turns: 1 }, output: '{\"summary\": \"done\"}' }\n")
 	}
 	return b.String()
 }
@@ -90,7 +90,7 @@ func TestRejectingAnEscalatedLoopGivesItAFullSetOfAttemptsWithTheOperatorsGuidan
 
 func TestApprovingAnExhaustedLoopGoesOnWithTheFindingsOpen(t *testing.T) {
 	nodes := loopNode + "  - { id: after, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
-	script := neverPasses() + "  after:\n    - result: { status: ok, summary: went on }\n"
+	script := neverPasses() + "  after:\n    - result: { status: ok, summary: went on, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})
 	Advance(context.Background(), r)
 	if err := Approve(context.Background(), r, "build", "the check is too strict; ship it"); err != nil {
@@ -113,7 +113,7 @@ func TestApprovingAnExhaustedLoopGoesOnWithTheFindingsOpen(t *testing.T) {
 
 // The exit criterion: a malformed reviewer output stops the loop, and is never a pass.
 func TestAMalformedReviewerOutputStopsTheLoopAndIsNeverAPass(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, output: \"LGTM, ship it\" }\n    - result: { status: ok, output: \"Looks fine to me.\" }\n" +
 		"    - result: { status: ok, report: [] }\n"
 	r := startReview(t, "unattended", script)
@@ -159,7 +159,7 @@ func TestAReviewerReportThatDropsAFindingOrClosesItWithoutProofStopsTheLoopToo(t
 		"closed no proof": `[ { id: spec-1, source: spec, severity: major, location: "build.txt:1", claim: c, status: fixed, proof: "it is fine now" } ]`,
 		"closed no check": `[ ` + fixedFinding("build.txt:1 is right") + ` ]`,
 	} {
-		script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n    - actions: [ " + write("build.txt", "done again") + " ]\n      result: { status: ok }\n" +
+		script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n    - actions: [ " + write("build.txt", "done again") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 			"  build-spec:\n    - result: { status: ok, report: [ " + majorFinding + " ] }\n" +
 			"    - result: { status: ok, report: " + second + " }\n    - result: { status: ok, report: " + second + " }\n"
 		r := startReview(t, "key-points", script)
@@ -175,8 +175,8 @@ func TestAReviewerReportThatDropsAFindingOrClosesItWithoutProofStopsTheLoopToo(t
 
 func TestASendBackAfterAPassedLoopStartsTheLoopOver(t *testing.T) {
 	nodes := loopNode + "  - { id: feature-gate, kind: gate, gate: feature }\n"
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "done, with the footer") + " ]\n      result: { status: ok }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done, with the footer") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{mode: "step-by-step", pack: unitCheck, nodes: nodes, script: script})
 	if out, _ := Advance(context.Background(), r); out.Status != run.StatusStopped || out.Gate != "feature-gate" {
 		t.Fatalf("Advance() = %+v", out)

@@ -20,12 +20,16 @@ func taskMD(id, layer, size, deps string) string {
 
 const readyPlan = "# Tasks\n\n"
 
+// planDone is the answer of a test's planner, a ygg.plan/v1 document. The tasks node reads the tasks.md the test
+// writes, not this, until it reads the plan's typed output (typed-T18).
+const planDone = `{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}`
+
 // planScript writes tasks.md in the leaf, the way a planner's session would: one entry for each attempt.
 func planScript(plans ...string) string {
 	var b strings.Builder
 	b.WriteString("steps:\n  plan:\n")
 	for _, p := range plans {
-		b.WriteString("    - actions: [ { write: { path: tasks.md, content: " + quote(p) + " } } ]\n      result: { status: ok, summary: wrote tasks.md }\n")
+		b.WriteString("    - actions: [ { write: { path: tasks.md, content: " + quote(p) + " } } ]\n      result: { status: ok, summary: wrote tasks.md, output: '" + planDone + "' }\n")
 	}
 	return b.String()
 }
@@ -114,7 +118,7 @@ func TestAPlanWithNoBackToFailsTheNode(t *testing.T) {
 }
 
 func TestThePlanMustBeOneRegularFile(t *testing.T) {
-	r := start(t, "key-points", "", planScratch+"  - { id: ready, kind: tasks, from: plan }\n", "steps:\n  plan:\n    - result: { status: ok }\n")
+	r := start(t, "key-points", "", planScratch+"  - { id: ready, kind: tasks, from: plan }\n", "steps:\n  plan:\n    - result: { status: ok, output: '"+planDone+"' }\n")
 	app := r.Project
 	run1 := func() string {
 		out, err := Advance(context.Background(), r)
@@ -145,7 +149,7 @@ func TestThePlanMustBeOneRegularFile(t *testing.T) {
 func TestATaskMayWorkInALeafTheSpecStageNamedAndInitHasNotCreatedYet(t *testing.T) {
 	leaves := "leaves:\n  repos/api: { realm: helheim-go, realm_version: 0.1.0, description: The API. }\n"
 	plan := readyPlan + taskMD("p-T1", "repos/api", "S", "nothing")
-	script := planScript(plan) + "  leaves-file:\n    - actions: [ { write: { path: leaves.yaml, content: " + quote(leaves) + " } } ]\n      result: { status: ok, summary: wrote leaves.yaml }\n"
+	script := planScript(plan) + "  leaves-file:\n    - actions: [ { write: { path: leaves.yaml, content: " + quote(leaves) + " } } ]\n      result: { status: ok, summary: wrote leaves.yaml, output: '{\"summary\": \"done\"}' }\n"
 	nodes := planNodes + "  - { id: leaves-file, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: ready, kind: tasks, from: plan, leaves: repos/app/leaves.yaml }\n"
 	r := start(t, "key-points", "", nodes, script)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

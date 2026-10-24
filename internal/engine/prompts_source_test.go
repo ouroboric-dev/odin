@@ -22,7 +22,7 @@ func TestPromptsComeFromTheGraphPackAndTheImplementerFromTheLeafsRealm(t *testin
 	nodes := "  - { id: design, kind: agent, role: planner, prompt: prompts/design.md, repo: repos/api, input: [rejection], output: ygg.implement/v1 }\n" +
 		strings.Replace(taskShape, "      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [rejection, refusal], output: ygg.implement/v1 }\n",
 			"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: prompts/reviewer-spec.md, output: ygg.review/v1 } ], input: [rejection, refusal], output: ygg.implement/v1 }\n", 1)
-	script := "steps:\n  design:\n    - result: { status: ok, summary: designed }\n" + writeStep("p-t1-implement", "api.txt") +
+	script := "steps:\n  design:\n    - result: { status: ok, summary: designed, output: '{\"summary\": \"done\"}' }\n" + writeStep("p-t1-implement", "api.txt") +
 		"  p-t1-implement-spec:\n    - result: { status: ok, summary: no findings, report: [] }\n"
 	r := startRealms(t, realmsSetup{nodes: nodes, script: script, realms: []realmFiles{graph, leafRealm}, leaves: map[string]string{"repos/api": "leaf-toy"}})
 	if _, ok := r.State.Realms["graph-toy"]; ok {

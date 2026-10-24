@@ -52,7 +52,7 @@ func gradedRun(t *testing.T, withGrader bool) (dir, config, id string, tk *taskt
 	tk = tasktest.New(t)
 	realm, cfgDir := t.TempDir(), t.TempDir()
 	os.MkdirAll(filepath.Join(realm, "t"), 0o755)
-	script := "steps:\n  a:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built }\n"
+	script := "steps:\n  a:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built, output: '{\"summary\": \"done\"}' }\n"
 	cfg := "mode: unattended\nroles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n" +
 		"budget:\n  per_run: { tokens: 100000, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\nsandbox:\n  engine: unix:///run/ygg-test.sock\n"
 	if withGrader {

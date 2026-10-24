@@ -18,7 +18,7 @@ const readyNodes = "  - { id: plan, kind: agent, role: planner, prompt: p.md, sc
 	initNode +
 	"  - { id: plan-gate, kind: gate, gate: plan }\n"
 
-const twoPlans = "steps:\n  plan:\n    - result: { status: ok, summary: planned }\n    - result: { status: ok, summary: planned again }\n"
+const twoPlans = "steps:\n  plan:\n    - result: { status: ok, summary: planned, output: '" + planDone + "' }\n    - result: { status: ok, summary: planned again, output: '" + planDone + "' }\n"
 
 // readyRun starts a run of readyNodes with the leaves file and a ready plan for repos/api in the project.
 func readyRun(t *testing.T, leaves string) *run.Run {

@@ -24,7 +24,7 @@ func contractTaskRun(t *testing.T, mode, nodes string) *run.Run {
 	script := "steps:\n  p-t1-implement:\n    - actions:\n" +
 		"        - write: { path: api.txt, content: \"done\\n\" }\n" +
 		"        - write: { path: api.openapi.yaml, content: \"openapi: 3.0.3\\ninfo: { title: T, version: 2.0.0 }\\n\" }\n" +
-		"      result: { status: ok, summary: wrote the contract }\n" + writeStep("p-t2-implement", "web.txt")
+		"      result: { status: ok, summary: wrote the contract, output: '{\"summary\": \"done\"}' }\n" + writeStep("p-t2-implement", "web.txt")
 	r := startRealms(t, realmsSetup{mode: mode, nodes: nodes, script: script,
 		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web implementer prompt."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API implementer prompt.")},
 		leaves: map[string]string{"repos/api": "helheim-go", "repos/web": "midgard-react"}})

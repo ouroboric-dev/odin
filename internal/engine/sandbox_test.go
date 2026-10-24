@@ -67,7 +67,7 @@ func startSandboxedPack(t *testing.T, pack, nodes, script string, h run.Hooks) (
 	return r, fake
 }
 
-const buildScript = "steps:\n  a:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built }\n"
+const buildScript = "steps:\n  a:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built, output: '{\"summary\": \"done\"}' }\n"
 const buildNodes = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 
 func leafStatus(t *testing.T, r *run.Run) string {
@@ -185,7 +185,7 @@ func TestACommandThatRunsTooLongIsStoppedInTheSandbox(t *testing.T) {
 
 func TestAnAgentSessionGetsTheSandboxItsSkillsAndReportsItsProvider(t *testing.T) {
 	script := "steps:\n  a:\n    - actions:\n        - run: { argv: [touch, from-the-agent.txt] }\n        - write: { path: build.txt, content: \"done\\n\" }\n" +
-		"      result: { status: ok, summary: built, provider: anthropic, cli_version: 2.1.284, usage: { in: 10, out: 5, turns: 1, cost_usd: 0.01 } }\n"
+		"      result: { status: ok, summary: built, provider: anthropic, cli_version: 2.1.284, usage: { in: 10, out: 5, turns: 1, cost_usd: 0.01 }, output: '{\"summary\": \"done\"}' }\n"
 	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, skills: [plain-language], input: [rejection], output: ygg.implement/v1 }\n"
 	r, fake := startSandboxedWith(t, nodes, script, run.Hooks{Libs: skillfake.Libraries(t, "plain-language", "Use short words.")})
 	out, err := Advance(context.Background(), r)
@@ -225,7 +225,7 @@ func TestAnAgentThatNamesNoSkillsLoadsNone(t *testing.T) {
 const secretReport = `[{"RuleID":"aws-access-token","File":"/config/prod.env","StartLine":3,"Secret":"REDACTED","Match":"REDACTED"}]`
 
 func TestASecretInAnAgentsWorkStopsTheRunBeforeAnythingIsCommitted(t *testing.T) {
-	script := buildScript + "    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built again }\n"
+	script := buildScript + "    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built again, output: '{\"summary\": \"done\"}' }\n"
 	r, fake := startSandboxed(t, buildNodes, script)
 	fake.Scan.Exit, fake.Scan.Report = 7, secretReport
 	before := r.State.Leaves["repos/app"].Checkpoint

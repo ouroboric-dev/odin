@@ -16,9 +16,9 @@ const gateNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, rep
 const gateScript = `steps:
   spec:
     - actions: [ { write: { path: spec.md, content: "v1\n" } } ]
-      result: { status: ok, summary: wrote spec v1 }
+      result: { status: ok, summary: wrote spec v1, output: '{"summary": "done"}' }
     - actions: [ { write: { path: spec.md, content: "v2\n" } } ]
-      result: { status: ok, summary: wrote spec v2 }
+      result: { status: ok, summary: wrote spec v2, output: '{"summary": "done"}' }
 `
 
 func TestAStopWritesAGateFileAndWaits(t *testing.T) {
@@ -112,12 +112,12 @@ func TestRejectRerunsTheNodeWithTheReason(t *testing.T) {
 
 // Review I2: new work under a loop that passed goes through the loop again.
 func TestARejectionThatRerunsANodeBeforeAPassedLoopRunsTheLoopAgain(t *testing.T) {
-	nodes := "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection, refusal], output: ygg.implement/v1 }\n" + loopNode +
+	nodes := "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection, refusal], output: ygg.plan/v1 }\n" + loopNode +
 		"  - { id: review, kind: gate, gate: spec, reruns: plan }\n"
-	script := "steps:\n  plan:\n    - actions: [ " + write("plan.md", "v1") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("plan.md", "v2") + " ]\n      result: { status: ok }\n" +
-		"  build:\n    - actions: [ " + write("build.txt", "done v1") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "done v2") + " ]\n      result: { status: ok }\n"
+	script := "steps:\n  plan:\n    - actions: [ " + write("plan.md", "v1") + " ]\n      result: { status: ok, output: '" + planDone + "' }\n" +
+		"    - actions: [ " + write("plan.md", "v2") + " ]\n      result: { status: ok, output: '" + planDone + "' }\n" +
+		"  build:\n    - actions: [ " + write("build.txt", "done v1") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done v2") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r := startPack(t, "step-by-step", "", unitCheck, nodes, script)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped || out.Gate != "review" {
 		t.Fatalf("Advance() = %+v, %v; want stopped at review", out, err)

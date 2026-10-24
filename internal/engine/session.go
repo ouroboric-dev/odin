@@ -20,7 +20,8 @@ type sessionSpec struct {
 	key       string
 	role      string
 	repo      string
-	text      string // the whole prompt
+	text      string          // the whole prompt
+	output    schema.Contract // the contract of the document the session hands back; empty for none
 	readOnly  bool
 	before    string // a read-only session's snapshot of the leaf before it ran
 	maxTurns  int
@@ -105,7 +106,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 		}
 		task := gungnir.Task{Role: sp.role, Node: sp.key, Attempt: attempt, Prompt: sp.text, Workdir: workdir,
 			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turnsFor(sp.maxTurns, left), MaxTokens: sp.maxTokens, Timeout: sp.timeout,
-			TranscriptDir: filepath.Join(r.Dir, "transcripts"), Sandbox: runner}
+			TranscriptDir: filepath.Join(r.Dir, "transcripts"), Output: string(sp.output), Sandbox: runner}
 		actx, cancel := ctx, context.CancelFunc(func() {})
 		if task.Timeout > 0 {
 			actx, cancel = context.WithTimeout(ctx, task.Timeout)

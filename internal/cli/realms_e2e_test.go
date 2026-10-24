@@ -141,8 +141,8 @@ func TestAnUnattendedRunOfTheToyRealmsGivesUpATaskAndExitsFive(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Task 2's implementer builds nothing, twice, so its loop gives up; task 4 depends on it.
-	broken := strings.Replace(string(script), "    - actions: [ { write: { path: web.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 } }\n",
-		"    - result: { status: ok, summary: did nothing }\n    - result: { status: ok, summary: did nothing again }\n", 1)
+	broken := strings.Replace(string(script), "    - actions: [ { write: { path: web.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 }, output: '{\"summary\": \"done\"}' }\n",
+		"    - result: { status: ok, summary: did nothing, output: '{\"summary\": \"done\"}' }\n    - result: { status: ok, summary: did nothing again, output: '{\"summary\": \"done\"}' }\n", 1)
 	if broken == string(script) {
 		t.Fatal("the script was not changed")
 	}

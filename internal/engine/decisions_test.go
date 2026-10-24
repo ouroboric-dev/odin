@@ -35,25 +35,25 @@ const decisionNodes = "  - { id: design, kind: agent, role: planner, prompt: p.m
 	"  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n" +
 	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [rejection], output: ygg.conformance/v1 }\n" +
 	"  - { id: spec-gate, kind: gate, gate: spec, reruns: spec }\n" +
-	"  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection, refusal], output: ygg.implement/v1 }\n"
+	"  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection, refusal], output: ygg.plan/v1 }\n"
 
 const decisionScript = `steps:
   design:
     - actions: [ { write: { path: design.md, content: "d1\n" } } ]
-      result: { status: ok, summary: designed }
+      result: { status: ok, summary: designed, output: '{"summary": "done"}' }
     - actions: [ { write: { path: design.md, content: "d2\n" } } ]
-      result: { status: ok, summary: designed again }
+      result: { status: ok, summary: designed again, output: '{"summary": "done"}' }
   spec:
     - actions: [ { write: { path: out/specs/spec.md, content: "# Spec\n" } } ]
-      result: { status: ok, summary: wrote the spec }
+      result: { status: ok, summary: wrote the spec, output: '{"summary": "done"}' }
     - actions: [ { write: { path: out/specs/spec.md, content: "# Spec 2\n" } } ]
-      result: { status: ok, summary: wrote the spec again }
+      result: { status: ok, summary: wrote the spec again, output: '{"summary": "done"}' }
   conformance:
-    - result: { status: ok, summary: checked }
-    - result: { status: ok, summary: checked }
+    - result: { status: ok, summary: checked, output: '{"deviation": false}' }
+    - result: { status: ok, summary: checked, output: '{"deviation": false}' }
   plan:
     - actions: [ { write: { path: plan.md, content: "p\n" } } ]
-      result: { status: ok, summary: planned }
+      result: { status: ok, summary: planned, output: '` + planDone + `' }
 `
 
 func advanceTo(t *testing.T, r *run.Run, gate string) {
@@ -131,8 +131,8 @@ const decisionLoop = `  - { id: design, kind: agent, role: planner, prompt: p.md
 `
 
 func TestNoteReachesLoopSessions(t *testing.T) {
-	script := "steps:\n  design:\n    - result: { status: ok }\n" +
-		"  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  design:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n" +
 		"  build-arch:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{mode: "step-by-step", pack: unitCheck, nodes: decisionLoop, script: script})
@@ -169,10 +169,10 @@ func TestApprovalWithoutANoteAddsNothing(t *testing.T) {
 
 func TestOnlyAGateNoteIsADecision(t *testing.T) {
 	// A loop that gave up.
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok }\n" +
-		"  after:\n    - result: { status: ok }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"  after:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	nodes := loopNode + "  - { id: after, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 	r := startWith(t, setup{mode: "key-points", pack: unitCheck, nodes: nodes, script: script})
 	advanceTo(t, r, "build")
@@ -194,7 +194,7 @@ func TestOnlyAGateNoteIsADecision(t *testing.T) {
 
 	// policy-violation.
 	pack := "checks:\n  unit: [sh, -c, \"mkdir -p vendor/x/.git && grep -q done build.txt\"]\n"
-	pv := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n"
+	pv := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r = startWith(t, setup{mode: "unattended", pack: pack, nodes: loopNode, script: pv})
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
 		t.Fatalf("Advance() = %+v, %v, gate %s", out, err, r.State.PendingGate)

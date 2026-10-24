@@ -74,7 +74,7 @@ func TestAPlanAndALeavesFileReachedThroughASymlinkAreNotRead(t *testing.T) {
 	outside := outsideDir(t)
 	os.WriteFile(filepath.Join(outside, "tasks.md"), []byte(readyPlan+taskMD("p-T1", "repos/app", "S", "nothing")), 0o644)
 	os.WriteFile(filepath.Join(outside, "leaves.yaml"), []byte("leaves: {}\n"), 0o644)
-	r := start(t, "key-points", "", planScratch+"  - { id: ready, kind: tasks, from: plan }\n", "steps:\n  plan:\n    - result: { status: ok }\n")
+	r := start(t, "key-points", "", planScratch+"  - { id: ready, kind: tasks, from: plan }\n", "steps:\n  plan:\n    - result: { status: ok, output: '"+planDone+"' }\n")
 	if err := os.MkdirAll(filepath.Join(r.Project, "plans"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestAPlanAndALeavesFileReachedThroughASymlinkAreNotRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, node := range []string{planScratch + "  - { id: ready, kind: tasks, from: plan, leaves: leaves.yaml }\n", "  - { id: leaves, kind: init, from: leaves.yaml }\n"} {
-		r2 := start(t, "key-points", "", node, "steps:\n  plan:\n    - result: { status: ok }\n")
+		r2 := start(t, "key-points", "", node, "steps:\n  plan:\n    - result: { status: ok, output: '"+planDone+"' }\n")
 		os.WriteFile(filepath.Join(r2.Project, "tasks.md"), []byte(readyPlan+taskMD("p-T1", "repos/app", "S", "nothing")), 0o644)
 		os.Symlink(filepath.Join(outside, "leaves.yaml"), filepath.Join(r2.Project, "leaves.yaml"))
 		out, err := Advance(bg, r2)

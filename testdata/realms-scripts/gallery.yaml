@@ -4,7 +4,7 @@
 steps:
   design:
     - actions: [ { write: { path: out/1-product/design.md, content: "# Design\n\nA gallery for photographers.\n" } } ]
-      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
   spec:
     - actions:
         - write: { path: out/2-engineering/specs/spec.md, content: "# Spec\n" }
@@ -21,7 +21,7 @@ steps:
                   realm_version: 0.1.0
                   description: The gallery's web app.
                   consumes: [repos/api]
-      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
   plan:
     # The first plan has a task in a leaf the spec did not name; the plan check sends it back.
     - actions:
@@ -47,7 +47,7 @@ steps:
               - **Layer:** repos/db
               - **Size:** M
               - **Depends on:** gallery-T1
-      result: { status: ok, summary: wrote a plan with a mistake, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote a plan with a mistake, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}' }
     - actions:
         - write:
             path: out/2-engineering/plans/2026-10-17-gallery/tasks.md
@@ -89,16 +89,16 @@ steps:
               - **Layer:** repos/web
               - **Size:** S
               - **Depends on:** gallery-T2
-      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}' }
   gallery-t1-implement:
     - actions: [ { write: { path: api.txt, content: "done\n" } } ]
       result: { status: ok, summary: built the API's galleries, usage: { in: 2000, out: 200, turns: 4 } }
   gallery-t2-implement:
     - actions: [ { write: { path: web.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 } }
+      result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
   gallery-t3-implement:
     - actions: [ { write: { path: api-own.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built the listing, usage: { in: 2000, out: 200, turns: 4 } }
+      result: { status: ok, summary: built the listing, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
   gallery-t4-implement:
     - actions: [ { write: { path: photos.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built the photos, usage: { in: 2000, out: 200, turns: 4 } }
+      result: { status: ok, summary: built the photos, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }

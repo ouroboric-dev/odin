@@ -11,9 +11,9 @@ import (
 // major, and the loop gives up. The true veto rate is 1 of 1 reviewed attempts: the metrics must read the ledger
 // the engine writes, where a reviewer's counter and the loop's attempt drift apart.
 func TestMetricsReadTheVetoRateOfARealLoopWhereTheReviewerFirstRunsInAttempt3(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "todo again") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "todo again") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [ " + majorFinding + " ] }\n"
 	r := startReview(t, "key-points", script)
 	if _, err := Advance(context.Background(), r); err != nil {

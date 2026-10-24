@@ -32,7 +32,7 @@ func transcript(t *testing.T, r *run.Run, name string) string {
 }
 
 func TestALoopWhoseWorkPassesItsChecksIsOneAttempt(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, summary: built it, usage: { in: 100, out: 10, turns: 2 } }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, summary: built it, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n"
 	r := startLoop(t, "key-points", script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
@@ -58,8 +58,8 @@ func TestALoopWhoseWorkPassesItsChecksIsOneAttempt(t *testing.T) {
 }
 
 func TestAFailingCheckGoesBackToTheNextAttemptAsAFinding(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, summary: first try, usage: { in: 100, out: 10, turns: 2 } }\n" +
-		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, summary: second try, usage: { in: 100, out: 10, turns: 2 } }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, summary: first try, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, summary: second try, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n"
 	r := startLoop(t, "key-points", script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
@@ -93,7 +93,7 @@ func TestAFailingCheckGoesBackToTheNextAttemptAsAFinding(t *testing.T) {
 
 func TestASessionThatFailsAsAnAgentUsesUpAnAttemptAndLeavesNoHalfWork(t *testing.T) {
 	script := "steps:\n  build:\n    - actions: [ " + write("junk.txt", "half a thought") + " ]\n      error: the tests hung and the session timed out\n      usage: { in: 50, out: 5, turns: 1 }\n" +
-		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, summary: built it }\n"
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, summary: built it, output: '{\"summary\": \"done\"}' }\n"
 	r := startLoop(t, "unattended", script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
@@ -119,7 +119,7 @@ func TestASessionThatFailsAsAnAgentUsesUpAnAttemptAndLeavesNoHalfWork(t *testing
 
 func TestARetriedSessionStartsFromTheCheckpoint(t *testing.T) {
 	script := "steps:\n  a:\n    - actions: [ " + write("half.txt", "half") + " ]\n      error: the connection dropped\n      kind: transient\n" +
-		"    - actions: [ " + write("a.txt", "a") + " ]\n      result: { status: ok }\n"
+		"    - actions: [ " + write("a.txt", "a") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	w := &waits{}
 	r := startWith(t, setup{nodes: oneNode, script: script, hooks: hooks(w)})
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

@@ -22,7 +22,7 @@ func blockedRun(t *testing.T, mode string) *run.Run {
 // blockedRunOf is blockedRun with the plan given.
 func blockedRunOf(t *testing.T, mode, plan string) *run.Run {
 	t.Helper()
-	idle := "    - result: { status: ok, summary: did nothing }\n"
+	idle := "    - result: { status: ok, summary: did nothing, output: '{\"summary\": \"done\"}' }\n"
 	script := writeStep("p-t1-implement", "api.txt") + writeStep("p-t4-implement", "api2.txt") +
 		"  p-t2-implement:\n" + strings.Repeat(idle, 3) + writeStep("p-t3-implement", "web2.txt")
 	r := startRealms(t, realmsSetup{mode: mode, nodes: taskShape, script: "steps:\n" + script,
@@ -141,9 +141,9 @@ func TestATaskBlockedAfterItsMergeLandedPutsTheLeafsMainBackToWhereTheTaskFoundI
 	lead := recipeRealm("midgard-react", "0.1.0", "web.txt", "Web implementer prompt.")
 	lead.pack = strings.Replace(lead.pack, "checks:\n", "checks:\n  accept: [sh, -c, \"test -f repos/web/never.txt\"]\n", 1)
 	script := "steps:\n  p-t1-implement:\n" +
-		"    - actions: [ { write: { path: web.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote web.txt }\n" +
-		"    - actions: [ { remove: web.txt } ]\n      result: { status: ok, summary: removed web.txt }\n" +
-		"    - result: { status: ok, summary: did nothing }\n    - result: { status: ok, summary: did nothing }\n"
+		"    - actions: [ { write: { path: web.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote web.txt, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ { remove: web.txt } ]\n      result: { status: ok, summary: removed web.txt, output: '{\"summary\": \"done\"}' }\n" +
+		"    - result: { status: ok, summary: did nothing, output: '{\"summary\": \"done\"}' }\n    - result: { status: ok, summary: did nothing, output: '{\"summary\": \"done\"}' }\n"
 	r := startRealms(t, realmsSetup{mode: "unattended", nodes: shape, script: script, realms: []realmFiles{lead},
 		leaves: map[string]string{"repos/web": "midgard-react"}})
 	if err := os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte("# Tasks\n\n"+taskMD("p-T1", "repos/web", "S", "nothing")), 0o644); err != nil {

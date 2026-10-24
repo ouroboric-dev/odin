@@ -19,7 +19,7 @@ steps:
               ## Summary
 
               The gallery tells anyone who asks which version is running, and its web page shows it.
-      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
   spec:
     - actions:
         - write:
@@ -56,10 +56,10 @@ steps:
                   realm_version: 0.1.0
                   description: The gallery's web app.
                   consumes: [repos/api]
-      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
   conformance:
     - actions: [ { write: { path: out/conformance.json, content: '{"deviation": false}' } } ]
-      result: { status: ok, summary: the spec stays inside the design, usage: { in: 500, out: 50, turns: 1 } }
+      result: { status: ok, summary: the spec stays inside the design, usage: { in: 500, out: 50, turns: 1 }, output: '{"deviation": false}' }
   plan:
     - actions:
         - write:
@@ -110,7 +110,7 @@ steps:
               - **Layer:** repos/web
               - **Size:** S
               - **Depends on:** version-T1
-      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}' }
   reuse-review:
     - actions:
         - write:
@@ -125,7 +125,7 @@ steps:
               ## Verdict
 
               Nothing to remove.
-      result: { status: ok, summary: nothing to remove, usage: { in: 500, out: 50, turns: 1 } }
+      result: { status: ok, summary: nothing to remove, usage: { in: 500, out: 50, turns: 1 }, output: '{"summary": "done"}' }
   version-t1-implement:
     - actions:
         - write:
@@ -201,7 +201,7 @@ steps:
                                     type: string
                                     example: "0.1.0"
                 EOF
-      result: { status: ok, summary: the API serves its version, usage: { in: 2000, out: 200, turns: 4 } }
+      result: { status: ok, summary: the API serves its version, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
   version-t2-implement:
     - actions:
         - write:
@@ -295,7 +295,7 @@ steps:
                   await expect(page.getByText("API version: 0.1.0")).toBeVisible();
                 });
                 EOF
-      result: { status: ok, summary: the home page shows the version, usage: { in: 2000, out: 200, turns: 4 } }
+      result: { status: ok, summary: the home page shows the version, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
   version-t1-implement-spec-compliance:
     - result: { status: ok, report: [] }
   version-t1-implement-simplicity:

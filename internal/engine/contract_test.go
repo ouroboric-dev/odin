@@ -23,7 +23,7 @@ func scriptWriting(files ...string) string {
 	for _, f := range files {
 		s += "        - write: { path: \"" + f + "\", content: \"openapi: 3.0.3\\ninfo: { title: T, version: 2.0.0 }\\n\" }\n"
 	}
-	return s + "      result: { status: ok, summary: wrote files, usage: { in: 1, out: 1, cache: 0, turns: 1, cost_usd: 0.01 } }\n"
+	return s + "      result: { status: ok, summary: wrote files, usage: { in: 1, out: 1, cache: 0, turns: 1, cost_usd: 0.01 }, output: '{\"summary\": \"done\"}' }\n"
 }
 
 // shipIndex commits an impact index to the project that lists one contract with the given readers.
@@ -230,7 +230,7 @@ func scriptWritingRaw(files map[string]string) string {
 	for f, c := range files {
 		s += "        - write: { path: \"" + f + "\", content: \"" + c + "\" }\n"
 	}
-	return s + "      result: { status: ok, summary: wrote files, usage: { in: 1, out: 1, cache: 0, turns: 1, cost_usd: 0.01 } }\n"
+	return s + "      result: { status: ok, summary: wrote files, usage: { in: 1, out: 1, cache: 0, turns: 1, cost_usd: 0.01 }, output: '{\"summary\": \"done\"}' }\n"
 }
 
 func TestAYAMLFileInAContractsFolderStopsTheGateInEveryMode(t *testing.T) {

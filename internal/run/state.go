@@ -102,6 +102,7 @@ type State struct {
 	Returns         map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
 	Refusals        map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
 	Decisions       []Decision             `json:"decisions,omitempty"`     // the notes of gate approvals, in the order given: every later session reads them
+	Outputs         map[string]OutputRef   `json:"outputs"`                 // session key: its last typed output, kept in outputs/ (change typed-boundaries)
 	Ledger          ledger.Anchor          `json:"ledger"`
 	Error           string                 `json:"error,omitempty"`
 	Exec            *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
@@ -114,6 +115,15 @@ type State struct {
 type Decision struct {
 	Gate string `json:"gate"`
 	Note string `json:"note"`
+}
+
+// OutputRef is where a session's typed output is kept: the document, as the session handed it back and Odin
+// validated it, in the run folder at Path, with its contract, its hash and the session's attempt.
+type OutputRef struct {
+	Contract string `json:"contract"`
+	Path     string `json:"path"` // relative to the run folder: outputs/<key>.json
+	SHA256   string `json:"sha256"`
+	Attempt  int    `json:"attempt"`
 }
 
 // LoopRecord is where one loop node stands (spec §4.2): Jormungandr's state, which holds the attempt,
@@ -177,6 +187,9 @@ func Dir(project, id string) string { return filepath.Join(project, ".factory", 
 // over the old one, then the directory synced (spec §12).
 func (s *State) Save(dir string) error {
 	s.Schema = StateSchema
+	if s.Outputs == nil {
+		s.Outputs = map[string]OutputRef{}
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -238,6 +251,11 @@ func LoadState(dir string) (*State, error) {
 			return nil, fmt.Errorf("%s/run.json: %w", dir, err)
 		}
 	}
+	// Outputs is written even when it is empty: a run.json without it was started before typed boundaries,
+	// and is left nil for Open to refuse.
+	if s.Outputs == nil && hasOutputs(data) {
+		s.Outputs = map[string]OutputRef{}
+	}
 	// Empty maps aren't written (omitempty), so make them again: the engine writes to all three.
 	if s.Attempts == nil {
 		s.Attempts = map[string]int{}
@@ -276,6 +294,16 @@ func LoadState(dir string) (*State, error) {
 		s.Leaves = map[string]LeafRecord{}
 	}
 	return &s, nil
+}
+
+// hasOutputs reports whether the run.json data has the outputs field.
+func hasOutputs(data []byte) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) != nil {
+		return false
+	}
+	_, ok := fields["outputs"]
+	return ok
 }
 
 // ExecProcess is an exec node's running command: its process group, and its leader's start time,

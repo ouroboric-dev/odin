@@ -107,8 +107,8 @@ func TestAShrunkGeneratedFileStopsAtTheShrinkGuard(t *testing.T) {
 func TestAPlantedRepositoryStopsAtPolicyViolation(t *testing.T) {
 	script := "steps:\n  a:\n    - actions:\n        - write: { path: vendor/x/.git/HEAD, content: \"ref: refs/heads/main\\n\" }\n" +
 		"        - write: { path: vendor/x/.git/objects/.keep, content: \"\" }\n        - write: { path: vendor/x/.git/refs/heads/.keep, content: \"\" }\n" +
-		"      result: { status: ok, summary: planted a repo }\n" +
-		"    - actions: [ { write: { path: out.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: clean }\n"
+		"      result: { status: ok, summary: planted a repo, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ { write: { path: out.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: clean, output: '{\"summary\": \"done\"}' }\n"
 	r := startPack(t, "unattended", "", "", build, script)
 	base := r.State.Leaves["repos/app"].Checkpoint
 	out, err := Advance(bg, r)

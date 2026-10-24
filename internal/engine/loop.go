@@ -130,7 +130,7 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: attempt,
 			Result: fmt.Sprintf("attempt %d of %d starts with %d finding(s) open", attempt, l.st.Limit, len(in.Open))})
 	}
-	res, ev, err := session(ctx, r, sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text,
+	res, ev, err := session(ctx, r, sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, output: schema.ContractImplement,
 		maxTurns: n.MaxTurns, maxTokens: n.MaxTokens, timeout: time.Duration(n.Timeout), started: started})
 	if err != nil {
 		var af *jormungandr.AgentFailure
@@ -148,16 +148,12 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 	if err := r.Log(ev); err != nil {
 		return schema.Implement{}, err
 	}
-	return implementAnswer(res)
-}
-
-// implementAnswer reads an implementer's final answer as a ygg.implement/v1 document. Until the loop's answers
-// come through the output channel, an empty answer stands for a summary and no disputes, as it did before.
-func implementAnswer(res gungnir.Result) (schema.Implement, error) {
-	if strings.TrimSpace(res.Output) == "" {
+	// Until the loop's implementer is asked for its answer (typed-T20), a session that hands back nothing stands
+	// for a summary and no disputes, as it did before.
+	if len(res.Submitted) == 0 && strings.TrimSpace(res.Output) == "" {
 		return schema.Implement{Summary: res.Summary}, nil
 	}
-	ans, err := schema.DecodeAnswer[schema.Implement](schema.ContractImplement, []byte(res.Output))
+	ans, _, err := readOutput[schema.Implement](r, n.ID, schema.ContractImplement, res)
 	if err != nil {
 		return schema.Implement{}, &jormungandr.AgentFailure{Reason: "the answer can't be used: " + err.Error()}
 	}
@@ -237,7 +233,7 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if change != "" {
 		text += "\n\n" + change
 	}
-	request, err := jormungandr.ReviewRequest(rv.ID, open, passed, false)
+	request, err := jormungandr.ReviewRequest(rv.ID, open, passed, submits(r, n.SessionKey(rv)))
 	if err != nil {
 		return schema.Review{}, err
 	}
@@ -246,7 +242,7 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if err != nil {
 		return schema.Review{}, err
 	}
-	sp := sessionSpec{key: n.SessionKey(rv), role: rv.Role, repo: n.Repo, text: text, readOnly: true, before: before,
+	sp := sessionSpec{key: n.SessionKey(rv), role: rv.Role, repo: n.Repo, text: text, output: schema.ContractReview, readOnly: true, before: before,
 		maxTurns: rv.MaxTurns, maxTokens: rv.MaxTokens, timeout: time.Duration(rv.Timeout)}
 	res, ev, err := session(ctx, r, sp)
 	if err := checkReadOnly(ctx, r, sp, ev, err); err != nil {
@@ -256,7 +252,7 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if err := r.Log(ev); err != nil {
 		return schema.Review{}, err
 	}
-	report, err := schema.DecodeAnswer[schema.Review](schema.ContractReview, []byte(res.Output))
+	report, _, err := readOutput[schema.Review](r, sp.key, schema.ContractReview, res)
 	if err != nil {
 		return schema.Review{}, &jormungandr.UnreadableError{Reviewer: rv.ID, Err: err}
 	}

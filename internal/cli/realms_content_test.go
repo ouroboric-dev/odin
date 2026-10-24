@@ -91,7 +91,7 @@ const leafReviewers = "  gallery-t%d-implement-spec-compliance:\n    - result: {
 const realScript = `steps:
   design:
     - actions: [ { write: { path: out/1-product/design/2026-10-17-gallery.md, content: "---\ntitle: Gallery design\nstatus: draft\ndate: 2026-10-17\nrelated: []\n---\n# Gallery design\n" } } ]
-      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
   spec:
     - actions:
         - write: { path: out/2-engineering/specs/2026-10-17-gallery.md, content: "---\ntitle: Gallery spec\nstatus: draft\ndate: 2026-10-17\nrelated: []\n---\n# Gallery spec\n" }
@@ -111,10 +111,10 @@ const realScript = `steps:
                   realm_version: MIDGARD_VERSION
                   description: The gallery's web app.
                   consumes: [repos/api]
-      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
   conformance:
     - actions: [ { write: { path: out/conformance.json, content: '{"deviation": false}' } } ]
-      result: { status: ok, summary: the spec stays inside the design, usage: { in: 500, out: 50, turns: 1 } }
+      result: { status: ok, summary: the spec stays inside the design, usage: { in: 500, out: 50, turns: 1 }, output: '{"deviation": false}' }
   plan:
     - actions:
         - write:
@@ -157,19 +157,19 @@ const realScript = `steps:
         - write:
             path: out/2-engineering/plans/2026-10-17-gallery/plan.md
             content: "---\ntitle: Gallery plan\nstatus: draft\ndate: 2026-10-17\nrelated: []\n---\n# Gallery plan\n"
-      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 } }
+      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 }, output: '` + planDone + `' }
   reuse-review:
     - actions: [ { write: { path: out/2-engineering/reviews/2026-10-17-gallery-reuse-review.md, content: "---\ntitle: Gallery reuse review\nstatus: draft\ndate: 2026-10-17\nrelated: []\n---\n## Verdict\n\nNothing to remove.\n" } } ]
-      result: { status: ok, summary: nothing to remove, usage: { in: 500, out: 50, turns: 1 } }
+      result: { status: ok, summary: nothing to remove, usage: { in: 500, out: 50, turns: 1 }, output: '{"summary": "done"}' }
   gallery-t1-implement:
     - actions: [ { write: { path: api.txt, content: "done\n" } } ]
       result: { status: ok, summary: built the API's galleries, usage: { in: 2000, out: 200, turns: 4 } }
   gallery-t2-implement:
     - actions: [ { write: { path: web.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 } }
+      result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
   gallery-t3-implement:
     - actions: [ { write: { path: gallery.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built the gallery page, usage: { in: 2000, out: 200, turns: 4 } }
+      result: { status: ok, summary: built the gallery page, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
 `
 
 func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {

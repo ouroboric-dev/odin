@@ -39,7 +39,7 @@ func loopProject(t *testing.T, script, caps string) (dir, config, realm string) 
 const implementOnce = `steps:
   build:
     - actions: [ { write: { path: build.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built it, usage: { in: 2000, out: 400, turns: 5 } }
+      result: { status: ok, summary: built it, usage: { in: 2000, out: 400, turns: 5 }, output: '{"summary": "done"}' }
 `
 
 // The exit criterion: a malformed reviewer output stops the loop. Nothing counts it as a pass, an
@@ -83,9 +83,9 @@ func TestARunThatHitsACapStopsResumableAndGoesOnWhenTheCapIsRaised(t *testing.T)
 	script := `steps:
   build:
     - actions: [ { write: { path: build.txt, content: "todo\n" } } ]
-      result: { status: ok, usage: { in: 2000, out: 400, turns: 5 } }
+      result: { status: ok, usage: { in: 2000, out: 400, turns: 5 }, output: '{"summary": "done"}' }
     - actions: [ { write: { path: build.txt, content: "done\n" } } ]
-      result: { status: ok, usage: { in: 2000, out: 400, turns: 5 } }
+      result: { status: ok, usage: { in: 2000, out: 400, turns: 5 }, output: '{"summary": "done"}' }
   build-spec:    [ { result: { status: ok, report: [] } } ]
   build-quality: [ { result: { status: ok, report: [] } } ]
 `
@@ -124,11 +124,11 @@ func TestAFindingClosesOnlyWhenItsSourceConfirmsItWithProof(t *testing.T) {
 	script := `steps:
   build:
     - actions: [ { write: { path: build.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built it }
+      result: { status: ok, summary: built it, output: '{"summary": "done"}' }
     - actions: [ { write: { path: build.txt, content: "done done\n" } } ]
-      result: { status: ok, summary: "I fixed spec-1; it is closed." }
+      result: { status: ok, summary: "I fixed spec-1; it is closed.", output: '{"summary": "done"}' }
     - actions: [ { write: { path: build.txt, content: "done done\n" } } ]
-      result: { status: ok, summary: "spec-1 is fixed, really." }
+      result: { status: ok, summary: "spec-1 is fixed, really.", output: '{"summary": "done"}' }
   build-spec:
     - result: { status: ok, report: [ ` + major + ` ] }
     - result: { status: ok, report: [ ` + major + ` ] }

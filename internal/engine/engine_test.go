@@ -90,7 +90,7 @@ func ledgerText(t *testing.T, r *run.Run) string {
 const okScript = `steps:
   a:
     - actions: [ { write: { path: out.txt, content: "done\n" } } ]
-      result: { status: ok, summary: wrote out.txt, usage: { in: 100, out: 10, cache: 5, turns: 2, cost_usd: 0.5 } }
+      result: { status: ok, summary: wrote out.txt, usage: { in: 100, out: 10, cache: 5, turns: 2, cost_usd: 0.5 }, output: '{"summary": "done"}' }
 `
 
 func TestAgentAndExecNodesRunInOrder(t *testing.T) {
@@ -113,7 +113,7 @@ func TestAgentAndExecNodesRunInOrder(t *testing.T) {
 }
 
 func TestAFailedNodeStopsTheRunAndResumeRerunsIt(t *testing.T) {
-	script := "steps:\n  a:\n    - result: { status: failed, summary: tests fail }\n    - result: { status: ok, summary: fixed }\n"
+	script := "steps:\n  a:\n    - result: { status: failed, summary: tests fail }\n    - result: { status: ok, summary: fixed, output: '{\"summary\": \"done\"}' }\n"
 	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n", script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "tests fail") {
@@ -128,7 +128,7 @@ func TestAFailedNodeStopsTheRunAndResumeRerunsIt(t *testing.T) {
 }
 
 func TestAMalformedAgentResultIsAFailureNotAPass(t *testing.T) {
-	script := "steps:\n  a:\n    - result: { status: ok, usage: { turns: -1 } }\n"
+	script := "steps:\n  a:\n    - result: { status: ok, usage: { turns: -1 }, output: '{\"summary\": \"done\"}' }\n"
 	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n", script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed {
@@ -193,7 +193,7 @@ func must(b []byte, err error) []byte {
 }
 
 func TestAnInterruptedAgentCountsItsAttempt(t *testing.T) {
-	script := "steps:\n  a:\n    - hang: true\n    - result: { status: ok, summary: done }\n"
+	script := "steps:\n  a:\n    - hang: true\n    - result: { status: ok, summary: done, output: '{\"summary\": \"done\"}' }\n"
 	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n", script)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()

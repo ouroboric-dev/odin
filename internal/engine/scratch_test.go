@@ -18,8 +18,8 @@ import (
 const scratchNode = "  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n"
 
 const designScript = "steps:\n  design:\n    - actions:\n        - write: { path: out/docs/design.md, content: \"# Design\\n\" }\n        - write: { path: docs/input.md, content: \"changed in the copy\\n\" }\n" +
-	"      result: { status: ok, summary: wrote the design }\n" +
-	"    - actions: [ { write: { path: out/docs/other.md, content: \"# Other\\n\" } } ]\n      result: { status: ok, summary: wrote another design }\n"
+	"      result: { status: ok, summary: wrote the design, output: '{\"summary\": \"done\"}' }\n" +
+	"    - actions: [ { write: { path: out/docs/other.md, content: \"# Other\\n\" } } ]\n      result: { status: ok, summary: wrote another design, output: '{\"summary\": \"done\"}' }\n"
 
 // withInputs writes the project files a scratch agent is given copies of.
 func withInputs(t *testing.T, r *run.Run) {
@@ -122,7 +122,7 @@ func TestAnInputThatCouldLeadOutOfTheProjectIsRefused(t *testing.T) {
 
 func TestAScratchAgentRunsInAScratchSandboxWithNoGitDir(t *testing.T) {
 	r, fake := startSandboxedWith(t, scratchNode,
-		"steps:\n  design:\n    - actions:\n        - write: { path: out/design.md, content: \"# Design\\n\" }\n        - run: { argv: [sh, -c, \"echo ok > ran-in-sandbox.txt\"] }\n      result: { status: ok, summary: wrote }\n", run.Hooks{})
+		"steps:\n  design:\n    - actions:\n        - write: { path: out/design.md, content: \"# Design\\n\" }\n        - run: { argv: [sh, -c, \"echo ok > ran-in-sandbox.txt\"] }\n      result: { status: ok, summary: wrote, output: '{\"summary\": \"done\"}' }\n", run.Hooks{})
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -153,7 +153,7 @@ func TestARetryOfAScratchAgentReseedsTheWorkspaceItsSandboxMounts(t *testing.T) 
 	// fresh copy in that same folder, not in a new one the container doesn't see (review I-3).
 	script := "steps:\n  design:\n" +
 		"    - actions:\n        - write: { path: out/first.md, content: \"# First\\n\" }\n        - run: { argv: [sh, -c, \"echo 1 > try.txt\"] }\n      error: the CLI crashed\n      kind: transient\n" +
-		"    - actions:\n        - run: { argv: [sh, -c, \"echo 2 > try.txt\"] }\n        - write: { path: out/design.md, content: \"# Design\\n\" }\n      result: { status: ok, summary: wrote }\n"
+		"    - actions:\n        - run: { argv: [sh, -c, \"echo 2 > try.txt\"] }\n        - write: { path: out/design.md, content: \"# Design\\n\" }\n      result: { status: ok, summary: wrote, output: '{\"summary\": \"done\"}' }\n"
 	w := &waits{}
 	h := hooks(w)
 	r, fake := startSandboxedWith(t, scratchNode, script, h)

@@ -28,8 +28,8 @@ func raiseCap(t *testing.T, r *run.Run, from, to string) *run.Run {
 }
 
 func TestACapBetweenTwoAttemptsStopsTheRunAndTheSameAttemptGoesOnWhenItIsRaised(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 } }\n" +
-		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 } }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{mode: "unattended", pack: unitCheck, nodes: loopNode, script: script, budget: caps(110, 100, 200000, 200)})
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateBudgetCap {
@@ -55,7 +55,7 @@ func TestACapBetweenTwoAttemptsStopsTheRunAndTheSameAttemptGoesOnWhenItIsRaised(
 }
 
 func TestACapBeforeAReviewerStopsAtTheLadderAndAResumeDoesNotRunTheImplementerAgain(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 } }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: reviewLoop, script: script, budget: caps(110, 100, 200000, 200)})
 	out, err := Advance(context.Background(), r)
@@ -73,7 +73,7 @@ func TestACapBeforeAReviewerStopsAtTheLadderAndAResumeDoesNotRunTheImplementerAg
 }
 
 func TestAQuotaUsedUpInTheMiddleOfTheLadderPausesTheRunAndTheLadderRunsAgain(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - { error: \"usage limit reached\", kind: quota, usage: { in: 30, out: 3, turns: 1 } }\n    - result: { status: ok, report: [] }\n"
 	r := startReview(t, "key-points", script)
 	out, err := Advance(context.Background(), r)
@@ -87,7 +87,7 @@ func TestAQuotaUsedUpInTheMiddleOfTheLadderPausesTheRunAndTheLadderRunsAgain(t *
 }
 
 func TestATransientFailureOfAReviewerIsRetriedWithoutUsingAnAttempt(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - { error: \"HTTP 529 overloaded\", kind: transient }\n    - result: { status: ok, report: [] }\n"
 	w := &waits{}
 	r := startWith(t, setup{pack: unitCheck, nodes: reviewLoop, script: script, hooks: hooks(w)})
@@ -97,9 +97,9 @@ func TestATransientFailureOfAReviewerIsRetriedWithoutUsingAnAttempt(t *testing.T
 }
 
 func TestARunInterruptedInAnAttemptResumesThatAttemptWithTheFindings(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"    - actions: [ " + write("half.txt", "half a thought") + " ]\n      hang: true\n" +
-		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n"
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r := startLoop(t, "key-points", script)
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
@@ -124,7 +124,7 @@ func TestARunInterruptedInAnAttemptResumesThatAttemptWithTheFindings(t *testing.
 
 func TestACheckThatPlantsARepositoryInTheLeafStopsTheRunAtPolicyViolationAndTheLoopDoesNotGoOn(t *testing.T) {
 	pack := "checks:\n  unit: [sh, -c, \"mkdir -p vendor/x/.git && grep -q done build.txt\"]\n"
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{mode: "unattended", pack: pack, nodes: loopNode, script: script})
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
@@ -145,8 +145,8 @@ func TestACheckThatPlantsARepositoryInTheLeafStopsTheRunAtPolicyViolationAndTheL
 
 // Review I5: a stop for a cap before the implementer's session doesn't log the attempt as started.
 func TestACapBetweenTwoAttemptsLogsTheAttemptStartOnce(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 } }\n" +
-		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 } }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{mode: "unattended", pack: unitCheck, nodes: loopNode, script: script, budget: caps(110, 100, 200000, 200)})
 	if out, err := Advance(context.Background(), r); err != nil || r.State.PendingGate != gungnir.GateBudgetCap {
 		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at budget-cap in attempt 2", out, err, r.State.PendingGate)

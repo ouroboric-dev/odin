@@ -17,7 +17,7 @@ import (
 // review loop, so the loop's base is the commit after the template.
 const templateThenReviewLoop = "  - { id: tmpl, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n" + reviewLoop
 
-const templateStep = "  tmpl:\n    - actions: [ " + `{ write: { path: template.txt, content: "from the template\n" } }` + " ]\n      result: { status: ok }\n"
+const templateStep = "  tmpl:\n    - actions: [ " + `{ write: { path: template.txt, content: "from the template\n" } }` + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 
 func changeSection(t *testing.T, prompt string) string {
 	t.Helper()
@@ -30,7 +30,7 @@ func changeSection(t *testing.T, prompt string) string {
 
 func TestAReviewerSeesTheTasksDiffAndNotTheTemplates(t *testing.T) {
 	script := "steps:\n" + templateStep +
-		"  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+		"  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: templateThenReviewLoop, script: script})
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -53,8 +53,8 @@ func TestAReviewerSeesTheTasksDiffAndNotTheTemplates(t *testing.T) {
 
 func TestTheChangeStartsAtTheLoopsBaseAcrossAResume(t *testing.T) {
 	script := "steps:\n" + templateStep +
-		"  build:\n    - actions: [ " + write("first.txt", "one") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 } }\n" +
-		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 } }\n" +
+		"  build:\n    - actions: [ " + write("first.txt", "one") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { in: 100, out: 10, turns: 2 }, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{mode: "unattended", pack: unitCheck, nodes: templateThenReviewLoop, script: script, budget: caps(110, 100, 200000, 200)})
 	out, err := Advance(context.Background(), r)
@@ -110,7 +110,7 @@ func leafConfig(t *testing.T, r *run.Run, conf string) {
 
 func oneReview(t *testing.T, actions string) *run.Run {
 	t.Helper()
-	script := "steps:\n  build:\n    - actions: [ " + actions + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + actions + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	return startReview(t, "key-points", script)
 }
@@ -228,7 +228,7 @@ func TestTheStatIsBounded(t *testing.T) {
 }
 
 func TestAFailedDiffDoesNotFailTheReview(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n  build-spec:\n    - result: { status: ok, report: [] }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startReview(t, "key-points", script)
 	node := schema.Node{Attempts: 3, Checks: []string{"unit"}, Reviewers: []schema.Reviewer{{ID: "spec"}}}
 	r.State.Loops["build"] = &run.LoopRecord{State: *jormungandr.NewState(loopConfig(node)), Base: strings.Repeat("0123456789", 4)}
@@ -271,7 +271,7 @@ func TestPieceNamesComeFromTheirHeaders(t *testing.T) {
 }
 
 func TestABinaryFileInTheChangeIsNamedNotShown(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + ", " + `{ write: { path: pic.bin, content: "a\u0000b\u0000c" } }` + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + ", " + `{ write: { path: pic.bin, content: "a\u0000b\u0000c" } }` + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startReview(t, "key-points", script)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -288,8 +288,8 @@ func TestOnlyTheTaskReviewersGetTheChange(t *testing.T) {
 	nodes := reviewLoop +
 		"  - { id: conformance, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true, input: [rejection], output: ygg.conformance/v1 }\n" +
 		"  - { id: reuse, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true, input: [rejection], output: ygg.implement/v1 }\n"
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
-		"  build-spec:\n    - result: { status: ok, report: [] }\n  conformance:\n    - result: { status: ok }\n  reuse:\n    - result: { status: ok }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"  build-spec:\n    - result: { status: ok, report: [] }\n  conformance:\n    - result: { status: ok, output: '{\"deviation\": false}' }\n  reuse:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)

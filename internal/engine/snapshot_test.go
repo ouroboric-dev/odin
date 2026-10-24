@@ -82,7 +82,7 @@ func TestAFailingAcceptanceCheckInTheSnapshotRefusesThePointerMove(t *testing.T)
 // snapshot, so an acceptance check can't depend on it and the snapshot stays small.
 func TestWhatALeafIgnoresIsNotInTheSnapshot(t *testing.T) {
 	script := "steps:\n  a:\n    - actions:\n        - write: { path: build.txt, content: \"done\\n\" }\n        - write: { path: .gitignore, content: \"ignored.txt\\n\" }\n" +
-		"        - write: { path: ignored.txt, content: \"build output\\n\" }\n      result: { status: ok, summary: built }\n"
+		"        - write: { path: ignored.txt, content: \"build output\\n\" }\n      result: { status: ok, summary: built, output: '{\"summary\": \"done\"}' }\n"
 	r, _ := startSandboxedPack(t, acceptancePack("[sh, -c, \"test -f repos/app/build.txt && test ! -e repos/app/ignored.txt\"]"), acceptanceNodes, script, run.Hooks{})
 	out, err := Advance(bg, r)
 	if err != nil || out.Status != run.StatusDone {

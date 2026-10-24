@@ -16,7 +16,7 @@ const publishNodes = "  - { id: design, kind: agent, role: planner, prompt: p.md
 	"  - { id: design-docs, kind: publish, from: design, to: docs }\n"
 
 const publishScript = "steps:\n  design:\n    - actions:\n        - write: { path: out/1-product/design.md, content: \"# Design\\n\" }\n        - write: { path: out/leaves.yaml, content: \"leaves: {}\\n\" }\n" +
-	"      result: { status: ok, summary: wrote the design }\n"
+	"      result: { status: ok, summary: wrote the design, output: '{\"summary\": \"done\"}' }\n"
 
 func headFiles(t *testing.T, dir string) string {
 	t.Helper()

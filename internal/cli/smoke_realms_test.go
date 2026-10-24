@@ -47,14 +47,18 @@ func indentBlock(s string) string {
 // The realms smoke run (v0-H13) with real agents has a fixed shape; this runs the same graph with
 // scripted agents that write exactly what the prompts ask for. If a prompt asked for a file that Odin
 // would refuse, the founder's run with real tokens would fail on it, and this test fails first.
+// planDone is the answer of the scripted planner, a ygg.plan/v1 document. The tasks node reads the tasks.md the
+// script writes, not this, until it reads the plan's typed output (typed-T18).
+const planDone = `{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}`
+
 func TestTheSmokeRealmsRunWithScriptedAgentsThatWriteWhatThePromptsAsk(t *testing.T) {
 	lead := filepath.Join(smokeRealms(t), "smoke-lead")
 	leaves := exactContent(t, filepath.Join(lead, "prompts", "spec.md"))
 	tasks := exactContent(t, filepath.Join(lead, "prompts", "plan.md"))
-	hello := "    - actions: [ { write: { path: hello.txt, content: \"hello from the factory\\n\" } } ]\n      result: { status: ok, summary: wrote hello.txt }\n"
+	hello := "    - actions: [ { write: { path: hello.txt, content: \"hello from the factory\\n\" } } ]\n      result: { status: ok, summary: wrote hello.txt, output: '{\"summary\": \"done\"}' }\n"
 	script := "steps:\n  spec:\n    - actions:\n        - write:\n            path: out/leaves.yaml\n            content: |\n" + indentBlock(leaves) +
-		"      result: { status: ok, summary: wrote the leaves file }\n  plan:\n    - actions:\n        - write:\n            path: out/plan/tasks.md\n            content: |\n" + indentBlock(tasks) +
-		"      result: { status: ok, summary: wrote the plan }\n  smoke-t1-implement:\n" + hello + "  smoke-t2-implement:\n" + hello
+		"      result: { status: ok, summary: wrote the leaves file, output: '{\"summary\": \"done\"}' }\n  plan:\n    - actions:\n        - write:\n            path: out/plan/tasks.md\n            content: |\n" + indentBlock(tasks) +
+		"      result: { status: ok, summary: wrote the plan, output: '" + planDone + "' }\n  smoke-t1-implement:\n" + hello + "  smoke-t2-implement:\n" + hello
 	scriptPath := filepath.Join(t.TempDir(), "smoke.yaml")
 	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 		t.Fatal(err)

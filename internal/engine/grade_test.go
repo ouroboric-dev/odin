@@ -89,7 +89,7 @@ const gradedNodes = buildNodes +
 	"  - { id: score, kind: grade }\n"
 
 const gradedScript = buildScript +
-	"  design:\n    - actions: [ { write: { path: out/design.md, content: \"# Design\\n\" } } ]\n      result: { status: ok, summary: designed }\n"
+	"  design:\n    - actions: [ { write: { path: out/design.md, content: \"# Design\\n\" } } ]\n      result: { status: ok, summary: designed, output: '{\"summary\": \"done\"}' }\n"
 
 // gradedLimits is the limits part of the grader block; a test changes it for one run.
 var gradedLimits = "  memory: 4g\n  cpus: 4\n"

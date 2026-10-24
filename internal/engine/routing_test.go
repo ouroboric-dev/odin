@@ -18,7 +18,7 @@ const goModScript = `steps:
     - actions:
         - write: { path: out.txt, content: "done\n" }
         - write: { path: go.mod, content: "module example.test/app\n\ngo 1.26\n\nrequire github.com/go-chi/chi/v5 v5.2.3\n" }
-      result: { status: ok, summary: wrote out.txt, usage: { in: 100, out: 10, cache: 5, turns: 2, cost_usd: 0.5 } }
+      result: { status: ok, summary: wrote out.txt, usage: { in: 100, out: 10, cache: 5, turns: 2, cost_usd: 0.5 }, output: '{"summary": "done"}' }
 `
 
 const shipNodes = build + "  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n" +

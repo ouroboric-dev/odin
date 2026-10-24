@@ -17,19 +17,22 @@ const conformanceNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.
 	"  - { id: spec-docs, kind: publish, from: spec, to: docs }\n"
 
 // verdictScript is a spec stage whose conformance reviewer answers with each of verdicts in turn (a verdict
-// is the whole text of out/conformance.json, or "" for no file at all).
+// is the reviewer's whole final answer, or "" for none at all).
 func verdictScript(verdicts ...string) string {
-	s := "steps:\n  spec:\n    - actions: [ { write: { path: out/specs/spec.md, content: \"# Spec\\n\" } } ]\n      result: { status: ok, summary: wrote the spec }\n" +
-		"    - actions: [ { write: { path: out/specs/spec.md, content: \"# Spec, revised\\n\" } } ]\n      result: { status: ok, summary: revised the spec }\n  conformance:\n"
+	s := "steps:\n  spec:\n    - actions: [ { write: { path: out/specs/spec.md, content: \"# Spec\\n\" } } ]\n      result: { status: ok, summary: wrote the spec, output: '" + specDone + "' }\n" +
+		"    - actions: [ { write: { path: out/specs/spec.md, content: \"# Spec, revised\\n\" } } ]\n      result: { status: ok, summary: revised the spec, output: '" + specDone + "' }\n  conformance:\n"
 	for _, v := range verdicts {
-		s += "    - "
+		s += "    - result: { status: ok, summary: checked the spec"
 		if v != "" {
-			s += "actions: [ { write: { path: out/conformance.json, content: '" + v + "' } } ]\n      "
+			s += ", output: '" + v + "'"
 		}
-		s += "result: { status: ok, summary: checked the spec }\n"
+		s += " }\n"
 	}
 	return s
 }
+
+// specDone is the answer of the test's spec writer, which declares ygg.implement/v1.
+const specDone = `{"summary": "wrote the spec"}`
 
 const (
 	noDeviation = `{"deviation": false}`
@@ -108,7 +111,7 @@ func TestARejectedSpecRunsTheConformanceReviewAgain(t *testing.T) {
 func TestAVerdictNobodyCanReadIsAskedForOnceMoreAndThenStopsTheRun(t *testing.T) {
 	for name, bad := range map[string]string{
 		"prose":                         "It conforms.",
-		"no file":                       "",
+		"no answer":                     "",
 		"a deviation with no amendment": `{"deviation": true}`,
 		"an unknown field":              `{"deviation": false, "ok": true}`,
 	} {
@@ -117,7 +120,7 @@ func TestAVerdictNobodyCanReadIsAskedForOnceMoreAndThenStopsTheRun(t *testing.T)
 		if err != nil || out.Status != run.StatusDone {
 			t.Fatalf("%s then a good verdict: Advance() = %+v, %v", name, out, err)
 		}
-		if !strings.Contains(promptOf(t, r, "conformance-2"), "Your answer could not be read") {
+		if !strings.Contains(promptOf(t, r, "conformance-2"), "Your answer could not be used") {
 			t.Errorf("%s: the second try was not told what was wrong", name)
 		}
 		r = start(t, "key-points", "", conformanceNodes, verdictScript(bad, bad))
@@ -140,5 +143,24 @@ func TestStepByStepModeStopsAtTheSpecGateEvenWithoutADeviation(t *testing.T) {
 	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "spec-gate-1.md"))
 	if !strings.Contains(string(gate), "The spec does not deviate from the design.") {
 		t.Errorf("the gate file lacks the verdict:\n%s", gate)
+	}
+}
+
+// A verdict that says the reviewer could not check the spec is no pass: the gate stops for a person, with the
+// reason, as for a deviation (ruling R14).
+func TestABlockedVerdictStopsTheSpecGateWithItsReason(t *testing.T) {
+	r := start(t, "unattended", "", conformanceNodes, verdictScript(`{"blocked": {"reason": "the spec has no data model section"}}`))
+	out, err := Advance(bg, r)
+	if err != nil || out.Status != run.StatusStopped || out.Gate != "spec-gate" {
+		t.Fatalf("Advance() = %+v, %v; want a stop at the spec gate", out, err)
+	}
+	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "spec-gate-1.md"))
+	for _, want := range []string{"could not check the spec", "the spec has no data model section"} {
+		if !strings.Contains(string(gate), want) {
+			t.Errorf("the gate file lacks %q:\n%s", want, gate)
+		}
+	}
+	if !strings.Contains(ledgerText(t, r), "blocked: the spec has no data model section") {
+		t.Error("the ledger's conformance_checked line does not say the verdict is blocked")
 	}
 }

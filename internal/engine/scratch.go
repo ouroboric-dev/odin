@@ -57,28 +57,14 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	if refusal := s.Refusals[n.ID]; refusal != "" {
 		text += "\n\n" + jormungandr.Refusal(refusal)
 	}
-	sp := sessionSpec{key: n.ID, role: n.Role, text: text, maxTurns: n.MaxTurns, maxTokens: n.MaxTokens, timeout: time.Duration(n.Timeout),
-		scratch: dir, reseed: func() error { _, err := seedScratch(r, n); return err }}
-	res, ev, err := session(ctx, r, sp)
+	// The session hands back one document of the node's contract, through the output channel: an output that
+	// does not validate is asked for once more, with the errors, and a second one fails the node. A gate reads a
+	// design-conformance verdict from there (spec §4.6).
+	sp := sessionSpec{key: n.ID, role: n.Role, text: text, output: schema.Contract(n.Output), maxTurns: n.MaxTurns, maxTokens: n.MaxTokens,
+		timeout: time.Duration(n.Timeout), scratch: dir, reseed: func() error { _, err := seedScratch(r, n); return err }}
+	res, ev, err := sessionForOutput(ctx, r, sp)
 	if err != nil {
 		return nodeError(err)
-	}
-	if isVerdictSource(r, n.ID) {
-		// The verdict gates the spec, so it has to be readable. An answer that is not is asked for once
-		// more, from a fresh workspace and with the reason; a second one stops the run (spec §4.6).
-		if _, rerr := readConformance(r, n.ID); rerr != nil {
-			if _, err := seedScratch(r, n); err != nil {
-				return &nodeFailure{err}
-			}
-			sp.text = text + "\n\n## Your answer could not be read\n\n" + rerr.Error() +
-				"\n\nWrite out/conformance.json again, as the instructions above say, and nothing else is read.\n"
-			if res, ev, err = session(ctx, r, sp); err != nil {
-				return nodeError(err)
-			}
-			if _, rerr = readConformance(r, n.ID); rerr != nil {
-				return &nodeFailure{fmt.Errorf("the design-conformance verdict of %s can't be read, after being asked twice: %w", n.ID, rerr)}
-			}
-		}
 	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
 	if err := r.Log(ev); err != nil {
