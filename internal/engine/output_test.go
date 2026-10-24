@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -79,7 +80,7 @@ func TestAnOutputComesThroughSubmitOrAsTheWholeAnswer(t *testing.T) {
 
 func TestAnInvalidOutputIsAskedForOnceMore(t *testing.T) {
 	const bad = `{"summary": "", "extra": 1}`
-	r := start(t, "key-points", "", outputNode, answers(false, "output: '"+bad+"'", `output: '{"summary": "fixed"}'`))
+	r := start(t, "key-points", "", outputNode, answers(false, "usage: { in: 123, out: 4, turns: 1 }, output: '"+bad+"'", `output: '{"summary": "fixed"}'`))
 	out, err := Advance(bg, r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -105,6 +106,14 @@ func TestAnInvalidOutputIsAskedForOnceMore(t *testing.T) {
 	if refused < 0 || repaired < refused {
 		t.Errorf("the ledger lacks output_refused, then output_repaired:\n%s", text)
 	}
+	for _, line := range strings.Split(text, "\n") {
+		switch {
+		case strings.Contains(line, `"event":"output_refused"`) && !strings.Contains(line, `"gen_ai.usage.input_tokens":123`):
+			t.Errorf("the refused session's usage is not on its output_refused line:\n%s", line)
+		case strings.Contains(line, `"event":"output_repaired"`) && !strings.Contains(line, `"ygg.note":"ygg.implement/v1"`):
+			t.Errorf("the output_repaired line does not name the contract:\n%s", line)
+		}
+	}
 	if doc, ref := kept(t, r, "a"); doc != `{"summary": "fixed"}` || ref.Attempt != 2 {
 		t.Errorf("kept %s as %+v; want the repaired answer of attempt 2", doc, ref)
 	}
@@ -127,6 +136,71 @@ func TestTwoInvalidOutputsFailTheNode(t *testing.T) {
 	}
 	if text := ledgerText(t, r); strings.Contains(text, `"event":"output_repaired"`) {
 		t.Errorf("the ledger says repaired:\n%s", text)
+	}
+	// The channel's own error is an agent failure, which the engine fails the node with.
+	r = start(t, "key-points", "", outputNode, answers(false, `output: '{"summary": ""}'`, `output: '{"summary": ""}'`))
+	sp := sessionSpec{key: "a", role: "planner", repo: "repos/app", text: "Do the work.", output: schema.ContractImplement}
+	var af *jormungandr.AgentFailure
+	if _, _, _, err := sessionWithOutput[schema.Implement](bg, r, sp); !errors.As(err, &af) {
+		t.Errorf("sessionWithOutput() = %v; want a *jormungandr.AgentFailure", err)
+	}
+}
+
+func TestASubmittedDocumentThatDoesNotValidateIsRepairedThoughTheAnswerHoldsAValidOne(t *testing.T) {
+	r := start(t, "key-points", "", outputNode, answers(true, `submitted: '{"summary": ""}', output: '{"summary": "in the answer"}'`,
+		`submitted: '{"summary": "repaired"}'`))
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if !strings.Contains(promptOf(t, r, "a-2"), "/summary") {
+		t.Errorf("the repair session was not told the submitted document's error:\n%s", promptOf(t, r, "a-2"))
+	}
+	if doc, _ := kept(t, r, "a"); doc != `{"summary": "repaired"}` {
+		t.Errorf("kept %s; the answer's text is not read when the session submitted", doc)
+	}
+}
+
+// padded is a valid ygg.implement/v1 document of exactly n bytes.
+func padded(n int) string {
+	const head, tail = `{"summary": "big"`, `}`
+	return head + strings.Repeat(" ", n-len(head)-len(tail)) + tail
+}
+
+func TestAnOutputOverOneMiBIsRefusedAndOneOfOneMiBIsKept(t *testing.T) {
+	r := start(t, "key-points", "", outputNode, answers(true, "submitted: '"+padded(1<<20+1)+"'", `submitted: '{"summary": "shorter"}'`))
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if got := promptOf(t, r, "a-2"); !strings.Contains(got, "the output is 1048577 bytes, over 1048576") {
+		t.Errorf("the repair session was not told the output is too large:\n%s", got[len(got)-min(len(got), 2000):])
+	}
+	if doc, _ := kept(t, r, "a"); doc != `{"summary": "shorter"}` {
+		t.Errorf("kept %.40s…; want the repaired output", doc)
+	}
+	r = start(t, "key-points", "", outputNode, answers(true, "submitted: '"+padded(1<<20)+"'"))
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("one of exactly 1 MiB: Advance() = %+v, %v", out, err)
+	}
+	if doc, _ := kept(t, r, "a"); len(doc) != 1<<20 {
+		t.Errorf("kept %d bytes; want the whole 1 MiB", len(doc))
+	}
+	if _, err := loadOutput[schema.Implement](r, "a"); err != nil {
+		t.Errorf("loadOutput of 1 MiB = %v", err)
+	}
+}
+
+// A transient failure of the repair session is retried, and the retry starts from the work the first session did:
+// the repair asks only for the answer again.
+func TestARetryOfTheRepairSessionKeepsTheFirstSessionsWork(t *testing.T) {
+	script := "steps:\n  a:\n    - actions: [ " + write("work.txt", "the work") + " ]\n      result: { status: ok, output: '{\"summary\": \"\"}' }\n" +
+		"    - { error: rate limited, kind: transient }\n" +
+		"    - result: { status: ok, output: '{\"summary\": \"repaired\"}' }\n"
+	r := startWith(t, setup{nodes: outputNode, script: script, hooks: hooks(&waits{})})
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(r.RepoDir("repos/app"), "work.txt")); err != nil || string(b) != "the work\n" {
+		t.Errorf("work.txt = %q, %v; the retry of the repair discarded the first session's work", b, err)
 	}
 }
 

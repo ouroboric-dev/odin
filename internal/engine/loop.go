@@ -153,7 +153,7 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 	if len(res.Submitted) == 0 && strings.TrimSpace(res.Output) == "" {
 		return schema.Implement{Summary: res.Summary}, nil
 	}
-	ans, _, err := readOutput[schema.Implement](r, n.ID, schema.ContractImplement, res)
+	ans, _, err := readOutput[schema.Implement](r, n.Role, schema.ContractImplement, res)
 	if err != nil {
 		return schema.Implement{}, &jormungandr.AgentFailure{Reason: "the answer can't be used: " + err.Error()}
 	}
@@ -233,7 +233,7 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if change != "" {
 		text += "\n\n" + change
 	}
-	request, err := jormungandr.ReviewRequest(rv.ID, open, passed, submits(r, n.SessionKey(rv)))
+	request, err := jormungandr.ReviewRequest(rv.ID, open, passed, submits(r, rv.Role))
 	if err != nil {
 		return schema.Review{}, err
 	}
@@ -252,7 +252,7 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if err := r.Log(ev); err != nil {
 		return schema.Review{}, err
 	}
-	report, _, err := readOutput[schema.Review](r, sp.key, schema.ContractReview, res)
+	report, _, err := readOutput[schema.Review](r, rv.Role, schema.ContractReview, res)
 	if err != nil {
 		return schema.Review{}, &jormungandr.UnreadableError{Reviewer: rv.ID, Err: err}
 	}

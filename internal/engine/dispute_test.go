@@ -162,3 +162,16 @@ func TestADisputeOfAFindingThatIsNotOpenIsIgnoredWithALedgerLine(t *testing.T) {
 		t.Errorf("the ledger lacks a line for the ignored dispute:\n%s", text)
 	}
 }
+
+// A malformed dispute makes the implementer's answer no ygg.implement/v1 document: the attempt is an agent failure,
+// and the next attempt is told why. Nothing is ignored silently (typed-T15).
+func TestAMalformedDisputeIsAnAgentFailure(t *testing.T) {
+	r := startDispute(t, disputeScript(`'{"summary": "disputed", "disputes": [{"id": "spec-1"}]}'`, 3))
+	Advance(context.Background(), r) //nolint:errcheck // the run's end is not what this test reads
+	if got := transcript(t, r, "build-3"); !strings.Contains(got, "the answer can't be used") || !strings.Contains(got, "/disputes/0") {
+		t.Errorf("the third attempt was not told the second answer could not be used:\n%s", got)
+	}
+	if text := ledgerText(t, r); strings.Contains(text, `"event":"dispute_ignored"`) {
+		t.Errorf("a malformed dispute was read and ignored:\n%s", text)
+	}
+}

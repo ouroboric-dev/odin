@@ -17,22 +17,30 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-// maxKeptOutput is the most bytes of a kept output Odin reads back: the bound of a submitted draft (ygg-submit),
-// far above a plan's 1 MiB.
-const maxKeptOutput = 4 << 20
+// maxOutput is the most bytes of an agent's output Odin reads, from the submit tool or as the whole answer, and
+// reads back once kept: the bound of the largest output, a plan (rulings R11, R34).
+const maxOutput = 1 << 20
 
 // The output channel (change typed-boundaries, design §3): every agent session hands back one document of its
 // contract, through the submit tool or as its strict whole answer. Odin validates it, asks once more with the
 // errors when it does not validate, and keeps the document. Nothing is read out of prose.
 
-// readOutput reads the output of the session key, a document of contract c: the document it submitted, when
-// its adapter submits (gungnir.Submitter) and it did, read with Decode; otherwise its whole final answer, read
-// with DecodeAnswer, which takes one JSON document, bare or in one code fence, and nothing else. It returns the
-// document as it came. Odin validates a submitted document again: the tool helps the model, and is never trusted.
-func readOutput[T any](r *run.Run, key string, c schema.Contract, res gungnir.Result) (T, []byte, error) {
-	if len(res.Submitted) > 0 && submits(r, key) {
+// readOutput reads the output of a session of role, a document of contract c: the document it submitted, when
+// the role's adapter submits (gungnir.Submitter) and it did, read with Decode; otherwise its whole final answer,
+// read with DecodeAnswer, which takes one JSON document, bare or in one code fence, and nothing else. It returns
+// the document as it came. Odin validates a submitted document again: the tool helps the model, and is never
+// trusted. An output over maxOutput is refused unread, with an error the model can act on.
+func readOutput[T any](r *run.Run, role string, c schema.Contract, res gungnir.Result) (T, []byte, error) {
+	var zero T
+	if len(res.Submitted) > 0 && submits(r, role) {
+		if err := withinCap(res.Submitted); err != nil {
+			return zero, nil, err
+		}
 		v, err := schema.Decode[T](c, res.Submitted)
 		return v, res.Submitted, err
+	}
+	if err := withinCap([]byte(res.Output)); err != nil {
+		return zero, nil, err
 	}
 	v, err := schema.DecodeAnswer[T](c, []byte(res.Output))
 	if err != nil {
@@ -52,36 +60,25 @@ func answerBody(answer string) []byte {
 	return []byte(s)
 }
 
-// submits reports whether the adapter of the session key hands its output back through the submit tool. key is
-// a node's id or the session key of a loop's reviewer.
-func submits(r *run.Run, key string) bool {
-	role, ok := sessionRole(r, key)
-	if !ok {
-		return false
+// withinCap refuses an output over maxOutput.
+func withinCap(data []byte) error {
+	if len(data) > maxOutput {
+		return fmt.Errorf("the output is %d bytes, over %d: hand back a shorter document, with long text cut down to what a later stage needs", len(data), maxOutput)
 	}
-	s, ok := r.Setup.Agents[role].(gungnir.Submitter)
-	return ok && s.Submits()
+	return nil
 }
 
-// sessionRole is the role whose sessions run under key.
-func sessionRole(r *run.Run, key string) (string, bool) {
-	for _, n := range r.Nodes() {
-		if n.ID == key {
-			return n.Role, true
-		}
-		for _, rv := range n.Reviewers {
-			if n.SessionKey(rv) == key {
-				return rv.Role, true
-			}
-		}
-	}
-	return "", false
+// submits reports whether the adapter of role hands its output back through the submit tool.
+func submits(r *run.Run, role string) bool {
+	s, ok := r.Setup.Agents[role].(gungnir.Submitter)
+	return ok && s.Submits()
 }
 
 // sessionWithOutput runs one session of sp, whose output is a document of sp.output, and reads it. An output
 // that does not validate is refused: the session is logged as output_refused, with its usage, and one more
 // session, a new one, gets the same prompt with the errors under "## Your answer could not be used". It works
-// where the first did, in the same workspace or leaf: the work stays, and only the answer is asked for again.
+// where the first did, in the same workspace or leaf: the work stays, and only the answer is asked for again; a
+// retry of it after a transient failure keeps the work too (sessionSpec.repair).
 // When it validates it is logged as output_repaired; when it does not, the node fails as an agent does. The
 // output that validated is kept (keepOutput). It returns the result and the event of the last session, which
 // the caller completes and logs, as it does for session.
@@ -95,7 +92,7 @@ func sessionWithOutput[T any](ctx context.Context, r *run.Run, sp sessionSpec) (
 	if err != nil {
 		return zero, res, ev, err
 	}
-	v, raw, rerr := readOutput[T](r, sp.key, sp.output, res)
+	v, raw, rerr := readOutput[T](r, sp.role, sp.output, res)
 	if rerr != nil {
 		refused := ev
 		refused.Name, refused.Result, refused.Note = gungnir.EventOutputRefused, fmt.Sprintf("the output is not a valid %s", sp.output), firstLine(rerr.Error())
@@ -103,11 +100,11 @@ func sessionWithOutput[T any](ctx context.Context, r *run.Run, sp sessionSpec) (
 			return zero, res, ev, err
 		}
 		repair := sp
-		repair.text = sp.text + "\n\n" + repairSection(sp.output, rerr)
+		repair.text, repair.repair = sp.text+"\n\n"+repairSection(sp.output, rerr), true
 		if res, ev, err = session(ctx, r, repair); err != nil {
 			return zero, res, ev, err
 		}
-		if v, raw, rerr = readOutput[T](r, sp.key, sp.output, res); rerr != nil {
+		if v, raw, rerr = readOutput[T](r, sp.role, sp.output, res); rerr != nil {
 			failure := &jormungandr.AgentFailure{Reason: fmt.Sprintf("the output of %s is not a valid %s, after being asked twice: %v", sp.key, sp.output, rerr)}
 			ev.Name, ev.Result = gungnir.EventNodeFailed, failure.Error()
 			if err := r.Log(ev); err != nil {
@@ -116,7 +113,7 @@ func sessionWithOutput[T any](ctx context.Context, r *run.Run, sp sessionSpec) (
 			return zero, res, ev, failure
 		}
 		if err := r.Log(gungnir.Event{Name: gungnir.EventOutputRepaired, Node: sp.key, Attempt: ev.Attempt, Role: sp.role,
-			Adapter: ev.Adapter, Model: ev.Model, Result: fmt.Sprintf("the output is a valid %s", sp.output)}); err != nil {
+			Adapter: ev.Adapter, Model: ev.Model, Result: fmt.Sprintf("the output is a valid %s", sp.output), Note: string(sp.output)}); err != nil {
 			return zero, res, ev, err
 		}
 	}
@@ -227,7 +224,7 @@ func loadOutput[T any](r *run.Run, node string) (T, error) {
 	if err != nil {
 		return zero, fmt.Errorf("the output of %s: %w", node, err)
 	}
-	data, err := readRegular(dir, filepath.Base(rel), st, maxKeptOutput)
+	data, err := readRegular(dir, filepath.Base(rel), st, maxOutput)
 	if err != nil {
 		return zero, fmt.Errorf("the output of %s: %w", node, err)
 	}

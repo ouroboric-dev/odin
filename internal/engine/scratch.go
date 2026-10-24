@@ -30,8 +30,7 @@ const (
 func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
 	dir := r.ScratchDir(n.ID)
-	present, err := seedScratch(r, n)
-	if err != nil {
+	if err := seedScratch(r, n); err != nil {
 		return &nodeFailure{err}
 	}
 	prompt, err := readPrompt(r.Setup, n.Realm, n.Prompt)
@@ -46,7 +45,7 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	if skillText != "" {
 		text += "\n\n" + skillText
 	}
-	text += "\n\n" + workspaceNote(r, present, n.Reviews)
+	text += "\n\n" + workspaceNote(r, n.Reviews)
 	if r.Setup.BriefText != "" {
 		text += "\n\n## Brief\n\n" + r.Setup.BriefText
 	}
@@ -61,7 +60,7 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 	// does not validate is asked for once more, with the errors, and a second one fails the node. A gate reads a
 	// design-conformance verdict from there (spec §4.6).
 	sp := sessionSpec{key: n.ID, role: n.Role, text: text, output: schema.Contract(n.Output), maxTurns: n.MaxTurns, maxTokens: n.MaxTokens,
-		timeout: time.Duration(n.Timeout), scratch: dir, reseed: func() error { _, err := seedScratch(r, n); return err }}
+		timeout: time.Duration(n.Timeout), scratch: dir, reseed: func() error { return seedScratch(r, n) }}
 	res, ev, err := sessionForOutput(ctx, r, sp)
 	if err != nil {
 		return nodeError(err)
@@ -77,14 +76,11 @@ func runScratch(ctx context.Context, r *run.Run, n schema.Node) error {
 }
 
 // workspaceNote tells the agent what its workspace holds and where its output goes.
-func workspaceNote(r *run.Run, present []string, reviews string) string {
+func workspaceNote(r *run.Run, reviews string) string {
 	var b strings.Builder
 	b.WriteString("## Your workspace\n\nYou work in the folder you start in. It is not a repository, and nothing in it is committed by you.\n")
 	if r.Setup.BriefText != "" {
 		b.WriteString("- brief.md is the brief, as you are given it below.\n")
-	}
-	for _, p := range present {
-		fmt.Fprintf(&b, "- %s is a copy of the project's file or folder of that name. Read it. What you change in it is ignored.\n", p)
 	}
 	if reviews != "" {
 		fmt.Fprintf(&b, "- reviewed/ holds the output of the node %s, which you review: what it wrote under its out/. Read it. What you change in it is ignored.\n", reviews)
@@ -94,39 +90,37 @@ func workspaceNote(r *run.Run, present []string, reviews string) string {
 	return b.String()
 }
 
-// seedScratch makes the workspace of node n anew: the brief, a copy of each input that exists in the
-// project, and an empty out/. A node that reviews another scratch agent also gets a copy of that agent's
-// out/ as reviewed/. It returns the inputs it copied. Everything in Odin's own folder is
-// replaced; nothing outside it is touched. The folder itself stays, emptied in place: the scratch sandbox
-// mounts it and stays up across a retry and a refusal sent back, and a folder made again would not be
-// the one its container sees (review I-3). An input that is, or holds, a symlink or anything but a
-// regular file is refused, since the workspace is a copy and must not lead out of the project.
-func seedScratch(r *run.Run, n schema.Node) (present []string, err error) {
+// seedScratch makes the workspace of node n anew: the brief and an empty out/. A node that reviews another
+// scratch agent also gets a copy of that agent's out/ as reviewed/, and a file there that is, or holds, a
+// symlink or anything but a regular file is refused. No project folder is copied in: a node's inputs are typed,
+// and reach its prompt (typed-T16). Everything in Odin's own folder is replaced; nothing outside it is touched.
+// The folder itself stays, emptied in place: the scratch sandbox mounts it and stays up across a retry and a
+// refusal sent back, and a folder made again would not be the one its container sees (review I-3).
+func seedScratch(r *run.Run, n schema.Node) error {
 	dir := r.ScratchDir(n.ID)
 	if err := emptyDir(dir); err != nil {
-		return nil, err
+		return err
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "out"), 0o755); err != nil {
-		return nil, err
+		return err
 	}
 	if r.Setup.BriefText != "" {
 		if err := os.WriteFile(filepath.Join(dir, "brief.md"), []byte(r.Setup.BriefText), 0o644); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	// The project's folders are no longer copied in: a node's inputs are typed, and reach its prompt (typed-T16).
 	b := &copyBudget{files: maxScratchFiles, bytes: maxScratchBytes}
 	if n.Reviews != "" {
 		// The output of the agent under review, as a copy: the reviewer reads it and cannot change it.
 		src := filepath.Join(r.ScratchDir(n.Reviews), "out")
 		if st, err := os.Lstat(src); err != nil || !st.IsDir() {
-			return nil, fmt.Errorf("node %s reviews %s, which has no output to review", n.ID, n.Reviews)
+			return fmt.Errorf("node %s reviews %s, which has no output to review", n.ID, n.Reviews)
 		}
 		if err := copyTree(src, src, filepath.Join(dir, "reviewed"), b); err != nil {
-			return nil, fmt.Errorf("the output of %s, which %s reviews: %w", n.Reviews, n.ID, err)
+			return fmt.Errorf("the output of %s, which %s reviews: %w", n.Reviews, n.ID, err)
 		}
 	}
-	return present, nil
+	return nil
 }
 
 // emptyDir removes everything in dir and keeps dir, so a mount of it stays valid. A dir that is not
