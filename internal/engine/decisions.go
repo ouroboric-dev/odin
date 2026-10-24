@@ -103,13 +103,22 @@ func uniqueKeys(dec *json.Decoder) error {
 	return err
 }
 
-// Note is the shorthand --note TEXT at the stop gate: a decisions file with one decision, note-<gate>. A blank note
-// gives nothing.
-func Note(gate, text string) schema.Decisions {
+// Note is the shorthand --note TEXT at the stop gate of run r: a decisions file with one decision under the next free
+// id, note-<gate>, then note-<gate>-2, note-<gate>-3 and on (ruling R47), so a gate met again after a back_to return
+// past it can take a new note. The same note again takes the id it has, and changes nothing. A blank note gives
+// nothing.
+func Note(r *run.Run, gate, text string) schema.Decisions {
 	if strings.TrimSpace(text) == "" {
 		return schema.Decisions{}
 	}
-	return schema.Decisions{Decisions: []schema.Decision{{ID: "note-" + gate, Text: text}}}
+	id := "note-" + gate
+	for i := 2; ; i++ {
+		if _, k, ok := keptDecision(r.State, id); !ok || k.Text == text {
+			break
+		}
+		id = fmt.Sprintf("note-%s-%d", gate, i)
+	}
+	return schema.Decisions{Decisions: []schema.Decision{{ID: id, Text: text}}}
 }
 
 // Reason is the shorthand --reason TEXT: a decisions file with only the reason.

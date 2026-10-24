@@ -78,11 +78,11 @@ func advanceTo(t *testing.T, r *run.Run, gate string) {
 func TestApprovalNoteReachesLaterStages(t *testing.T) {
 	r := start(t, "step-by-step", "", decisionNodes, decisionScript)
 	advanceTo(t, r, "design-gate")
-	if err := Approve(bg, r, "design-gate", Note("design-gate", "Use the warm palette.")); err != nil {
+	if err := Approve(bg, r, "design-gate", Note(r, "design-gate", "Use the warm palette.")); err != nil {
 		t.Fatal(err)
 	}
 	advanceTo(t, r, "spec-gate")
-	if err := Approve(bg, r, "spec-gate", Note("spec-gate", "Albums are private by default.")); err != nil {
+	if err := Approve(bg, r, "spec-gate", Note(r, "spec-gate", "Albums are private by default.")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
@@ -113,7 +113,7 @@ func TestBlockComesAfterTheBrief(t *testing.T) {
 	r := start(t, "step-by-step", "", strings.ReplaceAll(decisionNodes, "input: [decisions,", "input: [brief, decisions,"), decisionScript)
 	r.Setup.BriefText = "Build a gallery."
 	advanceTo(t, r, "design-gate")
-	if err := Approve(bg, r, "design-gate", Note("design-gate", "Warm.")); err != nil {
+	if err := Approve(bg, r, "design-gate", Note(r, "design-gate", "Warm.")); err != nil {
 		t.Fatal(err)
 	}
 	advanceTo(t, r, "spec-gate")
@@ -148,7 +148,7 @@ func TestNoteReachesLoopSessions(t *testing.T) {
 		"  build-arch:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{mode: "step-by-step", pack: unitCheck, nodes: decisionLoop, script: script})
 	advanceTo(t, r, "design-gate")
-	if err := Approve(bg, r, "design-gate", Note("design-gate", "Warm.")); err != nil {
+	if err := Approve(bg, r, "design-gate", Note(r, "design-gate", "Warm.")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
@@ -165,7 +165,7 @@ func TestApprovalWithoutANoteAddsNothing(t *testing.T) {
 	for _, note := range []string{"", "   "} {
 		r := start(t, "step-by-step", "", decisionNodes, decisionScript)
 		advanceTo(t, r, "design-gate")
-		if err := Approve(bg, r, "design-gate", Note("design-gate", note)); err != nil {
+		if err := Approve(bg, r, "design-gate", Note(r, "design-gate", note)); err != nil {
 			t.Fatal(err)
 		}
 		advanceTo(t, r, "spec-gate")
@@ -190,7 +190,7 @@ func TestOnlyAGateNoteIsADecision(t *testing.T) {
 	if r.State.PendingGate != gungnir.GateEscalation {
 		t.Fatalf("pending gate %s; want escalation", r.State.PendingGate)
 	}
-	if err := Approve(bg, r, "build", Note("build", "ship it as it is")); err != nil {
+	if err := Approve(bg, r, "build", Note(r, "build", "ship it as it is")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
@@ -210,7 +210,7 @@ func TestOnlyAGateNoteIsADecision(t *testing.T) {
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
 		t.Fatalf("Advance() = %+v, %v, gate %s", out, err, r.State.PendingGate)
 	}
-	if err := Approve(bg, r, "build", Note("build", "fine")); err != nil {
+	if err := Approve(bg, r, "build", Note(r, "build", "fine")); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.State.Decisions) != 0 || !strings.Contains(ledgerText(t, r), `\"text\":\"fine\"`) {
@@ -222,7 +222,7 @@ func TestOnlyAGateNoteIsADecision(t *testing.T) {
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateShrinkGuard {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if err := Approve(bg, r, "move", Note("move", "shrank on purpose")); err != nil {
+	if err := Approve(bg, r, "move", Note(r, "move", "shrank on purpose")); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.State.Decisions) != 0 || !strings.Contains(ledgerText(t, r), `\"text\":\"shrank on purpose\"`) {
@@ -302,7 +302,7 @@ func TestRejectionDropsTheNotesOfGatesItGoesBackPast(t *testing.T) {
 	back := strings.Replace(decisionNodes, "gate: spec, reruns: spec }", "gate: spec, reruns: design }", 1)
 	r := start(t, "step-by-step", "", back, decisionScript)
 	advanceTo(t, r, "design-gate")
-	if err := Approve(bg, r, "design-gate", Note("design-gate", "Warm.")); err != nil {
+	if err := Approve(bg, r, "design-gate", Note(r, "design-gate", "Warm.")); err != nil {
 		t.Fatal(err)
 	}
 	advanceTo(t, r, "spec-gate")
@@ -323,12 +323,12 @@ func TestRejectionDropsTheNotesOfGatesItGoesBackPast(t *testing.T) {
 	// A rejection back to a node after every gate keeps them all.
 	r = start(t, "step-by-step", "", decisionNodes, decisionScript)
 	advanceTo(t, r, "design-gate")
-	Approve(bg, r, "design-gate", Note("design-gate", "Warm."))
+	Approve(bg, r, "design-gate", Note(r, "design-gate", "Warm."))
 	advanceTo(t, r, "spec-gate")
 	if err := Reject(bg, r, "spec-gate", Reason("Name the users.")); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.State.Decisions) != 1 || !reflect.DeepEqual(r.State.Decisions[0], run.GateDecisions{Gate: "design-gate", Decisions: Note("design-gate", "Warm.")}) {
+	if len(r.State.Decisions) != 1 || !reflect.DeepEqual(r.State.Decisions[0], run.GateDecisions{Gate: "design-gate", Decisions: Note(r, "design-gate", "Warm.")}) {
 		t.Errorf("decisions = %+v; want the design gate's note kept", r.State.Decisions)
 	}
 	advanceTo(t, r, "spec-gate")
@@ -340,7 +340,7 @@ func TestRejectionDropsTheNotesOfGatesItGoesBackPast(t *testing.T) {
 func TestDecisionsSurviveAResume(t *testing.T) {
 	r := start(t, "step-by-step", "", decisionNodes, decisionScript)
 	advanceTo(t, r, "design-gate")
-	if err := Approve(bg, r, "design-gate", Note("design-gate", "Warm.")); err != nil {
+	if err := Approve(bg, r, "design-gate", Note(r, "design-gate", "Warm.")); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(r.Dir, "run.json"))
@@ -379,4 +379,42 @@ func parsedMarkdown(body []byte) (headings []string, html int) {
 		return ast.WalkContinue, nil
 	})
 	return headings, html
+}
+
+// Ruling R47: a --note takes the next free id, note-<gate>, then note-<gate>-2 and on, so a gate met again after a
+// back_to return past it can take a new note. Both are kept, and the spec cites each by its id.
+func TestANoteAtAGateMetAgainTakesTheNextFreeId(t *testing.T) {
+	nodes := "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [decisions, rejection, refusal], output: ygg.plan/v1 }\n" +
+		"  - { id: plan-gate, kind: gate, gate: design, reruns: plan }\n" +
+		"  - { id: ready, kind: tasks, from: plan, back_to: plan }\n" +
+		"  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [decisions, rejection, refusal], output: ygg.spec/v1 }\n"
+	bad := planOf(taskOf("p-T001", "repos/app", "L"))
+	good := planOf(taskOf("p-T001", "repos/app", "S"))
+	script := planScript(bad, good) + "  spec:\n    - result: { status: ok, summary: wrote the spec, output: '" + specCiting("note-plan-gate", "note-plan-gate-2") + "' }\n"
+	r := start(t, "key-points", "", nodes, script)
+	advanceTo(t, r, "plan-gate")
+	if err := Approve(bg, r, "plan-gate", Note(r, "plan-gate", "Warm.")); err != nil {
+		t.Fatal(err)
+	}
+	advanceTo(t, r, "plan-gate") // the plan was not ready: back to plan, and the gate is met again
+	if got := Note(r, "plan-gate", "Warm."); got.Decisions[0].ID != "note-plan-gate" {
+		t.Errorf("the same note again takes the id %s; want note-plan-gate, which it is", got.Decisions[0].ID)
+	}
+	if err := Approve(bg, r, "plan-gate", Note(r, "plan-gate", "Cold.")); err != nil {
+		t.Fatalf("Approve() with a new note at a gate met again = %v", err)
+	}
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v; want done: the spec cites both notes", out, err)
+	}
+	want := []run.GateDecisions{{Gate: "plan-gate", Decisions: schema.Decisions{Decisions: []schema.Decision{
+		{ID: "note-plan-gate", Text: "Warm."}, {ID: "note-plan-gate-2", Text: "Cold."}}}}}
+	if !reflect.DeepEqual(r.State.Decisions, want) {
+		t.Errorf("decisions = %+v; want both notes, each under its own id", r.State.Decisions)
+	}
+	if p := promptOf(t, r, "spec-1"); !strings.Contains(p, "- note-plan-gate (at plan-gate): Warm.\n- note-plan-gate-2 (at plan-gate): Cold.\n") {
+		t.Errorf("the spec's decisions input lacks both notes with their ids:\n%s", p)
+	}
+	if r.State.Attempts["spec"] != 1 {
+		t.Errorf("spec ran %d time(s); want 1: it cites both ids", r.State.Attempts["spec"])
+	}
 }

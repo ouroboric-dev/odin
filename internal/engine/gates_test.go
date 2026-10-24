@@ -68,10 +68,10 @@ func TestAnAutoPassStillWritesTheGateFile(t *testing.T) {
 func TestApproveMovesPastTheGate(t *testing.T) {
 	r := start(t, "step-by-step", "", gateNodes, gateScript)
 	Advance(context.Background(), r)
-	if err := Approve(context.Background(), r, "design-gate", Note("design-gate", "")); err == nil {
+	if err := Approve(context.Background(), r, "design-gate", Note(r, "design-gate", "")); err == nil {
 		t.Error("Approve() of a gate that isn't waiting succeeded")
 	}
-	if err := Approve(context.Background(), r, "spec-gate", Note("spec-gate", "looks right")); err != nil {
+	if err := Approve(context.Background(), r, "spec-gate", Note(r, "spec-gate", "looks right")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -162,7 +162,7 @@ func TestTheGatesShowTheOpenQuestionsAndTheReuseVerdict(t *testing.T) {
 			t.Errorf("the design gate lacks %q:\n%s", want, gf)
 		}
 	}
-	if err := Approve(bg, r, "design-gate", Note("design-gate", "")); err != nil {
+	if err := Approve(bg, r, "design-gate", Note(r, "design-gate", "")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Gate != "plan-gate" {

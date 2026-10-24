@@ -40,7 +40,7 @@ func TestACapBetweenTwoAttemptsStopsTheRunAndTheSameAttemptGoesOnWhenItIsRaised(
 		t.Errorf("loop state %+v, %d sessions; want attempt 2 not yet started, with the check's finding open", st, r.State.Attempts["build"])
 	}
 	r = raiseCap(t, r, "tokens: 110", "tokens: 1000")
-	if err := Approve(context.Background(), r, "build", Note("build", "raised it")); err != nil {
+	if err := Approve(context.Background(), r, "build", Note(r, "build", "raised it")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -66,7 +66,7 @@ func TestACapBeforeAReviewerStopsAtTheLadderAndAResumeDoesNotRunTheImplementerAg
 		t.Errorf("the loop is in phase %s, want ladder", got)
 	}
 	r = raiseCap(t, r, "tokens: 110", "tokens: 1000")
-	Approve(context.Background(), r, "build", Note("build", ""))
+	Approve(context.Background(), r, "build", Note(r, "build", ""))
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone || r.State.Attempts["build"] != 1 || r.State.Attempts["build-spec"] != 1 {
 		t.Errorf("Advance() = %+v, %v; implementer sessions %d, reviewer sessions %d; want done with 1 and 1", out, err, r.State.Attempts["build"], r.State.Attempts["build-spec"])
 	}
@@ -155,7 +155,7 @@ func TestACapBetweenTwoAttemptsLogsTheAttemptStartOnce(t *testing.T) {
 		t.Errorf("the ledger says attempt 2 started %d time(s) before its session could start", n)
 	}
 	r = raiseCap(t, r, "tokens: 110", "tokens: 1000")
-	if err := Approve(context.Background(), r, "build", Note("build", "raised it")); err != nil {
+	if err := Approve(context.Background(), r, "build", Note(r, "build", "raised it")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

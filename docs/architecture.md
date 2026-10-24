@@ -98,7 +98,8 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   `ygg approve RUN GATE --decisions FILE` and `ygg reject RUN GATE --decisions FILE` read a `ygg.decisions/v1` file
   (a regular file, never a symbolic link, at most 64 KiB, no key twice in one object): decisions under ids the operator chooses and keeps across
   runs, answers to this run's design's open questions by their ids, and for a rejection the reason, which it needs
-  and an approval may not hold. `--note TEXT` is shorthand for a file with one decision, `note-<gate>`, and
+  and an approval may not hold. `--note TEXT` is shorthand for a file with one decision under the next free id, `note-<gate>`, then
+  `note-<gate>-2` and on (ruling R47, so a gate met again can take a new note), and
   `--reason TEXT` for a file with only the reason; each is one line (the rule of `ygg-proof-run.sh`), and a file
   with a shorthand is refused. `Approve` and `Reject` check what is given before anything is recorded: the contract
   (unique decision ids, a note of at most 4 KiB); each answer names an open question of a design the run kept,

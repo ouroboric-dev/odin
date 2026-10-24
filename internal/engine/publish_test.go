@@ -252,7 +252,7 @@ func TestABlockedOutputStopsAtItsPublishForAPerson(t *testing.T) {
 
 			// The person answers: the stage runs again with the answer as its rejection, and a second blocked answer
 			// stops again.
-			if err := Approve(bg, r, docs, Note(docs, "Use an email and a password.")); err != nil {
+			if err := Approve(bg, r, docs, Note(r, docs, "Use an email and a password.")); err != nil {
 				t.Fatal(err)
 			}
 			stopped(2, "Still no way to sign in.")
@@ -261,7 +261,7 @@ func TestABlockedOutputStopsAtItsPublishForAPerson(t *testing.T) {
 			}
 
 			// With no note, the stage is told a person read the reason and sent it back.
-			if err := Approve(bg, r, docs, Note(docs, "")); err != nil {
+			if err := Approve(bg, r, docs, Note(r, docs, "")); err != nil {
 				t.Fatal(err)
 			}
 			if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
@@ -415,7 +415,7 @@ func TestASecretThatIsStillThereStopsThePublishAgain(t *testing.T) {
 	if out, err := Advance(bg, r); err != nil || out.Gate != "design-docs" {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if err := Approve(bg, r, "design-docs", Note("design-docs", "")); err != nil {
+	if err := Approve(bg, r, "design-docs", Note(r, "design-docs", "")); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Advance(bg, r)

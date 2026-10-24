@@ -81,7 +81,7 @@ func TestADeviationStopsTheSpecGateInEveryModeWithTheAmendment(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(r.Project, publishedSpec)); err == nil {
 			t.Errorf("%s: the spec was published before it was approved", mode)
 		}
-		if err := Approve(bg, r, "spec-gate", Note("spec-gate", "offline mode is in")); err != nil {
+		if err := Approve(bg, r, "spec-gate", Note(r, "spec-gate", "offline mode is in")); err != nil {
 			t.Fatal(err)
 		}
 		if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {

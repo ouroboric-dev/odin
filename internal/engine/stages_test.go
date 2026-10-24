@@ -207,7 +207,7 @@ func TestABlockedPlanStopsForAPerson(t *testing.T) {
 	stopped(1, "The brief names no way to sign in: an email and a password, or a passkey?")
 
 	// The person answers: the planner runs again, with the answer as its rejection; blocked again, it stops again.
-	if err := Approve(bg, r, "ready", Note("ready", "Use an email and a password.")); err != nil {
+	if err := Approve(bg, r, "ready", Note(r, "ready", "Use an email and a password.")); err != nil {
 		t.Fatal(err)
 	}
 	stopped(2, "Still no way to sign in.")
@@ -216,7 +216,7 @@ func TestABlockedPlanStopsForAPerson(t *testing.T) {
 	}
 
 	// With a blank note, the planner is told a person read the reason and sent it back.
-	if err := Approve(bg, r, "ready", Note("ready", "")); err != nil {
+	if err := Approve(bg, r, "ready", Note(r, "ready", "")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {

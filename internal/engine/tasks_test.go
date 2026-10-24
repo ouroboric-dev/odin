@@ -145,7 +145,7 @@ func TestThePlanIsTheOutputOdinKept(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.Dir, "outputs", "plan.json"), []byte(changed), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Approve(context.Background(), r, "plan-gate", Note("plan-gate", "")); err != nil {
+	if err := Approve(context.Background(), r, "plan-gate", Note(r, "plan-gate", "")); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Advance(context.Background(), r)

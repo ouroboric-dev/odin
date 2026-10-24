@@ -90,7 +90,7 @@ func TestOtherModesStopAtTheLoopThatGaveUp(t *testing.T) {
 					t.Fatal(err)
 				}
 				if out.Status == run.StatusStopped && strings.HasSuffix(out.Gate, "feature-gate") {
-					if err := Approve(context.Background(), r, out.Gate, Note(out.Gate, "")); err != nil {
+					if err := Approve(context.Background(), r, out.Gate, Note(r, out.Gate, "")); err != nil {
 						t.Fatal(err)
 					}
 					continue

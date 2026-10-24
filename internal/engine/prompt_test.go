@@ -111,7 +111,7 @@ func TestAMissingInputStopsBeforeTheSession(t *testing.T) {
 		"  b:\n    - result: { status: ok, summary: done, output: '{\"summary\": \"done\"}' }\n")
 	advanceTo(t, r, "a-gate")
 	delete(r.State.Outputs, "a")
-	if err := Approve(bg, r, "a-gate", Note("a-gate", "")); err != nil {
+	if err := Approve(bg, r, "a-gate", Note(r, "a-gate", "")); err != nil {
 		t.Fatal(err)
 	}
 	out, err = Advance(bg, r)

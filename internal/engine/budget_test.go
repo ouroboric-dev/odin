@@ -115,7 +115,7 @@ func TestApprovingBudgetCapDoesNotWaiveTheCapButRaisingItDoes(t *testing.T) {
 	if out, _ := Advance(context.Background(), r); out.Status != run.StatusStopped {
 		t.Fatalf("Advance() = %+v", out)
 	}
-	if err := Approve(context.Background(), r, "b", Note("b", "go on")); err != nil {
+	if err := Approve(context.Background(), r, "b", Note(r, "b", "go on")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateBudgetCap {
@@ -130,7 +130,7 @@ func TestApprovingBudgetCapDoesNotWaiveTheCapButRaisingItDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	r = reopen(t, r)
-	if err := Approve(context.Background(), r, "b", Note("b", "raised the cap")); err != nil {
+	if err := Approve(context.Background(), r, "b", Note(r, "b", "raised the cap")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -276,7 +276,7 @@ func TestASpendTheJournalCannotTakeStopsAtBudgetCapWithTheWorkSetAside(t *testin
 		t.Fatal(err)
 	}
 	r = reopen(t, r)
-	if err := Approve(context.Background(), r, "a", Note("a", "the journal is fixed")); err != nil {
+	if err := Approve(context.Background(), r, "a", Note(r, "a", "the journal is fixed")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

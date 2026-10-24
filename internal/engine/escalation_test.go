@@ -93,7 +93,7 @@ func TestApprovingAnExhaustedLoopGoesOnWithTheFindingsOpen(t *testing.T) {
 	script := neverPasses() + "  after:\n    - result: { status: ok, summary: went on, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})
 	Advance(context.Background(), r)
-	if err := Approve(context.Background(), r, "build", Note("build", "the check is too strict; ship it")); err != nil {
+	if err := Approve(context.Background(), r, "build", Note(r, "build", "the check is too strict; ship it")); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Advance(context.Background(), r)
@@ -134,7 +134,7 @@ func TestAMalformedReviewerOutputStopsTheLoopAndIsNeverAPass(t *testing.T) {
 	}
 	// Nobody can approve on the reviewer's behalf, and the refusal changes nothing.
 	before := ledgerText(t, r)
-	if err := Approve(context.Background(), r, "build", Note("build", "just go")); err == nil || !strings.Contains(err.Error(), "can't be read") {
+	if err := Approve(context.Background(), r, "build", Note(r, "build", "just go")); err == nil || !strings.Contains(err.Error(), "can't be read") {
 		t.Errorf("Approve() = %v, want a refusal", err)
 	}
 	if Approvable(r) || !Rejectable(r) || ledgerText(t, r) != before {
@@ -208,7 +208,7 @@ func TestAnEscalatedLoopSurvivesAReopenedRun(t *testing.T) {
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped {
 		t.Errorf("Advance() = %+v, %v; a resume of a stopped run reports its stop", out, err)
 	}
-	if err := Approve(context.Background(), r, "build", Note("build", "")); err != nil {
+	if err := Approve(context.Background(), r, "build", Note(r, "build", "")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

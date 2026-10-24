@@ -222,14 +222,14 @@ func (c *command) resume(args []string) int {
 
 // decide approves or rejects a run's pending stop with what the person gives: a decisions file (ygg.decisions/v1:
 // decisions under ids of their own, answers to the design's open questions, and for a rejection the reason), or its
-// shorthand, --note (a file with one decision, note-<gate>) or --reason (a file with only the reason). The file is
+// shorthand, --note (a file with one decision, under the next free id note-<gate>, note-<gate>-2, …) or --reason (a file with only the reason). The file is
 // read and checked before the run is opened, so a refused one changes nothing.
 func (c *command) decide(name string, args []string) int {
 	shorthand := map[string]string{"approve": "note", "reject": "reason"}[name]
 	f, pos, ok := c.parse(name, args, 2, func(fs *flag.FlagSet, f *flags) {
 		if name == "approve" {
 			fs.StringVar(&f.decisions, "decisions", "", "a ygg.decisions/v1 `file`: decisions under ids of your own, and answers to the design's open questions by their ids; not with --note")
-			fs.StringVar(&f.note, "note", "", "shorthand for a decisions file with one decision, note-<gate>, whose `text` is this one line")
+			fs.StringVar(&f.note, "note", "", "shorthand for a decisions file with one decision, whose `text` is this one line, under the next free id: note-<gate>, then note-<gate>-2, …")
 		} else {
 			fs.StringVar(&f.decisions, "decisions", "", "a ygg.decisions/v1 `file`: the reason, which a rejection needs, and decisions and answers as for approve; not with --reason")
 			fs.StringVar(&f.reason, "reason", "", "shorthand for a decisions file with only the reason, this one line of `text`: why the work goes back")
@@ -250,9 +250,7 @@ func (c *command) decide(name string, args []string) int {
 	case !singleLine(text):
 		return c.refuse(fmt.Errorf("--%s is one line of text, and this one has a control character or a line or paragraph separator; "+
 			"a decisions file (--decisions) holds text of more lines", shorthand))
-	case name == "approve":
-		d = engine.Note(pos[1], f.note)
-	default:
+	case name == "reject":
 		d = engine.Reason(f.reason)
 	}
 	r, code := c.open(f, pos[0])
@@ -260,6 +258,9 @@ func (c *command) decide(name string, args []string) int {
 		return code
 	}
 	defer r.Close()
+	if name == "approve" && !f.set["decisions"] {
+		d = engine.Note(r, pos[1], f.note) // its id is the next one free in the run (ruling R47)
+	}
 	var err error
 	if name == "approve" {
 		err = engine.Approve(c.ctx, r, pos[1], d)
