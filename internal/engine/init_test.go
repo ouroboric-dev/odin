@@ -278,7 +278,7 @@ func TestTheLeavesFileIsARegularFileWithinTheLimitForInitAndForTheTasksNode(t *t
 	r := initRun(t, galleryLeaves)
 	file := filepath.Join(r.Project, "docs", "leaves.yaml")
 	initNode := schema.Node{ID: "leaves", Kind: schema.KindInit, From: "docs/leaves.yaml"}
-	tasksNode := schema.Node{ID: "ready", Kind: schema.KindTasks, From: "tasks.md", Leaves: "docs/leaves.yaml"}
+	tasksNode := schema.Node{ID: "ready", Kind: schema.KindTasks, From: "plan", Leaves: "docs/leaves.yaml"}
 	check := func(name, want string) {
 		t.Helper()
 		_, ierr := readLeaves(r, initNode)

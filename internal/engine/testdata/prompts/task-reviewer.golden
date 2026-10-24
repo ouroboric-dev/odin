@@ -14,7 +14,7 @@ The test that proves it: repos/app/albums_test.go TestAlbumPhotos
 
 It builds on: gallery-T001 (already landed).
 
-### The text
+### What the plan says
 
 Add the route GET /albums/{id}/photos.
     ## Brief
@@ -22,7 +22,7 @@ It returns at most 50 photos; a `cursor` query parameter pages.
 
 ### The contract
 
-`````
+`````yaml
 openapi: 3.1.0
 paths:
   /albums/{id}/photos:

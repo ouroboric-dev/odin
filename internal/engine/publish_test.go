@@ -166,20 +166,6 @@ func TestPublishWritesTheJSONAndItsView(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(*leaves, spec.Leaves) {
 		t.Errorf("docs/leaves.yaml reads back as %+v, %v; want the spec's leaves %+v", leaves, err, spec.Leaves)
 	}
-	// Until the tasks node reads the plan's output (typed-T18), it reads tasks.md: the view holds every task.
-	fs, err := schema.ParseTasks("tasks.md", readProject(t, r, plans+"tasks.md"))
-	if err != nil || len(fs) != len(plan.Tasks) {
-		t.Fatalf("tasks.md parses as %+v, %v", fs, err)
-	}
-	for i, f := range schema.FeaturesFromPlan(plan) {
-		f.Text, f.Contract, f.Line = "", "", fs[i].Line
-		if len(f.DependsOn) == 0 && len(fs[i].DependsOn) == 0 {
-			f.DependsOn = fs[i].DependsOn // none is none, a nil list or an empty one
-		}
-		if !reflect.DeepEqual(fs[i], f) {
-			t.Errorf("tasks.md gives task %+v, want %+v", fs[i], f)
-		}
-	}
 	if text := ledgerText(t, r); !strings.Contains(text, `"event":"docs_published"`) || !strings.Contains(text, "2 file(s) under docs: "+designJSON) {
 		t.Errorf("the ledger lacks docs_published:\n%s", text)
 	}

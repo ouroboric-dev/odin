@@ -119,8 +119,8 @@ func tryRealms(t *testing.T, o realmsSetup) (*run.Run, error) {
 	return r, nil
 }
 
-// planStep is the session of the scratch planner that a task shape starts with, for a test that writes the
-// plan's tasks.md into the project itself.
+// planStep is the session of the scratch planner that a task shape starts with, for a test whose tasks do not
+// matter to it: planDone, one task in repos/app. A test that needs its own tasks gives the planner's step (withPlan).
 const planStep = "  plan:\n    - result: { status: ok, summary: planned, output: '" + planDone + "' }\n"
 
 // withPlanStep adds planStep to script when the nodes start with the scratch planner and the script has no

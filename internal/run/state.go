@@ -95,8 +95,8 @@ type State struct {
 	Warned          map[string]bool        `json:"warned,omitempty"`        // the budget warnings already given, so each comes once
 	Loops           map[string]*LoopRecord `json:"loops,omitempty"`         // loop node id: where its loop stands
 	Features        []schema.FeatureRecord `json:"features,omitempty"`      // the plan's tasks in the order they are built, once the tasks node has run
-	PlanSource      string                 `json:"plan_source,omitempty"`   // the tasks.md they came from, relative to the project
-	PlanSHA256      string                 `json:"plan_sha256,omitempty"`   // that file as Odin read it
+	PlanSource      string                 `json:"plan_source,omitempty"`   // the plan's kept output they came from (outputs/<node>.json), relative to the project
+	PlanSHA256      string                 `json:"plan_sha256,omitempty"`   // that output's SHA-256, as Odin kept it
 	Expanded        map[string]bool        `json:"expanded,omitempty"`      // foreach node ids already expanded into the nodes of each task
 	NewLeaves       map[string]bool        `json:"new_leaves,omitempty"`    // leaf paths this run's init creates: only these get the realm's template
 	Returns         map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node

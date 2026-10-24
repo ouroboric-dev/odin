@@ -43,7 +43,7 @@ func usedStep(node, file string) string {
 
 // A session line carries no task id; the metrics attribute it to its task by the node's slug prefix.
 func TestMetricsAttributeTheSessionsOfARealRunToTheirTasks(t *testing.T) {
-	r := galleryRun(t, "unattended", usedStep("p-t1-implement", "api.txt")+usedStep("p-t2-implement", "web.txt"))
+	r := galleryRun(t, "unattended", usedStep("p-t001-implement", "api.txt")+usedStep("p-t002-implement", "web.txt"))
 	if out, err := Advance(context.Background(), r); err != nil {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}

@@ -62,16 +62,15 @@ func inputHeadings(prompt string) []string {
 func TestAPromptHoldsEachDeclaredInput(t *testing.T) {
 	shape := strings.Replace(taskShape, "      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [rejection, refusal], output: ygg.implement/v1 }\n",
 		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md, input: [task, change], output: ygg.review/v1 } ], input: [rejection, refusal], output: ygg.implement/v1 }\n", 1)
-	script := "steps:\n" + writeStep("p-t1-implement", "api.txt") + "  p-t1-implement-spec:\n    - result: { status: ok, summary: no findings, output: '{\"findings\": []}' }\n"
-	r := startRealms(t, realmsSetup{nodes: shape, script: script,
+	script := "steps:\n" + writeStep("p-t001-implement", "api.txt") + "  p-t001-implement-spec:\n    - result: { status: ok, summary: no findings, output: '{\"findings\": []}' }\n"
+	r := startRealms(t, realmsSetup{nodes: shape, script: withPlan(planOf(taskOf("p-T001", "repos/api", "S")), script),
 		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")},
 		leaves: map[string]string{"repos/api": "helheim-go"}})
 	r.Setup.BriefText = "Build a gallery."
-	os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte("# Tasks\n\n"+taskMD("p-T1", "repos/api", "S", "nothing")), 0o644)
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	got := promptOf(t, r, "p-t1-implement-spec-1")
+	got := promptOf(t, r, "p-t001-implement-spec-1")
 	if h := inputHeadings(got); !slices.Equal(h, []string{"task", "change"}) {
 		t.Errorf("the reviewer's input sections are %v, want [task change], in that order:\n%s", h, got)
 	}
@@ -79,7 +78,7 @@ func TestAPromptHoldsEachDeclaredInput(t *testing.T) {
 	if !(task < change && change < answer) {
 		t.Errorf("the sections are out of order (task %d, change %d, answer %d):\n%s", task, change, answer, got)
 	}
-	for _, want := range []string{"p-T1: task p-T1", "You work in the leaf repos/api.", "+done", "api.txt"} {
+	for _, want := range []string{"p-T001: task p-T001", "You work in the leaf repos/api.", "+done", "api.txt"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the reviewer's prompt lacks %q:\n%s", want, got)
 		}
@@ -388,11 +387,11 @@ func TestATaskRendersItsContractWholeInAFenceItCannotClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	contract := r.State.Features[0].Contract
-	if !strings.Contains(got, "### The contract\n\n`````\n"+contract+"`````\n") {
-		t.Errorf("the contract is not whole in a fence of five backticks:\n%s", got)
+	if !strings.Contains(got, "### The contract\n\n`````yaml\n"+contract+"`````\n") {
+		t.Errorf("the contract is not whole in a yaml fence of five backticks:\n%s", got)
 	}
 	task := got[strings.Index(got, "## Input: task"):strings.Index(got, "## Input: change")]
-	if !strings.Contains(task, "### The contract") || !strings.Contains(task, "    ## Brief\nIt returns at most 50 photos") {
+	if !strings.Contains(task, "### The contract") || !strings.Contains(task, "### What the plan says\n\nAdd the route") || !strings.Contains(task, "    ## Brief\nIt returns at most 50 photos") {
 		t.Errorf("the task section lacks its contract, or its text can start a heading:\n%s", task)
 	}
 	if h := inputHeadings(got); !slices.Equal(h, rv.Input) {

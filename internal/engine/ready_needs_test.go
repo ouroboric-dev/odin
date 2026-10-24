@@ -2,8 +2,6 @@ package engine
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,16 +16,14 @@ const readyNodes = "  - { id: plan, kind: agent, role: planner, prompt: p.md, sc
 	initNode +
 	"  - { id: plan-gate, kind: gate, gate: plan }\n"
 
-const twoPlans = "steps:\n  plan:\n    - result: { status: ok, summary: planned, output: '" + planDone + "' }\n    - result: { status: ok, summary: planned again, output: '" + planDone + "' }\n"
+// twoPlans is a planner's two answers, each a ready plan for repos/api.
+var twoPlans = planScript(planOf(taskOf("p-T001", "repos/api", "S")), planOf(taskOf("p-T001", "repos/api", "S")))
 
-// readyRun starts a run of readyNodes with the leaves file and a ready plan for repos/api in the project.
+// readyRun starts a run of readyNodes with the leaves file in the project, whose planner plans for repos/api.
 func readyRun(t *testing.T, leaves string) *run.Run {
 	t.Helper()
 	r := startRealms(t, realmsSetup{nodes: readyNodes, script: twoPlans, realms: needyRealms()})
 	writeLeaves(t, r, leaves)
-	if err := os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte(readyPlan+taskMD("p-T1", "repos/api", "S", "nothing")), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	return r
 }
 

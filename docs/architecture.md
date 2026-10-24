@@ -55,9 +55,14 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   and the run stops at the hard approval point; approving runs the source node again with the findings (the rule
   and the place, never the text) as its `rejection`, and its new output is kept, published and scanned again. A
   publish node whose source declares no output, has no view, or takes no `rejection` is refused when the run
-  starts. `tasks` reads `tasks.md`, applies the Definition
-  of Ready and writes `features.json`; `init` creates the leaves the spec stage named from their realms'
-  templates and records the pins. Scratch sessions (the nodes marked `scratch: true`: the design, spec,
+  starts. `tasks` reads the plan node's kept output (`ygg.plan/v1`, as Odin validated it; nothing reads a `tasks.md`),
+  applies the Definition of Ready and writes `features.json` with every field of each task. A task that is not ready,
+  such as one whose text or contract is over its bound or whose contract is not OpenAPI, goes back to the planner as
+  its `refusal`; a blocked plan stops the run at `external-input` for a person, whose note at approval goes to the
+  planner as its `rejection`. The `task` input of every session of a task holds its title, layer, criteria, named
+  test and dependencies, then its text under "What the plan says" and its contract under "The contract", in a
+  `yaml` fence, whole: Odin never cuts a task's words (B-176). `init` creates the leaves the spec stage named from
+  their realms' templates and records the pins. Scratch sessions (the nodes marked `scratch: true`: the design, spec,
   plan and reuse-review stages and the conformance check) run in a Gleipnir sandbox on the factory layer,
   the stack every session shares, never on a realm's stack; the model APIs of their adapters are their
   only egress. A loop's implementers and reviewers are no scratch sessions: they run in the leaf's

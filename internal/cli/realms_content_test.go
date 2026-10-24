@@ -88,8 +88,7 @@ func copyBesideOdin(t *testing.T, store, name string) string {
 const leafReviewers = "  gallery-t%d-implement-spec-compliance:\n    - result: { status: ok, report: [] }\n  gallery-t%d-implement-simplicity:\n    - result: { status: ok, report: [] }\n" +
 	"  gallery-t%d-implement-quality:\n    - result: { status: ok, report: [] }\n"
 
-// planDone is the answer of the scripted planner, a ygg.plan/v1 document. The tasks node reads the tasks.md the
-// script writes, not this, until it reads the plan's typed output (typed-T18).
+// planDone is the answer of the scripted planner, a ygg.plan/v1 document: the plan the tasks node reads.
 const planDone = `{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}`
 
 const realScript = `steps:

@@ -258,6 +258,13 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 		if err := runAgainFrom(r, n.From); err != nil {
 			return err
 		}
+	case n.Kind == schema.KindTasks && s.PendingGate == gungnir.GateExternalInput:
+		// A blocked plan: the planner said what only a person can give, and the person's note is the answer. The
+		// planner runs again with it as its rejection.
+		s.Reasons[n.From] = note
+		if err := runAgainFrom(r, n.From); err != nil {
+			return err
+		}
 	case run.Quarantines(s.PendingGate) && n.Repo == "":
 		// A node that works in the project: nothing in a leaf to put back, and the node runs again.
 	case run.Quarantines(s.PendingGate):
@@ -398,6 +405,9 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 			"Approving runs %s again, the node whose output this is, with the findings above (the rule and the place, never the text) as its rejection: "+
 			"its agent writes the output again without the flagged text, and Odin keeps it, publishes it and scans it again. "+
 			"The stages before %s are kept. To drop the work, start a new run.\n", n.From, n.From, n.From)
+	case n.Kind == schema.KindTasks && h.gate == gungnir.GateExternalInput:
+		fmt.Fprintf(&b, "The planner, %s, says above what it needs that only a person can give. Give it in the note: approving runs %s again, "+
+			"with the note as its rejection, and the stages before %s are kept.\n", n.From, n.From, n.From)
 	case run.Quarantines(h.gate) && n.Repo == "":
 		fmt.Fprintf(&b, "Approving runs %s again.\n", n.ID)
 	case run.Quarantines(h.gate):
