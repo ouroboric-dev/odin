@@ -50,8 +50,8 @@ func TestDoctorChecksTheInstanceTree(t *testing.T) {
 }
 
 func TestDoctorWarnsWhenAPublicUmbrellaListsAPrivateChild(t *testing.T) {
-	root := treetest.Build(t, treetest.Node{Owner: "brunogbv", Visibility: gungnir.VisibilityPublic, Children: map[string]treetest.Node{
-		"projects/secret": {Owner: "brunogbv", Visibility: gungnir.VisibilityPrivate}}})
+	root := treetest.Build(t, treetest.Node{Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPublic, Children: map[string]treetest.Node{
+		"projects/secret": {Owner: "ouroboric-dev", Visibility: gungnir.VisibilityPrivate}}})
 	code, out, _ := ygg(t, "doctor", "--root", root)
 	if code != ExitDone || !strings.Contains(out, "WARN  tree: ") || !strings.Contains(out, "projects/secret") {
 		t.Errorf("doctor --root: exit %d:\n%s", code, out)
