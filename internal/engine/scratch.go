@@ -128,20 +128,8 @@ func seedScratch(r *run.Run, n schema.Node) (present []string, err error) {
 			return nil, err
 		}
 	}
+	// The project's folders are no longer copied in: a node's inputs are typed, and reach its prompt (typed-T16).
 	b := &copyBudget{files: maxScratchFiles, bytes: maxScratchBytes}
-	for _, in := range n.Inputs {
-		src := filepath.Join(r.Project, filepath.FromSlash(in))
-		if err := noSymlinks(r.Project, src); err != nil {
-			return nil, fmt.Errorf("input %s of %s: %w; the workspace holds copies of files and nothing that could lead out of the project", in, n.ID, err)
-		}
-		if _, err := os.Lstat(src); errors.Is(err, fs.ErrNotExist) {
-			continue // not written yet, such as the leaves file before the spec stage
-		}
-		if err := copyTree(r.Project, src, filepath.Join(dir, filepath.FromSlash(in)), b); err != nil {
-			return nil, fmt.Errorf("input %s of %s: %w", in, n.ID, err)
-		}
-		present = append(present, in)
-	}
 	if n.Reviews != "" {
 		// The output of the agent under review, as a copy: the reviewer reads it and cannot change it.
 		src := filepath.Join(r.ScratchDir(n.Reviews), "out")

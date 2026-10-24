@@ -136,7 +136,7 @@ func TestATaskDoneJustBeforeTasksThatAreSkippedIsStillDone(t *testing.T) {
 func TestATaskBlockedAfterItsMergeLandedPutsTheLeafsMainBackToWhereTheTaskFoundIt(t *testing.T) {
 	// The task's work passes its loop and lands on the leaf's main; the pointer's acceptance refuses it and
 	// sends it back, and the loop then gives up. Its work must not stay on main for a later task to build on.
-	shape := strings.Replace(taskShape, "realm: leaf, role: implementer }", "realm: leaf, role: implementer, attempts: 2 }", 1)
+	shape := strings.Replace(taskShape, "realm: leaf, role: implementer, input:", "realm: leaf, role: implementer, attempts: 2, input:", 1)
 	shape = strings.Replace(shape, "      - { id: move, kind: pointer, realm: leaf }\n", "      - { id: move, kind: pointer, realm: leaf, acceptance: [accept], back_to: implement }\n", 1)
 	lead := recipeRealm("midgard-react", "0.1.0", "web.txt", "Web implementer prompt.")
 	lead.pack = strings.Replace(lead.pack, "checks:\n", "checks:\n  accept: [sh, -c, \"test -f repos/web/never.txt\"]\n", 1)

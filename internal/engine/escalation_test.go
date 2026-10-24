@@ -89,7 +89,7 @@ func TestRejectingAnEscalatedLoopGivesItAFullSetOfAttemptsWithTheOperatorsGuidan
 }
 
 func TestApprovingAnExhaustedLoopGoesOnWithTheFindingsOpen(t *testing.T) {
-	nodes := loopNode + "  - { id: after, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	nodes := loopNode + "  - { id: after, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 	script := neverPasses() + "  after:\n    - result: { status: ok, summary: went on }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})
 	Advance(context.Background(), r)

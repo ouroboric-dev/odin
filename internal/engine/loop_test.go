@@ -10,7 +10,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-const loopNode = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, attempts: 3, checks: [unit] }\n"
+const loopNode = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, attempts: 3, checks: [unit], input: [rejection, refusal], output: ygg.implement/v1 }\n"
 const unitCheck = "checks:\n  unit: [grep, -q, done, build.txt]\n"
 
 func write(path, content string) string {

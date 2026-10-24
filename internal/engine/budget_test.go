@@ -16,7 +16,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-var twoNodes = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+var twoNodes = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 
 const spendScript = `steps:
   a:
@@ -172,7 +172,7 @@ func TestAJournalThatCannotBeReadStopsTheRun(t *testing.T) {
 }
 
 func TestASessionIsGivenOnlyTheTurnsTheCapsStillAllow(t *testing.T) {
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 50 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 2 }\n  - { id: c, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 50, input: [rejection], output: ygg.implement/v1 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 2, input: [rejection], output: ygg.implement/v1 }\n  - { id: c, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 	script := "steps:\n  a:\n    - result: { status: ok, usage: { turns: 3 } }\n  b:\n    - result: { status: ok }\n  c:\n    - result: { status: ok }\n"
 	r := startWith(t, setup{nodes: nodes, script: script, budget: caps(100000, 10, 200000, 200)})
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -202,7 +202,7 @@ func TestTheLedgerWarnsOnceWhenACapIsEightyPercentUsed(t *testing.T) {
   b: [ { result: { status: ok, usage: { in: 5, out: 0, turns: 1 } } } ]
   c: [ { result: { status: ok, usage: { in: 4, out: 0, turns: 1 } } } ]
 `
-	nodes := twoNodes + "  - { id: c, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	nodes := twoNodes + "  - { id: c, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 	r := startWith(t, setup{nodes: nodes, script: script, budget: caps(100, 100, 200000, 200)})
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)

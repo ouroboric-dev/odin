@@ -18,7 +18,7 @@ import (
 // at the pointer's new commit (the pointer's acceptance).
 const gateChecks = "checks:\n  unit: [test, -f, out.txt]\n  late: [test, -f, fixed.txt]\n  accept: [test, -f, repos/app/fixed.txt]\n"
 
-const loopOfBuild = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit] }\n"
+const loopOfBuild = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit], input: [rejection, refusal], output: ygg.implement/v1 }\n"
 
 // fixScript has the implementer write out.txt in attempt 1 and fixed.txt in the attempts after it.
 const fixScript = "steps:\n  build:\n" +
@@ -139,7 +139,7 @@ func checkNotSentBack(t *testing.T, r *run.Run, out Outcome, err error, want str
 	}
 }
 
-const sandboxedGate = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit] }\n" +
+const sandboxedGate = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit], input: [rejection, refusal], output: ygg.implement/v1 }\n" +
 	"  - { id: merge, kind: merge, repo: repos/app, checks: [junk], back_to: build }\n"
 
 const loopBuildScript = "steps:\n  build:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built }\n" +

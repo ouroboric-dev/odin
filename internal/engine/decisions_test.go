@@ -30,12 +30,12 @@ func sessionPrompt(t *testing.T, r *run.Run, name string) string {
 
 // A design stage, a spec stage with a conformance check, and a plan: three kinds of prompt (an agent in a
 // leaf, a scratch agent) after two gates.
-const decisionNodes = "  - { id: design, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n" +
+const decisionNodes = "  - { id: design, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n" +
 	"  - { id: design-gate, kind: gate, gate: spec, reruns: design }\n" +
-	"  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true }\n" +
-	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec }\n" +
+	"  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n" +
+	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [rejection], output: ygg.conformance/v1 }\n" +
 	"  - { id: spec-gate, kind: gate, gate: spec, reruns: spec }\n" +
-	"  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	"  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection, refusal], output: ygg.implement/v1 }\n"
 
 const decisionScript = `steps:
   design:
@@ -114,18 +114,20 @@ func TestBlockComesAfterTheBrief(t *testing.T) {
 	}
 }
 
-const decisionLoop = `  - { id: design, kind: agent, role: planner, prompt: p.md, repo: repos/app }
+const decisionLoop = `  - { id: design, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }
   - { id: design-gate, kind: gate, gate: spec, reruns: design }
   - id: build
     kind: loop
+    input: [rejection, refusal]
+    output: ygg.implement/v1
     repo: repos/app
     role: planner
     prompt: p.md
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: planner, prompt: p.md }
-      - { id: arch, role: planner, prompt: p.md }
+      - { id: spec, role: planner, prompt: p.md, output: ygg.review/v1 }
+      - { id: arch, role: planner, prompt: p.md, output: ygg.review/v1 }
 `
 
 func TestNoteReachesLoopSessions(t *testing.T) {
@@ -171,7 +173,7 @@ func TestOnlyAGateNoteIsADecision(t *testing.T) {
 		"    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok }\n" +
 		"    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok }\n" +
 		"  after:\n    - result: { status: ok }\n"
-	nodes := loopNode + "  - { id: after, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	nodes := loopNode + "  - { id: after, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 	r := startWith(t, setup{mode: "key-points", pack: unitCheck, nodes: nodes, script: script})
 	advanceTo(t, r, "build")
 	if r.State.PendingGate != gungnir.GateEscalation {

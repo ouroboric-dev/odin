@@ -12,7 +12,7 @@ import (
 const shape = `
 name: g
 version: 1.0.0
-schema: 1
+schema: 2
 nodes:
   - { id: before, kind: exec, run: [echo, before], repo: . }
   - id: tasks
@@ -21,10 +21,12 @@ nodes:
     nodes:
       - id: implement
         kind: loop
+        input: [rejection, refusal]
+        output: ygg.implement/v1
         realm: leaf
         role: implementer
         reviewers:
-          - { id: spec, role: reviewer, prompt: prompts/review-spec.md }
+          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, output: ygg.review/v1 }
       - { id: feature-gate, kind: gate, gate: feature }
       - { id: land, kind: merge, realm: leaf, back_to: implement }
       - { id: merge-gate, kind: gate, gate: merge }

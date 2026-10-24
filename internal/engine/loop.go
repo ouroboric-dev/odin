@@ -1,14 +1,9 @@
 package engine
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -90,16 +85,6 @@ type loopSteps struct {
 	st *jormungandr.State
 	// base is the leaf's commit when the loop started: the task's diff, which the reviewers read, starts there.
 	base string
-	// ran is how each check of the ladder ended in the attempt in progress: a dispute is decided on it.
-	// The ladder runs every check again after a resume, so nothing here needs saving.
-	ran map[string]checkRun
-}
-
-// checkRun is how one check ended: the attempt, whether it passed, and where its log is, under the run folder.
-type checkRun struct {
-	attempt int
-	passed  bool
-	rel     string
 }
 
 var _ jormungandr.Steps = (*loopSteps)(nil)
@@ -127,14 +112,14 @@ func (l *loopSteps) prompt(realm, file string, skillNames []string) (string, err
 }
 
 // Implement runs one implementer session with the findings that are open, and commits what it did. It
-// returns the session's whole final answer, where Jormungandr looks for the implementer's disputes.
-// A session that failed as an agent does leaves the leaf as the last attempt left it: what it wrote is
-// discarded, so the next attempt does not build on half a thought.
-func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.Input) (string, error) {
+// returns the implementer's answer as a ygg.implement/v1 document, which holds its disputes; an answer that
+// is not one is an agent failure. A session that failed as an agent does leaves the leaf as the last
+// attempt left it: what it wrote is discarded, so the next attempt does not build on half a thought.
+func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.Input) (schema.Implement, error) {
 	r, n := l.r, l.n
 	text, err := l.prompt(n.Realm, n.Prompt, n.Skills)
 	if err != nil {
-		return "", err
+		return schema.Implement{}, err
 	}
 	if block := taskBlock(r, n); block != "" {
 		text += "\n\n" + block
@@ -151,16 +136,32 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 		var af *jormungandr.AgentFailure
 		if errors.As(err, &af) {
 			if derr := r.DiscardWork(ctx, n.Repo); derr != nil {
-				return "", derr
+				return schema.Implement{}, derr
 			}
 		}
-		return "", err
+		return schema.Implement{}, err
 	}
 	if ev.Commit, err = checkpoint(ctx, r, n, attempt); err != nil {
-		return "", failCheckpoint(r, ev, err)
+		return schema.Implement{}, failCheckpoint(r, ev, err)
 	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
-	return res.Output, r.Log(ev)
+	if err := r.Log(ev); err != nil {
+		return schema.Implement{}, err
+	}
+	return implementAnswer(res)
+}
+
+// implementAnswer reads an implementer's final answer as a ygg.implement/v1 document. Until the loop's answers
+// come through the output channel, an empty answer stands for a summary and no disputes, as it did before.
+func implementAnswer(res gungnir.Result) (schema.Implement, error) {
+	if strings.TrimSpace(res.Output) == "" {
+		return schema.Implement{Summary: res.Summary}, nil
+	}
+	ans, err := schema.DecodeAnswer[schema.Implement](schema.ContractImplement, []byte(res.Output))
+	if err != nil {
+		return schema.Implement{}, &jormungandr.AgentFailure{Reason: "the answer can't be used: " + err.Error()}
+	}
+	return ans, nil
 }
 
 // Check runs one check of the ladder in the leaf, on the work the attempt committed, and puts the leaf
@@ -191,10 +192,6 @@ func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormun
 		}
 		return jormungandr.CheckOutcome{}, err
 	}
-	if l.ran == nil {
-		l.ran = map[string]checkRun{}
-	}
-	l.ran[name] = checkRun{attempt: attempt, passed: res.Passed, rel: filepath.ToSlash(rel)}
 	result := name + ": exit 0"
 	if !res.Passed {
 		result = fmt.Sprintf("%s: exit status %d", name, res.ExitCode)
@@ -206,18 +203,19 @@ func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormun
 		DurationMS: res.Duration.Milliseconds()}); err != nil {
 		return jormungandr.CheckOutcome{}, err
 	}
-	out := jormungandr.CheckOutcome{Passed: res.Passed, FindingID: checks.FindingID(name),
+	out := jormungandr.CheckOutcome{Passed: res.Passed, Check: name,
 		Proof: fmt.Sprintf("check %s ran in attempt %d and passed (%s)", name, attempt, filepath.ToSlash(rel))}
 	if f, failed := res.Finding(filepath.ToSlash(rel) + ":1"); failed {
-		out.Finding = f
+		out.Findings = []gungnir.Finding{f}
 	}
 	return out, nil
 }
 
-// Review runs one read-only reviewer on the committed work and returns its whole answer, which
-// Jormungandr reads. The reviewer is told what it reported before and which checks passed. Whatever
-// it changed in the leaf, an ignored file too, is a hard stop at policy-violation.
-func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, open []gungnir.Finding, passed []string) (string, error) {
+// Review runs one read-only reviewer on the committed work and returns its report, its answer read as a
+// ygg.review/v1 document; an answer that is not one is an *UnreadableError. The reviewer is told what it
+// reported before and which checks passed. Whatever it changed in the leaf, an ignored file too, is a hard
+// stop at policy-violation.
+func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, open []gungnir.Finding, passed []string) (schema.Review, error) {
 	r, n := l.r, l.n
 	var rv schema.Reviewer
 	for _, c := range n.Reviewers {
@@ -227,96 +225,42 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	}
 	text, err := l.prompt("", rv.Prompt, rv.Skills)
 	if err != nil {
-		return "", err
+		return schema.Review{}, err
 	}
 	if block := taskBlock(r, n); block != "" {
 		text += "\n\n" + block
 	}
 	change, err := reviewChange(ctx, r, n, l.base, attempt)
 	if err != nil {
-		return "", err
+		return schema.Review{}, err
 	}
 	if change != "" {
 		text += "\n\n" + change
 	}
-	text += "\n\n" + jormungandr.ReviewRequest(rv.ID, open, passed)
+	request, err := jormungandr.ReviewRequest(rv.ID, open, passed, false)
+	if err != nil {
+		return schema.Review{}, err
+	}
+	text += "\n\n" + request
 	before, err := snapshot(ctx, r, n.Repo)
 	if err != nil {
-		return "", err
+		return schema.Review{}, err
 	}
 	sp := sessionSpec{key: n.SessionKey(rv), role: rv.Role, repo: n.Repo, text: text, readOnly: true, before: before,
 		maxTurns: rv.MaxTurns, maxTokens: rv.MaxTokens, timeout: time.Duration(rv.Timeout)}
 	res, ev, err := session(ctx, r, sp)
 	if err := checkReadOnly(ctx, r, sp, ev, err); err != nil {
-		return "", err
+		return schema.Review{}, err
 	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
-	return res.Output, r.Log(ev)
-}
-
-// Dispute decides one dispute of the implementer's after the attempt's checks ran (spec §4.6). It holds only
-// when the named check ran in this attempt and passed, and its log names the test. The check is the referee:
-// nothing here weighs the implementer's evidence.
-func (l *loopSteps) Dispute(ctx context.Context, attempt int, d gungnir.Dispute) (jormungandr.DisputeOutcome, error) {
-	if !slices.Contains(l.n.Checks, d.Check) {
-		return jormungandr.DisputeOutcome{Verdict: jormungandr.Unsettleable,
-			Reason: fmt.Sprintf("check %q is not one of this loop's checks (%s)", d.Check, strings.Join(l.n.Checks, ", "))}, nil
+	if err := r.Log(ev); err != nil {
+		return schema.Review{}, err
 	}
-	not := func(format string, a ...any) (jormungandr.DisputeOutcome, error) {
-		return jormungandr.DisputeOutcome{Verdict: jormungandr.DoesNotHold, Reason: fmt.Sprintf(format, a...)}, nil
-	}
-	got, ran := l.ran[d.Check]
-	switch {
-	case !ran || got.attempt != attempt:
-		return not("check %s did not run in attempt %d (the ladder stops at the first check that fails)", d.Check, attempt)
-	case !got.passed:
-		return not("check %s did not pass in attempt %d (%s)", d.Check, attempt, got.rel)
-	}
-	found, err := logNames(filepath.Join(l.r.Dir, filepath.FromSlash(got.rel)), d.Test)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return not("the log of check %s in attempt %d is absent (%s)", d.Check, attempt, got.rel)
-	case err != nil:
-		return jormungandr.DisputeOutcome{}, &nodeFailure{fmt.Errorf("reading the log of check %s: %w", d.Check, err)}
-	case !found:
-		return not("check %s passed in attempt %d, but its output (%s) does not name %s", d.Check, attempt, got.rel, d.Test)
-	}
-	return jormungandr.DisputeOutcome{Verdict: jormungandr.Holds,
-		Proof: fmt.Sprintf("check %s ran in attempt %d and passed, and its output names %s (%s)", d.Check, attempt, d.Test, got.rel)}, nil
-}
-
-// maxLogRead bounds how much of a check log a dispute reads: checks.Run keeps at most 8 MiB, and the bound
-// leaves room for its truncation notice.
-const maxLogRead = 9 << 20
-
-// logNames reports whether the file at path contains test, reading it in blocks, never all at once.
-func logNames(path, test string) (bool, error) {
-	f, err := os.Open(path)
+	report, err := schema.DecodeAnswer[schema.Review](schema.ContractReview, []byte(res.Output))
 	if err != nil {
-		return false, err
+		return schema.Review{}, &jormungandr.UnreadableError{Reviewer: rv.ID, Err: err}
 	}
-	defer f.Close()
-	needle := []byte(test)
-	if len(needle) == 0 {
-		return false, nil
-	}
-	rd := bufio.NewReaderSize(io.LimitReader(f, maxLogRead), 64<<10)
-	buf := make([]byte, 64<<10)
-	var tail []byte // the end of the last block, so a match across two blocks is found
-	for {
-		n, err := rd.Read(buf)
-		window := append(tail, buf[:n]...)
-		if bytes.Contains(window, needle) {
-			return true, nil
-		}
-		tail = bytes.Clone(window[max(0, len(window)-(len(needle)-1)):])
-		if err == io.EOF {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-	}
+	return report, nil
 }
 
 // Record writes the changes to the findings to the ledger (spec §10.1): when each was raised, how

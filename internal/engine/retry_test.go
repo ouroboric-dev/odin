@@ -12,7 +12,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-const oneNode = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+const oneNode = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 
 // waits is a Sleep that records its waits and returns at once.
 type waits struct{ got []time.Duration }

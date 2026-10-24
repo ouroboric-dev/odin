@@ -45,7 +45,7 @@ func startSandboxedPack(t *testing.T, pack, nodes, script string, h run.Hooks) (
 	files := map[string]string{
 		filepath.Join(tmpl, "LICENSE"):     "MIT\n",
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + pack,
-		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 1\nnodes:\n" + nodes,
+		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 2\nnodes:\n" + nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
 		filepath.Join(cfg, "script.yaml"):  script,
 		filepath.Join(cfg, "factory.yaml"): "mode: unattended\ngates: { design: auto }\nroles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n" +
@@ -68,7 +68,7 @@ func startSandboxedPack(t *testing.T, pack, nodes, script string, h run.Hooks) (
 }
 
 const buildScript = "steps:\n  a:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built }\n"
-const buildNodes = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+const buildNodes = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 
 func leafStatus(t *testing.T, r *run.Run) string {
 	t.Helper()
@@ -186,7 +186,7 @@ func TestACommandThatRunsTooLongIsStoppedInTheSandbox(t *testing.T) {
 func TestAnAgentSessionGetsTheSandboxItsSkillsAndReportsItsProvider(t *testing.T) {
 	script := "steps:\n  a:\n    - actions:\n        - run: { argv: [touch, from-the-agent.txt] }\n        - write: { path: build.txt, content: \"done\\n\" }\n" +
 		"      result: { status: ok, summary: built, provider: anthropic, cli_version: 2.1.284, usage: { in: 10, out: 5, turns: 1, cost_usd: 0.01 } }\n"
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, skills: [plain-language] }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, skills: [plain-language], input: [rejection], output: ygg.implement/v1 }\n"
 	r, fake := startSandboxedWith(t, nodes, script, run.Hooks{Libs: skillfake.Libraries(t, "plain-language", "Use short words.")})
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
@@ -211,7 +211,7 @@ func TestAnAgentSessionGetsTheSandboxItsSkillsAndReportsItsProvider(t *testing.T
 }
 
 func TestAnAgentThatNamesNoSkillsLoadsNone(t *testing.T) {
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 	r, _ := startSandboxedWith(t, nodes, buildScript, run.Hooks{Libs: skillfake.Libraries(t, "plain-language", "Use short words.")})
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -282,7 +282,7 @@ func TestAScanThatCannotRunIsNeverACleanTree(t *testing.T) {
 }
 
 func TestAReadOnlyRoleThatChangesTheLeafIsAHardStop(t *testing.T) {
-	r, _ := startSandboxed(t, "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true }\n", buildScript)
+	r, _ := startSandboxed(t, "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true, input: [rejection], output: ygg.implement/v1 }\n", buildScript)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
 		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at policy-violation", out, err, r.State.PendingGate)

@@ -74,7 +74,7 @@ func TestPrepareRefusesAGraphTheProjectCantRun(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
 	cases := map[string]struct{ nodes, want string }{
 		"a node with no repo":       {"  - { id: a, kind: exec, run: [echo] }\n", "names no repo"},
-		"an agent in the umbrella":  {"  - { id: a, kind: agent, role: planner, prompt: p.md, repo: . }\n", "is an umbrella"},
+		"an agent in the umbrella":  {"  - { id: a, kind: agent, role: planner, prompt: p.md, repo: ., input: [rejection], output: ygg.implement/v1 }\n", "is an umbrella"},
 		"a repo nobody creates":     {"  - { id: a, kind: exec, run: [echo], repo: repos/other }\n", "the realm doesn't create"},
 		"a check the pack lacks":    {"  - { id: m, kind: merge, repo: repos/app, checks: [lint] }\n", "doesn't define"},
 		"a pointer for an umbrella": {"  - { id: p, kind: pointer, repo: repos/app }\n  - { id: q, kind: pointer, repo: sub }\n", "the project lacks"},
@@ -83,7 +83,7 @@ func TestPrepareRefusesAGraphTheProjectCantRun(t *testing.T) {
 		realm := t.TempDir()
 		files := map[string]string{
 			"pack.yaml":                     "name: t\nversion: 0.1.0\ngraph: graph.yaml\nchecks:\n  unit: [echo]\nleaves:\n  repos/app: { description: d, template: tpl, first_commit: [LICENSE] }\n",
-			"graph.yaml":                    "name: t\nversion: 1.0.0\nschema: 1\nnodes:\n" + c.nodes,
+			"graph.yaml":                    "name: t\nversion: 1.0.0\nschema: 2\nnodes:\n" + c.nodes,
 			"p.md":                          "Do it.\n",
 			filepath.Join("tpl", "LICENSE"): "AGPL-3.0-only\n",
 		}

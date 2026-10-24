@@ -74,7 +74,7 @@ func TestPrepareRefusesALoopThatCouldNotRun(t *testing.T) {
 			return strings.Replace(s, "checks: [unit]\n    reviewers", "checks: [unit, lint]\n    reviewers", 1)
 		}}, "runs check lint"},
 		"a loop in a repo that is an umbrella": {loopRoles, map[string]func(string) string{"graph.yaml": func(s string) string {
-			return strings.Replace(s, "kind: loop\n    repo: repos/app", "kind: loop\n    repo: .", 1)
+			return strings.Replace(s, "\n    repo: repos/app\n", "\n    repo: .\n", 1)
 		}}, "umbrella"},
 	}
 	for name, c := range cases {
@@ -88,7 +88,7 @@ func TestPrepareRefusesALoopThatCouldNotRun(t *testing.T) {
 func TestTheSkillsOfALoopsReviewersAreInTheRecord(t *testing.T) {
 	project := treetest.Project(t, "repos/app")
 	realm := loopRealm(t, map[string]func(string) string{"graph.yaml": func(s string) string {
-		return strings.Replace(s, "prompts/review-quality.md }", "prompts/review-quality.md, skills: [plain-language] }", 1)
+		return strings.Replace(s, "prompts/review-quality.md, output: ygg.review/v1 }", "prompts/review-quality.md, output: ygg.review/v1, skills: [plain-language] }", 1)
 	}})
 	lib := skillfake.Libraries(t, "plain-language", "Write plainly.")
 	s, err := Prepare(ctx, Options{Project: project, Config: loopConfig(t, loopRoles), Graph: realm, Hooks: Hooks{Libs: lib}})

@@ -4,10 +4,10 @@ go 1.26
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/ouroboric-dev/gleipnir v0.0.0-20261022013122-6b6f83eec777
-	github.com/ouroboric-dev/gungnir v0.0.0-20261023232535-f99e5386523b
+	github.com/ouroboric-dev/gleipnir v0.0.0-20261024182209-f7b1970b8be5
+	github.com/ouroboric-dev/gungnir v0.0.0-20261024180427-5cacc76c7c3c
 	github.com/ouroboric-dev/havamal v0.0.0-20261017195922-be698041a5ae
-	github.com/ouroboric-dev/jormungandr v0.0.0-20261020222918-ec8f18cc941a
+	github.com/ouroboric-dev/jormungandr v0.0.0-20261024181346-6685e947c043
 	go.yaml.in/yaml/v3 v3.0.5
 )
 

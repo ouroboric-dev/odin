@@ -10,8 +10,8 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-const specAndReview = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true }\n" +
-	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec }\n"
+const specAndReview = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n" +
+	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [rejection], output: ygg.conformance/v1 }\n"
 
 const specAndReviewScript = "steps:\n  spec:\n    - actions: [ { write: { path: out/docs/spec.md, content: \"# The spec\\n\" } } ]\n      result: { status: ok, summary: wrote the spec }\n" +
 	"  conformance:\n    - actions:\n        - run: { argv: [sh, -c, \"cat reviewed/docs/spec.md > out/seen.md; echo changed > reviewed/docs/spec.md\"] }\n" +

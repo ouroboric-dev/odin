@@ -11,7 +11,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-const gateNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: check, kind: exec, run: [test, -s, spec.md], repo: repos/app }\n  - { id: spec-gate, kind: gate, gate: spec, reruns: spec }\n"
+const gateNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: check, kind: exec, run: [test, -s, spec.md], repo: repos/app }\n  - { id: spec-gate, kind: gate, gate: spec, reruns: spec }\n"
 
 const gateScript = `steps:
   spec:
@@ -112,7 +112,7 @@ func TestRejectRerunsTheNodeWithTheReason(t *testing.T) {
 
 // Review I2: new work under a loop that passed goes through the loop again.
 func TestARejectionThatRerunsANodeBeforeAPassedLoopRunsTheLoopAgain(t *testing.T) {
-	nodes := "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n" + loopNode +
+	nodes := "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection, refusal], output: ygg.implement/v1 }\n" + loopNode +
 		"  - { id: review, kind: gate, gate: spec, reruns: plan }\n"
 	script := "steps:\n  plan:\n    - actions: [ " + write("plan.md", "v1") + " ]\n      result: { status: ok }\n" +
 		"    - actions: [ " + write("plan.md", "v2") + " ]\n      result: { status: ok }\n" +

@@ -2,11 +2,11 @@
 # runs in the project umbrella and so outside any sandbox (Phase 3, decision 11).
 name: toy-sandbox
 version: 0.1.0
-schema: 1
+schema: 2
 nodes:
-  - { id: design, kind: agent, role: planner, prompt: prompts/design.md, repo: repos/app }
+  - { id: design, kind: agent, role: planner, prompt: prompts/design.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }
   - { id: design-gate, kind: gate, gate: design }
-  - { id: build, kind: agent, role: implementer, prompt: prompts/build.md, repo: repos/app }
+  - { id: build, kind: agent, role: implementer, prompt: prompts/build.md, repo: repos/app, input: [rejection, refusal], output: ygg.implement/v1 }
   - { id: check, kind: exec, run: [grep, -q, done, build.txt], repo: repos/app }
   - { id: feature-gate, kind: gate, gate: feature }
   - { id: merge-gate, kind: gate, gate: merge }

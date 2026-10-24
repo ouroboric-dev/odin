@@ -15,7 +15,7 @@ import (
 
 // templateThenReviewLoop is a template agent (its work is committed before the loop starts) and then the
 // review loop, so the loop's base is the commit after the template.
-const templateThenReviewLoop = "  - { id: tmpl, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n" + reviewLoop
+const templateThenReviewLoop = "  - { id: tmpl, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n" + reviewLoop
 
 const templateStep = "  tmpl:\n    - actions: [ " + `{ write: { path: template.txt, content: "from the template\n" } }` + " ]\n      result: { status: ok }\n"
 
@@ -286,8 +286,8 @@ func TestABinaryFileInTheChangeIsNamedNotShown(t *testing.T) {
 func TestOnlyTheTaskReviewersGetTheChange(t *testing.T) {
 	// The conformance and reuse reviewers are agent nodes outside the loop (scratch or read-only): no change section.
 	nodes := reviewLoop +
-		"  - { id: conformance, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true }\n" +
-		"  - { id: reuse, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true }\n"
+		"  - { id: conformance, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true, input: [rejection], output: ygg.conformance/v1 }\n" +
+		"  - { id: reuse, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true, input: [rejection], output: ygg.implement/v1 }\n"
 	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n  conformance:\n    - result: { status: ok }\n  reuse:\n    - result: { status: ok }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})

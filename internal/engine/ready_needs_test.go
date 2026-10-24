@@ -13,8 +13,8 @@ import (
 
 // readyNodes are software's order: the plan in a scratch workspace, the tasks node that reads the leaves file,
 // init, and the plan gate.
-const readyNodes = "  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true }\n" +
-	"  - { id: ready, kind: tasks, from: tasks.md, leaves: docs/leaves.yaml, back_to: plan }\n" +
+const readyNodes = "  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection, refusal], output: ygg.plan/v1 }\n" +
+	"  - { id: ready, kind: tasks, from: plan, leaves: docs/leaves.yaml, back_to: plan }\n" +
 	initNode +
 	"  - { id: plan-gate, kind: gate, gate: plan }\n"
 

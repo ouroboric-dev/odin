@@ -5,10 +5,12 @@
 # it costs a few dollars (see ouroboric/scripts/ygg-smoke-real.sh).
 name: smoke-grade
 version: 0.1.0
-schema: 1
+schema: 2
 nodes:
   - id: build
     kind: loop
+    input: [rejection, refusal]
+    output: ygg.implement/v1
     repo: repos/notes
     role: implementer
     prompt: prompts/build.md
@@ -17,7 +19,7 @@ nodes:
     timeout: 20m
     checks: [unit]
     reviewers:
-      - { id: review, role: reviewer, prompt: prompts/review.md, max_turns: 10, timeout: 5m }
+      - { id: review, role: reviewer, prompt: prompts/review.md, max_turns: 10, timeout: 5m, output: ygg.review/v1 }
   - { id: feature-gate, kind: gate, gate: feature }
   - { id: merge-gate, kind: gate, gate: merge }
   - { id: merge, kind: merge, repo: repos/notes, checks: [unit] }

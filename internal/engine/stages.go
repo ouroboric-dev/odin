@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -69,26 +70,19 @@ func runTasks(ctx context.Context, r *run.Run, n schema.Node) error {
 	return r.Log(gungnir.Event{Name: gungnir.EventTasksReady, Node: n.ID, Attempt: attempt, Result: s.Summaries[n.ID]})
 }
 
-// readPlan finds the one tasks.md that n.From names, reads it, and applies the Definition of Ready. A plan
-// that can't be read or isn't ready gives a refusal, in words for the planner; err is Odin's own failure. spec
-// is the leaves file the node points at, parsed, and nil when it points at none.
+// readPlan finds the plan's one tasks.md, reads it, and applies the Definition of Ready. A plan that can't be
+// read or isn't ready gives a refusal, in words for the planner; err is Odin's own failure. spec is the leaves
+// file the node points at, parsed, and nil when it points at none.
 func readPlan(r *run.Run, n schema.Node) (fs []schema.Feature, source, sum string, spec *schema.Leaves, refusal string, err error) {
-	matches, err := filepath.Glob(filepath.Join(r.Project, filepath.FromSlash(n.From)))
+	files, err := tasksFiles(r.Project)
 	if err != nil {
-		return nil, "", "", nil, fmt.Sprintf("tasks: %q is not a path pattern: %v", n.From, err), nil
-	}
-	var files []string
-	for _, m := range matches {
-		// A plan is a regular file reached without a symlink, so it is a file of the project.
-		if st, err := os.Lstat(m); err == nil && st.Mode().IsRegular() && noSymlinks(r.Project, m) == nil {
-			files = append(files, m)
-		}
+		return nil, "", "", nil, "", err
 	}
 	switch {
 	case len(files) == 0:
-		return nil, "", "", nil, fmt.Sprintf("there is no tasks file at %s, so there is no plan to build. Write the plan's tasks.md there.", n.From), nil
+		return nil, "", "", nil, fmt.Sprintf("there is no tasks file in the project, so there is no plan to build. %s writes the plan's tasks.md.", n.From), nil
 	case len(files) > 1:
-		return nil, "", "", nil, fmt.Sprintf("%d files match %s, and a plan has exactly one tasks.md: keep one.", len(files), n.From), nil
+		return nil, "", "", nil, fmt.Sprintf("%d files match tasks.md, and a plan has exactly one tasks.md: keep one.", len(files)), nil
 	}
 	f, err := os.Open(files[0])
 	if err != nil {
@@ -134,6 +128,25 @@ func checkLeavesNeeds(r *run.Run, spec *schema.Leaves) error {
 		return nil // init's refusal, which it makes before it creates anything
 	}
 	return r.Setup.CheckNeedsWith(runtime, leafRealms)
+}
+
+// tasksFiles lists the regular files named tasks.md in project, outside .git and .factory, reached without a
+// symlink. The tasks node names the plan node, not a file, since graph schema 2; until it reads that node's typed
+// output (typed-T18), the plan is the one tasks.md the project holds.
+func tasksFiles(project string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(project, func(p string, d iofs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir() && (d.Name() == ".git" || d.Name() == ".factory"):
+			return filepath.SkipDir
+		case d.Type().IsRegular() && d.Name() == "tasks.md":
+			files = append(files, p)
+		}
+		return nil
+	})
+	return files, err
 }
 
 // planLeaves returns the leaves a task may work in: those the project has, and those the spec stage named

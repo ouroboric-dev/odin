@@ -35,11 +35,14 @@ func quote(s string) string {
 	return `"` + strings.ReplaceAll(s, "\n", `\n`) + `"`
 }
 
-const planNodes = "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+// planScratch is a planner in a scratch workspace whose plan the test writes into the project.
+const planScratch = "  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection, refusal], output: ygg.plan/v1 }\n"
+
+const planNodes = "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection, refusal], output: ygg.plan/v1 }\n"
 
 func TestAReadyPlanBecomesFeaturesInTheOrderTheyAreBuilt(t *testing.T) {
 	plan := readyPlan + taskMD("gallery-T2", "repos/app", "M", "gallery-T1") + taskMD("gallery-T1", "repos/app", "S", "nothing")
-	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: repos/app/tasks.md }\n", planScript(plan))
+	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: plan }\n", planScript(plan))
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -60,7 +63,7 @@ func TestAReadyPlanBecomesFeaturesInTheOrderTheyAreBuilt(t *testing.T) {
 func TestAPlanThatIsNotReadyGoesBackToThePlannerWithEveryProblem(t *testing.T) {
 	bad := readyPlan + taskMD("p-T1", "repos/app", "L", "nothing") + taskMD("p-T2", "repos/db", "S", "p-T9")
 	good := readyPlan + taskMD("p-T1", "repos/app", "S", "nothing") + taskMD("p-T2", "repos/app", "S", "p-T1")
-	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: repos/app/tasks.md, back_to: plan }\n", planScript(bad, good))
+	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: plan, back_to: plan }\n", planScript(bad, good))
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -88,7 +91,7 @@ func TestAPlanThatIsNotReadyGoesBackToThePlannerWithEveryProblem(t *testing.T) {
 
 func TestARefusalGoesBackOnlyAsOftenAsTheNodeAllows(t *testing.T) {
 	bad := readyPlan + taskMD("p-T1", "repos/app", "L", "nothing")
-	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: repos/app/tasks.md, back_to: plan, returns: 1 }\n", planScript(bad, bad, bad))
+	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: plan, back_to: plan, returns: 1 }\n", planScript(bad, bad, bad))
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "size L: split it") {
 		t.Fatalf("Advance() = %+v, %v; want the run failed with the readiness error", out, err)
@@ -103,7 +106,7 @@ func TestARefusalGoesBackOnlyAsOftenAsTheNodeAllows(t *testing.T) {
 
 func TestAPlanWithNoBackToFailsTheNode(t *testing.T) {
 	bad := readyPlan + taskMD("p-T1", "repos/app", "", "nothing")
-	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: repos/app/tasks.md }\n", planScript(bad))
+	r := start(t, "key-points", "", planNodes+"  - { id: ready, kind: tasks, from: plan }\n", planScript(bad))
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "no size") {
 		t.Errorf("Advance() = %+v, %v", out, err)
@@ -111,7 +114,7 @@ func TestAPlanWithNoBackToFailsTheNode(t *testing.T) {
 }
 
 func TestThePlanMustBeOneRegularFile(t *testing.T) {
-	r := start(t, "key-points", "", "  - { id: ready, kind: tasks, from: plans/*/tasks.md }\n", "steps: {}\n")
+	r := start(t, "key-points", "", planScratch+"  - { id: ready, kind: tasks, from: plan }\n", "steps:\n  plan:\n    - result: { status: ok }\n")
 	app := r.Project
 	run1 := func() string {
 		out, err := Advance(context.Background(), r)
@@ -120,7 +123,7 @@ func TestThePlanMustBeOneRegularFile(t *testing.T) {
 		}
 		return out.Err.Error()
 	}
-	if msg := run1(); !strings.Contains(msg, "there is no tasks file at plans/*/tasks.md") {
+	if msg := run1(); !strings.Contains(msg, "there is no tasks file in the project") {
 		t.Errorf("no file: %s", msg)
 	}
 	for _, d := range []string{"a", "b"} {
@@ -143,7 +146,7 @@ func TestATaskMayWorkInALeafTheSpecStageNamedAndInitHasNotCreatedYet(t *testing.
 	leaves := "leaves:\n  repos/api: { realm: helheim-go, realm_version: 0.1.0, description: The API. }\n"
 	plan := readyPlan + taskMD("p-T1", "repos/api", "S", "nothing")
 	script := planScript(plan) + "  leaves-file:\n    - actions: [ { write: { path: leaves.yaml, content: " + quote(leaves) + " } } ]\n      result: { status: ok, summary: wrote leaves.yaml }\n"
-	nodes := planNodes + "  - { id: leaves-file, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: ready, kind: tasks, from: repos/app/tasks.md, leaves: repos/app/leaves.yaml }\n"
+	nodes := planNodes + "  - { id: leaves-file, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: ready, kind: tasks, from: plan, leaves: repos/app/leaves.yaml }\n"
 	r := start(t, "key-points", "", nodes, script)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -180,7 +183,7 @@ func promptOf(t *testing.T, r *run.Run, stem string) string {
 func TestARejectionGivesARefusalItsReturnsAgain(t *testing.T) {
 	bad := readyPlan + taskMD("p-T1", "repos/app", "L", "nothing")
 	good := readyPlan + taskMD("p-T1", "repos/app", "S", "nothing")
-	nodes := planNodes + "  - { id: ready, kind: tasks, from: repos/app/tasks.md, back_to: plan, returns: 1 }\n  - { id: plan-gate, kind: gate, gate: plan }\n"
+	nodes := planNodes + "  - { id: ready, kind: tasks, from: plan, back_to: plan, returns: 1 }\n  - { id: plan-gate, kind: gate, gate: plan }\n"
 	r := start(t, "key-points", "gates:\n  plan: stop\n", nodes, planScript(bad, good, bad, good))
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusStopped || out.Gate != "plan-gate" || r.State.Returns["ready"] != 1 {
@@ -199,7 +202,7 @@ func TestARejectionGivesARefusalItsReturnsAgain(t *testing.T) {
 }
 
 func TestAPlanInAProjectWithNoLeafIsCheckedAgainstNoLeavesNotNotAtAll(t *testing.T) {
-	r := startRealms(t, realmsSetup{nodes: "  - { id: ready, kind: tasks, from: tasks.md }\n", script: "steps: {}\n",
+	r := startRealms(t, realmsSetup{nodes: planScratch + "  - { id: ready, kind: tasks, from: plan }\n", script: "steps: {}\n",
 		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web.")}})
 	os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte(readyPlan+taskMD("p-T1", "repos/anything", "S", "nothing")), 0o644)
 	out, err := Advance(context.Background(), r)

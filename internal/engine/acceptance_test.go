@@ -41,7 +41,7 @@ func acceptanceRealm(name, accept string, withAcceptance bool, egress, services 
 		files: map[string]string{"p.md": "Do the work.\n"}}
 }
 
-const toyMoveNodes = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/api }\n" +
+const toyMoveNodes = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/api, input: [rejection], output: ygg.implement/v1 }\n" +
 	"  - { id: merge, kind: merge, repo: repos/api, checks: [unit] }\n" +
 	"  - { id: move, kind: pointer, repo: repos/api, checks: [unit], acceptance: [accept] }\n" +
 	"  - { id: other-touch, kind: exec, run: [echo, other], repo: repos/web }\n"

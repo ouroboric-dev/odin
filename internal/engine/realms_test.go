@@ -55,7 +55,7 @@ func tryRealms(t *testing.T, o realmsSetup) (*run.Run, error) {
 		files := map[string]string{"pack.yaml": "name: " + r.name + "\nversion: " + r.version + "\n" + r.pack}
 		if i == 0 {
 			files["pack.yaml"] += "graph: graph.yaml\n"
-			files["graph.yaml"] = "name: " + r.name + "\nversion: 1.0.0\nschema: 1\nnodes:\n" + o.nodes
+			files["graph.yaml"] = "name: " + r.name + "\nversion: 1.0.0\nschema: 2\nnodes:\n" + o.nodes
 		}
 		for f, body := range r.files {
 			files[f] = body
@@ -104,7 +104,7 @@ func tryRealms(t *testing.T, o realmsSetup) (*run.Run, error) {
 		o.hooks.NewSandbox = func(*run.SandboxSetup, string) (gungnir.Sandbox, error) { return o.sandbox, nil }
 	}
 	for f, body := range map[string]string{
-		"script.yaml":  o.script,
+		"script.yaml":  withPlanStep(o.nodes, o.script),
 		"factory.yaml": factory,
 	} {
 		if err := os.WriteFile(filepath.Join(cfg, f), []byte(body), 0o644); err != nil {
@@ -117,6 +117,22 @@ func tryRealms(t *testing.T, o realmsSetup) (*run.Run, error) {
 	}
 	t.Cleanup(func() { r.Close() })
 	return r, nil
+}
+
+// planStep is the session of the scratch planner that a task shape starts with, for a test that writes the
+// plan's tasks.md into the project itself.
+const planStep = "  plan:\n    - result: { status: ok, summary: planned }\n"
+
+// withPlanStep adds planStep to script when the nodes start with the scratch planner and the script has no
+// step of its own for it.
+func withPlanStep(nodes, script string) string {
+	if !strings.Contains(nodes, "{ id: plan, kind: agent, role: planner, prompt: p.md, scratch: true") || strings.Contains(script, "\n  plan:\n") {
+		return script
+	}
+	if script == "steps: {}\n" {
+		return "steps:\n" + planStep
+	}
+	return strings.Replace(script, "steps:\n", "steps:\n"+planStep, 1)
 }
 
 // transcriptPrompt returns the prompt a scripted session of node got in attempt 1.
@@ -133,7 +149,7 @@ func twoRealms() []realmFiles {
 
 func TestANodeReadsItsPromptAndRunsItsChecksFromItsOwnRealm(t *testing.T) {
 	r := startRealms(t, realmsSetup{realms: twoRealms(), leaves: map[string]string{"repos/api": "helheim-go", "repos/web": "midgard-react"},
-		nodes:  "  - { id: web-build, kind: agent, role: implementer, prompt: p.md, repo: repos/web }\n  - { id: api-touch, kind: exec, run: [echo, api], repo: repos/api }\n",
+		nodes:  "  - { id: web-build, kind: agent, role: implementer, prompt: p.md, repo: repos/web, input: [rejection], output: ygg.implement/v1 }\n  - { id: api-touch, kind: exec, run: [echo, api], repo: repos/api }\n",
 		script: "steps:\n  api-build:\n    - result: { status: ok, summary: built }\n  web-build:\n    - result: { status: ok, summary: built }\n"})
 	ctx := context.Background()
 	api := schema.Node{ID: "api-build", Kind: schema.KindAgent, Role: "implementer", Prompt: "prompts/implementer.md", Repo: "repos/api", Realm: "helheim-go", Checks: []string{"unit"}}

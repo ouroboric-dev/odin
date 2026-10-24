@@ -14,13 +14,15 @@ import (
 // reviewLoop is a loop with the check unit and one reviewer, spec, who runs as the scripted planner.
 const reviewLoop = `  - id: build
     kind: loop
+    input: [rejection, refusal]
+    output: ygg.implement/v1
     repo: repos/app
     role: planner
     prompt: p.md
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: planner, prompt: p.md }
+      - { id: spec, role: planner, prompt: p.md, output: ygg.review/v1 }
 `
 
 func startReview(t *testing.T, mode, script string) *run.Run {
@@ -109,7 +111,7 @@ func TestIgnoredFilesThatWereThereBeforeAreNotTheReadersDoing(t *testing.T) {
 
 // Backlog B-018, for a read-only agent node.
 func TestAReadOnlyRoleThatWritesAnIgnoredFileIsAHardStop(t *testing.T) {
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: look, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: look, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true, input: [rejection], output: ygg.implement/v1 }\n"
 	script := "steps:\n  a:\n    - actions: [ " + write(".gitignore", "*.log") + " ]\n      result: { status: ok }\n  look:\n    - actions: [ " + write("notes.log", "I was here") + " ]\n      result: { status: ok }\n"
 	r := start(t, "key-points", "", nodes, script)
 	out, err := Advance(context.Background(), r)
@@ -134,7 +136,7 @@ func TestAReviewerThatWritesAnIgnoredFileAndFailsAsAnAgentIsAHardStop(t *testing
 }
 
 func TestAReadOnlyRoleThatWritesAnIgnoredFileAndFailsIsAHardStop(t *testing.T) {
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: look, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: look, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true, input: [rejection], output: ygg.implement/v1 }\n"
 	script := "steps:\n  a:\n    - actions: [ " + write(".gitignore", "*.log") + " ]\n      result: { status: ok }\n" +
 		"  look:\n    - actions: [ " + write("notes.log", "I was here") + " ]\n      error: the session timed out\n"
 	r := start(t, "key-points", "", nodes, script)

@@ -84,7 +84,7 @@ type graded struct {
 var gradedPack = strings.Replace(sandboxPack, "  egress:", "  acceptance: { stack: docker.io/library/golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514 }\n  egress:", 1)
 
 const gradedNodes = buildNodes +
-	"  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true }\n" +
+	"  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n" +
 	"  - { id: check, kind: exec, run: [grep, -q, done, build.txt], repo: repos/app }\n" +
 	"  - { id: score, kind: grade }\n"
 
@@ -109,7 +109,7 @@ func startGraded(t *testing.T, nodes, results string, edit func(*tasktest.Task))
 	files := map[string]string{
 		filepath.Join(tmpl, "LICENSE"):     "MIT\n",
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + gradedPack,
-		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 1\nnodes:\n" + nodes,
+		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 2\nnodes:\n" + nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
 		filepath.Join(cfg, "script.yaml"):  gradedScript,
 		filepath.Join(cfg, "factory.yaml"): "mode: unattended\ngates: { design: auto }\nroles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n" +

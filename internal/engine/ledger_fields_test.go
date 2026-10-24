@@ -48,7 +48,7 @@ func TestACheckFindingHasTheOriginCheck(t *testing.T) {
 }
 
 func TestAnIgnoredDisputeIsADisputeIgnoredEventNotALoopAttemptWithText(t *testing.T) {
-	r := startDispute(t, disputeScript(`'{"disputes": [{"id": "spec-1"}]}'`, 2))
+	r := startDispute(t, disputeScript(notOpenDispute, 2))
 	Advance(context.Background(), r) //nolint:errcheck // the run's end is not what this test reads
 	text := ledgerText(t, r)
 	if !strings.Contains(text, `"event":"dispute_ignored"`) || !strings.Contains(text, `"ygg.note":"dispute ignored: `) {

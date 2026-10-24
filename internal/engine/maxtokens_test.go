@@ -110,7 +110,7 @@ func TestATokenLimitedSessionsUsageCountsInTheRunsTotals(t *testing.T) {
 }
 
 func TestMaxTokensReachesTheTaskOfAnAgentNode(t *testing.T) {
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_tokens: 1234 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_tokens: 1234, input: [rejection], output: ygg.implement/v1 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 	script := "steps:\n  a:\n    - result: { status: ok }\n  b:\n    - result: { status: ok }\n"
 	r := startWith(t, setup{nodes: nodes, script: script})
 	tasks := limited(r, nil, false)
@@ -124,7 +124,7 @@ func TestMaxTokensReachesTheTaskOfAnAgentNode(t *testing.T) {
 
 func TestMaxTokensReachesTheTasksOfALoopsImplementerAndReviewer(t *testing.T) {
 	nodes := strings.Replace(reviewLoop, "    attempts: 3\n", "    attempts: 3\n    max_tokens: 2000\n", 1)
-	nodes = strings.Replace(nodes, "prompt: p.md }\n", "prompt: p.md, max_tokens: 900 }\n", 1)
+	nodes = strings.Replace(nodes, "prompt: p.md, output: ygg.review/v1 }\n", "prompt: p.md, output: ygg.review/v1, max_tokens: 900 }\n", 1)
 	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{mode: "key-points", pack: unitCheck, nodes: nodes, script: script})

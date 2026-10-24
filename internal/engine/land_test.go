@@ -18,7 +18,7 @@ var bg = context.Background()
 // in the project umbrella.
 const packChecks = "checks:\n  unit: [test, -f, out.txt]\n  e2e: [test, -f, umbrella.yaml]\n  broken: [\"false\"]\n"
 
-const build = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+const build = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 
 func TestAMergeNodeLandsTheBranchThroughTheGate(t *testing.T) {
 	r := startPack(t, "key-points", "", packChecks, build+"  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n", okScript)

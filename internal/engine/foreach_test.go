@@ -21,12 +21,13 @@ func recipeRealm(name, version, file, prompt string) realmFiles {
 			"prompts/implementer.md": prompt + "\n", "p.md": "Graph prompt.\n"}}
 }
 
-const taskShape = `  - { id: ready, kind: tasks, from: tasks.md }
+const taskShape = `  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection, refusal], output: ygg.plan/v1 }
+  - { id: ready, kind: tasks, from: plan }
   - id: tasks
     kind: foreach
     over: tasks
     nodes:
-      - { id: implement, kind: loop, realm: leaf, role: implementer }
+      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [rejection, refusal], output: ygg.implement/v1 }
       - { id: feature-gate, kind: gate, gate: feature }
       - { id: land, kind: merge, realm: leaf }
       - { id: move, kind: pointer, realm: leaf }
@@ -55,8 +56,8 @@ func TestEveryTaskRunsItsShapeInItsLeafWithTheRecipeOfItsRealm(t *testing.T) {
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if got := len(r.Nodes()); got != 1+2*4 || !r.State.Expanded["tasks"] {
-		t.Errorf("the run has %d nodes (expanded %v); want the tasks node and a shape of four for each of two tasks", got, r.State.Expanded)
+	if got := len(r.Nodes()); got != 2+2*4 || !r.State.Expanded["tasks"] {
+		t.Errorf("the run has %d nodes (expanded %v); want the plan and tasks nodes and a shape of four for each of two tasks", got, r.State.Expanded)
 	}
 	if got := promptOf(t, r, "p-t1-implement-1"); !strings.Contains(got, "API implementer prompt.") || strings.Contains(got, "Web implementer") {
 		t.Errorf("task 1's implementer was given:\n%s", got)
@@ -126,7 +127,7 @@ func TestAResumeMakesTheSameNodesAndGoesOnWhereTheRunStopped(t *testing.T) {
 		t.Fatalf("Open() = %v", err)
 	}
 	defer r.Close()
-	if len(r.Nodes()) != 9 || r.Nodes()[r.State.Position].ID != "p-t1-feature-gate" {
+	if len(r.Nodes()) != 10 || r.Nodes()[r.State.Position].ID != "p-t1-feature-gate" {
 		t.Fatalf("after Open: %d nodes, position %d", len(r.Nodes()), r.State.Position)
 	}
 	if err := Approve(ctx, r, "p-t1-feature-gate", ""); err != nil {
@@ -176,8 +177,8 @@ func TestATaskInALeafWhoseRealmOffersNoRecipeFailsTheNode(t *testing.T) {
 }
 
 func TestTheTaskIsInThePromptOfItsImplementerAndItsReviewer(t *testing.T) {
-	shape := strings.Replace(taskShape, "      - { id: implement, kind: loop, realm: leaf, role: implementer }\n",
-		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md } ] }\n", 1)
+	shape := strings.Replace(taskShape, "      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [rejection, refusal], output: ygg.implement/v1 }\n",
+		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md, output: ygg.review/v1 } ], input: [rejection, refusal], output: ygg.implement/v1 }\n", 1)
 	script := "steps:\n" + writeStep("p-t1-implement", "api.txt") + "  p-t1-implement-spec:\n    - result: { status: ok, summary: no findings, report: [] }\n"
 	r := startRealms(t, realmsSetup{nodes: shape, script: script,
 		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")},
@@ -219,9 +220,9 @@ func TestATasksWordsAreBoundedInAPrompt(t *testing.T) {
 
 // replanShape plans in repos/web, reads the plan, builds its tasks, and ends at a node after the tasks
 // whose rejection or refusal goes back to the planner.
-const replanShape = "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/web }\n" +
-	"  - { id: ready, kind: tasks, from: repos/web/tasks.md }\n" + "  - id: tasks\n    kind: foreach\n    over: tasks\n    nodes:\n" +
-	"      - { id: implement, kind: loop, realm: leaf, role: implementer }\n      - { id: land, kind: merge, realm: leaf }\n"
+const replanShape = "  - { id: plan, kind: agent, role: planner, prompt: p.md, repo: repos/web, input: [rejection, refusal], output: ygg.plan/v1 }\n" +
+	"  - { id: ready, kind: tasks, from: plan }\n" + "  - id: tasks\n    kind: foreach\n    over: tasks\n    nodes:\n" +
+	"      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [rejection, refusal], output: ygg.implement/v1 }\n      - { id: land, kind: merge, realm: leaf }\n"
 
 // replanRun is a run whose planner writes a plan of one task first, and of two other tasks the second time.
 func replanRun(t *testing.T, tail, pack string) *run.Run {

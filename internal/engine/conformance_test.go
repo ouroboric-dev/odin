@@ -11,8 +11,8 @@ import (
 
 // The spec stage of the web realm (spec §4.2): the spec is written in a scratch workspace, a second
 // scratch agent checks it against the design, and the spec gate reads its verdict.
-const conformanceNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true }\n" +
-	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec }\n" +
+const conformanceNodes = "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n" +
+	"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [rejection], output: ygg.conformance/v1 }\n" +
 	"  - { id: spec-gate, kind: gate, gate: spec, reruns: spec, deviation_from: conformance }\n" +
 	"  - { id: spec-docs, kind: publish, from: spec, to: docs }\n"
 

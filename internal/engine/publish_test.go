@@ -12,7 +12,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-const publishNodes = "  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true }\n  - { id: design-gate, kind: gate, gate: design }\n" +
+const publishNodes = "  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n  - { id: design-gate, kind: gate, gate: design }\n" +
 	"  - { id: design-docs, kind: publish, from: design, to: docs }\n"
 
 const publishScript = "steps:\n  design:\n    - actions:\n        - write: { path: out/1-product/design.md, content: \"# Design\\n\" }\n        - write: { path: out/leaves.yaml, content: \"leaves: {}\\n\" }\n" +
