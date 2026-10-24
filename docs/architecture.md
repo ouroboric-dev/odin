@@ -51,15 +51,19 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   `2-engineering/reviews/<date>-<slug>-reuse-review` (the slug of the plan it reviews), with the run's `date`. A
   spec's publish also writes `leaves.yaml` from the spec's typed leaves. Each view starts with front matter Odin
   writes (`title`, `status: draft`, `date`, `related`, which links the views of the outputs the node read), each
-  value a quoted scalar. A blocked output is not published. When the secret scan finds something, nothing is published
+  value a quoted scalar. A blocked output is not published: the publish stops the run at
+  `external-input` for a person, before any scan, with the node and its reason in the gate file, and approving runs the
+  source again with the person's note as its `rejection` (with no note, that a person read the reason and sent it
+  back; ruling R43). When the secret scan finds something, nothing is published
   and the run stops at the hard approval point; approving runs the source node again with the findings (the rule
   and the place, never the text) as its `rejection`, and its new output is kept, published and scanned again. A
   publish node whose source declares no output, has no view, or takes no `rejection` is refused when the run
   starts. `tasks` reads the plan node's kept output (`ygg.plan/v1`, as Odin validated it; nothing reads a `tasks.md`),
   applies the Definition of Ready and writes `features.json` with every field of each task. A task that is not ready,
   such as one whose text or contract is over its bound or whose contract is not OpenAPI, goes back to the planner as
-  its `refusal`; a blocked plan stops the run at `external-input` for a person, whose note at approval goes to the
-  planner as its `rejection`. The `task` input of every session of a task holds its title, layer, criteria, named
+  its `refusal`; a blocked plan stops the run at `external-input` for a person, as at a publish, whose note at
+  approval goes to the planner as its `rejection` (a second line, for a graph that reads the plan before publishing
+  it; R44). The `task` input of every session of a task holds its title, layer, criteria, named
   test and dependencies, then its text under "What the plan says" and its contract under "The contract", in a
   `yaml` fence, whole: Odin never cuts a task's words (B-176). `init` creates the leaves the spec stage named from
   their realms' templates and records the pins. Scratch sessions (the nodes marked `scratch: true`: the design, spec,

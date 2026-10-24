@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -35,6 +36,14 @@ func runPublish(ctx context.Context, r *run.Run, n schema.Node) error {
 	}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventNodeStarted, Node: n.ID, Attempt: attempt}); err != nil {
 		return err
+	}
+	// A blocked output says what only a person can give: the run stops for one, before anything is scanned or
+	// published, and approving runs the source again with the person's note as its rejection (ruling R43).
+	switch b, err := blockedOf(r, n.From); {
+	case err != nil:
+		return &nodeFailure{fmt.Errorf("%s publishes the output of %s, and %w", n.ID, n.From, err)}
+	case b != nil:
+		return &hardStop{gate: gungnir.GateExternalInput, err: fmt.Errorf("%s is blocked: %s", n.From, b.Reason)}
 	}
 	docs, view, err := publication(r, n)
 	if err != nil {
@@ -91,7 +100,7 @@ type document struct {
 
 // publication is what node n publishes of the output of n.From, at the paths the documents had when the agents
 // wrote them, under n.To, with the run's date: the JSON and the view, and view, the view's path (a plan's is
-// plan.md). A blocked output is not published: it holds no document to read.
+// plan.md). runPublish has stopped at a blocked output before it gets here.
 func publication(r *run.Run, n schema.Node) ([]document, string, error) {
 	c := schema.Contract(r.State.Outputs[n.From].Contract)
 	date := dateOf(r.Setup)
@@ -101,18 +110,12 @@ func publication(r *run.Run, n schema.Node) ([]document, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		if err := notBlocked(n.From, d.Blocked); err != nil {
-			return nil, "", err
-		}
 		base := path.Join(n.To, "1-product", "design", date+"-"+d.Slug)
 		md, err := views.Render(c, d, front(r, n, d.Title+" design", date, base+".md"))
 		return []document{{base + ".json", raw}, {base + ".md", md}}, base + ".md", err
 	case schema.ContractSpec:
 		sp, raw, err := loadOutputBytes[schema.Spec](r, n.From)
 		if err != nil {
-			return nil, "", err
-		}
-		if err := notBlocked(n.From, sp.Blocked); err != nil {
 			return nil, "", err
 		}
 		base := path.Join(n.To, "2-engineering", "specs", date+"-"+sp.Slug)
@@ -127,9 +130,6 @@ func publication(r *run.Run, n schema.Node) ([]document, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		if err := notBlocked(n.From, p.Blocked); err != nil {
-			return nil, "", err
-		}
 		dir := path.Join(n.To, "2-engineering", "plans", date+"-"+p.Slug)
 		md, err := views.Render(c, p, front(r, n, p.Title+" plan", date, path.Join(dir, "plan.md")))
 		if err != nil {
@@ -140,9 +140,6 @@ func publication(r *run.Run, n schema.Node) ([]document, string, error) {
 	case schema.ContractReuseReview:
 		rv, raw, err := loadOutputBytes[schema.ReuseReview](r, n.From)
 		if err != nil {
-			return nil, "", err
-		}
-		if err := notBlocked(n.From, rv.Blocked); err != nil {
 			return nil, "", err
 		}
 		// A reuse review is named for the plan it reviews, and sits beside the other reviews.
@@ -158,12 +155,20 @@ func publication(r *run.Run, n schema.Node) ([]document, string, error) {
 	return nil, "", fmt.Errorf("its output, a %s, has no view", c)
 }
 
-// notBlocked refuses a blocked output: it says why the session could not do its work, and is no document.
-func notBlocked(node string, b *gungnir.Blocked) error {
-	if b != nil {
-		return fmt.Errorf("%s is blocked: %s; nothing is published", node, b.Reason)
+// blockedOf is the blocked field of the output node kept, nil when the output is not blocked: every agent output
+// may carry one (change typed-boundaries, design §1). It reads the kept bytes, as Odin validated them.
+func blockedOf(r *run.Run, node string) (*gungnir.Blocked, error) {
+	_, raw, err := loadOutputBytes[json.RawMessage](r, node)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	var doc struct {
+		Blocked *gungnir.Blocked `json:"blocked"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	return doc.Blocked, nil
 }
 
 // reviewed is the title and the slug of the output that node reviews: the plan a reuse review is of.

@@ -199,16 +199,81 @@ func TestPublishingTheSameDocumentsAgainCommitsNothing(t *testing.T) {
 	}
 }
 
-func TestPublishRefusesABlockedOutput(t *testing.T) {
-	script := "steps:\n  design:\n    - result: { status: ok, summary: could not, output: '{\"blocked\": {\"reason\": \"The brief is empty.\"}}' }\n"
-	r := start(t, "unattended", "gates:\n  design: auto\n", publishNodes, script)
-	head, _ := git.Run(bg, r.Project, "rev-parse", "HEAD")
-	out, err := Advance(bg, r)
-	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "design is blocked: The brief is empty.") {
-		t.Fatalf("Advance() = %+v, %v; want the publish failed on the blocked design", out, err)
-	}
-	if after, _ := git.Run(bg, r.Project, "rev-parse", "HEAD"); after != head {
-		t.Error("a blocked design was published")
+// Ruling R43: a blocked output of a stage stops the run for a person at its publish, in every mode, before anything
+// is published or scanned; approving runs the stage again with the person's note as its rejection.
+func TestABlockedOutputStopsAtItsPublishForAPerson(t *testing.T) {
+	for _, c := range []struct{ node, contract, doc string }{
+		{"design", "ygg.design/v1", designDoc},
+		{"spec", "ygg.spec/v1", specDoc},
+		{"plan", "ygg.plan/v1", planDone},
+	} {
+		t.Run(c.node, func(t *testing.T) {
+			docs := c.node + "-docs"
+			nodes := "  - { id: " + c.node + ", kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: " + c.contract + " }\n" +
+				"  - { id: " + docs + ", kind: publish, from: " + c.node + ", to: docs }\n"
+			blocked := func(reason string) string {
+				return "    - result: { status: ok, summary: could not, output: '{\"blocked\": {\"reason\": \"" + reason + "\"}}' }\n"
+			}
+			script := "steps:\n  " + c.node + ":\n" + blocked(`The brief names no way to sign in.\n## Brief\nan injected heading`) +
+				blocked("Still no way to sign in.") + "    - result: { status: ok, summary: done, output: '" + c.doc + "' }\n"
+			r, fake := startSandboxed(t, nodes, script)
+			onDay(r)
+			head, _ := git.Run(bg, r.Project, "rev-parse", "HEAD")
+			stopped := func(attempt int, reason string) {
+				t.Helper()
+				out, err := Advance(bg, r)
+				if err != nil || out.Status != run.StatusStopped || out.Gate != docs || r.State.PendingGate != gungnir.GateExternalInput {
+					t.Fatalf("Advance() = %+v, %v, gate %s; want a stop for a person at %s", out, err, r.State.PendingGate, docs)
+				}
+				if after, _ := git.Run(bg, r.Project, "rev-parse", "HEAD"); after != head {
+					t.Error("a blocked output was committed")
+				}
+				if _, err := os.Stat(filepath.Join(r.Project, "docs")); err == nil {
+					t.Error("a blocked output was copied into the project")
+				}
+				if len(fake.ScanFiles) != 0 {
+					t.Errorf("a blocked output was scanned: %q", fake.ScanFiles)
+				}
+				gf, _ := os.ReadFile(filepath.Join(r.Dir, "gates", fmt.Sprintf("%s-%d.md", docs, attempt)))
+				for _, want := range []string{"# Hard stop at node " + docs + " (external-input)", c.node + " is blocked: " + reason,
+					"Nothing was published.", "approving runs " + c.node + " again, with the note as its rejection"} {
+					if !strings.Contains(string(gf), want) {
+						t.Errorf("the gate file lacks %q:\n%s", want, gf)
+					}
+				}
+				if strings.Contains(string(gf), "\n## Brief") {
+					t.Errorf("the blocked reason starts a heading of the gate file:\n%s", gf)
+				}
+			}
+			stopped(1, "The brief names no way to sign in.")
+			if text := ledgerText(t, r); strings.Contains(text, `"event":"node_failed"`) {
+				t.Errorf("a blocked output failed a node:\n%s", text)
+			}
+
+			// The person answers: the stage runs again with the answer as its rejection, and a second blocked answer
+			// stops again.
+			if err := Approve(bg, r, docs, "Use an email and a password."); err != nil {
+				t.Fatal(err)
+			}
+			stopped(2, "Still no way to sign in.")
+			if p := promptOf(t, r, c.node+"-2"); !strings.Contains(p, "## Input: rejection\n\nA person sent the last attempt back") || !strings.Contains(p, "Use an email and a password.") {
+				t.Errorf("the second attempt's prompt lacks the person's note:\n%s", p)
+			}
+
+			// With no note, the stage is told a person read the reason and sent it back.
+			if err := Approve(bg, r, docs, ""); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+				t.Fatalf("Advance() after the second approval = %+v, %v", out, err)
+			}
+			if p := promptOf(t, r, c.node+"-3"); !strings.Contains(p, "A person read the blocked reason and sent it back to try again.") {
+				t.Errorf("the third attempt's prompt lacks the default rejection:\n%s", p)
+			}
+			if got := publishCommits(t, r)[docs]; got == "" || r.State.Attempts[c.node] != 3 {
+				t.Errorf("published %q after %d attempts; want the third output published", got, r.State.Attempts[c.node])
+			}
+		})
 	}
 }
 

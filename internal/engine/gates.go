@@ -258,10 +258,13 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 		if err := runAgainFrom(r, n.From); err != nil {
 			return err
 		}
-	case n.Kind == schema.KindTasks && s.PendingGate == gungnir.GateExternalInput:
-		// A blocked plan: the planner said what only a person can give, and the person's note is the answer. The
-		// planner runs again with it as its rejection.
+	case blockedStop(n, s.PendingGate):
+		// A blocked output (ruling R43; a plan at the tasks node, R44): its stage said what only a person can give,
+		// and the person's note is the answer. The stage runs again with it as its rejection.
 		s.Reasons[n.From] = note
+		if strings.TrimSpace(note) == "" {
+			s.Reasons[n.From] = blockedRetry
+		}
 		if err := runAgainFrom(r, n.From); err != nil {
 			return err
 		}
@@ -371,6 +374,15 @@ func runAgainFrom(r *run.Run, target string) error {
 	return replan(r, nodes[s.Position:at])
 }
 
+// blockedRetry is the rejection of a stage whose blocked output a person sent back with no note.
+const blockedRetry = "A person read the blocked reason and sent it back to try again."
+
+// blockedStop reports whether node n stopped at gate g for a blocked output of its source: a publish (ruling R43),
+// or the tasks node for a blocked plan (R44). Both stop at external-input: a person gives what the stage lacks.
+func blockedStop(n schema.Node, g gungnir.Gate) bool {
+	return (n.Kind == schema.KindPublish || n.Kind == schema.KindTasks) && g == gungnir.GateExternalInput
+}
+
 // hardStop is a node that stops the run at a hard approval point itself: work it left breaks a
 // sandbox rule (policy-violation), or a generated file shrank (shrink-guard). Hard approval points
 // stop in every mode.
@@ -396,8 +408,12 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 	rel := filepath.Join("gates", fmt.Sprintf("%s-%d.md", n.ID, attempt))
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Hard stop at node %s (%s)\n\n", n.ID, h.gate)
-	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Time: %s\n\n## Why\n\n%v\n\n", s.ID, s.Mode,
-		time.Now().UTC().Format(time.RFC3339), h.err)
+	why := h.err.Error()
+	if blockedStop(n, h.gate) {
+		why = mdsafe.Text(why) // an agent's words
+	}
+	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Time: %s\n\n## Why\n\n%s\n\n", s.ID, s.Mode,
+		time.Now().UTC().Format(time.RFC3339), why)
 	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
 	switch {
 	case n.Kind == schema.KindPublish && h.gate == gungnir.GateRealSecrets:
@@ -405,9 +421,15 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 			"Approving runs %s again, the node whose output this is, with the findings above (the rule and the place, never the text) as its rejection: "+
 			"its agent writes the output again without the flagged text, and Odin keeps it, publishes it and scans it again. "+
 			"The stages before %s are kept. To drop the work, start a new run.\n", n.From, n.From, n.From)
-	case n.Kind == schema.KindTasks && h.gate == gungnir.GateExternalInput:
-		fmt.Fprintf(&b, "The planner, %s, says above what it needs that only a person can give. Give it in the note: approving runs %s again, "+
-			"with the note as its rejection, and the stages before %s are kept.\n", n.From, n.From, n.From)
+	case blockedStop(n, h.gate):
+		if n.Kind == schema.KindTasks {
+			b.WriteString("No task was made. ")
+		} else {
+			b.WriteString("Nothing was published. ")
+		}
+		fmt.Fprintf(&b, "%s says above what it needs that only a person can give. Give it in the note: approving runs %s again, "+
+			"with the note as its rejection (with no note, it is told that a person read the blocked reason and sent it back to try again), "+
+			"and the stages before %s are kept.\n", n.From, n.From, n.From)
 	case run.Quarantines(h.gate) && n.Repo == "":
 		fmt.Fprintf(&b, "Approving runs %s again.\n", n.ID)
 	case run.Quarantines(h.gate):

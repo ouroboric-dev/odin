@@ -254,7 +254,7 @@ func ownHeading(line string) bool {
 		"## Context and constraints", "## The product at user level", "## Decisions", "## Open questions", "## Notes",
 		"## Architecture and components", "## Interfaces and contracts", "## Data model", "## Acceptance criteria per feature",
 		"## Security considerations", "## Testing approach", "## Deviations from the design doc", "## Leaves", "## Goal", "## Order",
-		"## Risks", "### The text", "### The contract", "## Verdict", "## Findings"}
+		"## Risks", "### What the plan says", "### The contract", "## Verdict", "## Findings"}
 	return slices.Contains(own, line) || taskHeading.MatchString(line)
 }
 
