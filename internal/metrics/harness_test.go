@@ -55,6 +55,8 @@ func TestTheRecordCountsRefusalsByRoleAndModel(t *testing.T) {
 	f.log(3, repaired("gallery-t1-implement-quality", "reviewer", "opencode", "qwen", schema.ContractReview))
 	f.log(4, refused("gallery-t1-implement-quality", "reviewer", "opencode", "qwen", 2))
 	f.log(5, session("gallery-t1-implement", "implementer", "claude-code", "sonnet", 10, 1, 1, 0.01, false))
+	// A later line of the same key that names another role does not take the blocked answer from the session that wrote it.
+	f.log(6, gungnir.Event{Name: gungnir.EventRetry, Node: "gallery-t1-implement", Role: "reviewer", Adapter: "opencode", Model: "qwen"})
 	f.keep("design", schema.ContractDesign, design)
 	f.keep("gallery-t1-implement", schema.ContractImplement, `{"blocked": {"reason": "the contract names no endpoint"}, "notes": ["one", "two"]}`)
 	f.keep("gallery-t1-implement-quality", schema.ContractReview, `{"verdict": "pass", "findings": [], "notes": ["changed after Odin kept it"]}`)

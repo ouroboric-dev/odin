@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -116,5 +117,34 @@ func TestATaskWhoseLeafIsGoneHasNoLines(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(r.Warnings, "\n"), "gallery-T1") {
 		t.Errorf("warnings = %v, want one that names the task", r.Warnings)
+	}
+}
+
+// A task's findings, by source and severity: how many its loop raised and how many closed.
+func TestTheRecordCountsEachTasksFindingsBySourceAndSeverity(t *testing.T) {
+	f := newFake(t).features(feature("gallery-T1", "repos/api", schema.TaskDone, ""), feature("gallery-T2", "repos/api", schema.TaskDone, ""))
+	f.log(0, gungnir.Event{Name: gungnir.EventRunStarted})
+	finding := func(name gungnir.EventName, node, id, source, severity string) gungnir.Event {
+		return gungnir.Event{Name: name, Node: node, Attempt: 1, FindingID: id, FindingSource: source, FindingSeverity: severity}
+	}
+	f.log(1, finding(gungnir.EventFindingRaised, "gallery-t1-implement", "f1", "unit", "blocker"))
+	f.log(1, finding(gungnir.EventFindingRaised, "gallery-t1-implement", "f2", "unit", "blocker"))
+	f.log(1, finding(gungnir.EventFindingRaised, "gallery-t1-implement", "f3", "quality", "minor"))
+	f.log(1, finding(gungnir.EventFindingRaised, "gallery-t1-implement", "f4", "quality", "major"))
+	f.log(2, finding(gungnir.EventFindingClosed, "gallery-t1-implement", "f1", "unit", "blocker"))
+	f.log(2, finding(gungnir.EventFindingReopened, "gallery-t1-implement", "f1", "unit", "blocker"))
+	f.log(3, finding(gungnir.EventFindingClosed, "gallery-t1-implement", "f3", "quality", "minor"))
+	f.log(4, finding(gungnir.EventFindingRaised, "gallery-t2-implement", "f1", "unit", "minor"))
+	r := mustCollect(t, f.done())
+	want := []TaskFindings{{Source: "quality", Severity: "major", Raised: 1}, {Source: "quality", Severity: "minor", Raised: 1, Closed: 1},
+		{Source: "unit", Severity: "blocker", Raised: 2, Closed: 1}}
+	if !reflect.DeepEqual(r.Tasks[0].Findings, want) {
+		t.Errorf("task 1 findings = %+v, want %+v", r.Tasks[0].Findings, want)
+	}
+	if want := []TaskFindings{{Source: "unit", Severity: "minor", Raised: 1}}; !reflect.DeepEqual(r.Tasks[1].Findings, want) {
+		t.Errorf("task 2 findings = %+v, want %+v", r.Tasks[1].Findings, want)
+	}
+	if _, err := Encode(r); err != nil {
+		t.Errorf("Encode() = %v", err)
 	}
 }

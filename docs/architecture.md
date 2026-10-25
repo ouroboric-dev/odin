@@ -300,8 +300,10 @@ grade time. A finding line says whether a check or a reviewer raised it (`ygg.fi
 be used is a `dispute_ignored` line, and every run records the build of ygg that wrote it (`ygg.factory.version`).
 
 The experiment record (`ygg record`, `record.json`, `ygg.run-record/v1`) is the same figures with the run's setup, each
-task's size and the harness's health; `ygg metrics --json` prints it, validated. Prompt hashes are read from the graph
-pack only while its files still hash as `run.json` recorded; the lines of a task come from `git diff --numstat` in its
+task's size and findings and the harness's health; `ygg metrics --json` prints it, validated. The setup's hashes are
+the ones `run.json` keeps: the graph's and the realms', and each prompt's and skill's, which the run takes from the
+bytes it reads (`prompt_sha256`, `skill_sha256`), so a file changed later does not change a record; the record never
+reads the prompts again. The lines of a task come from `git diff --numstat` in its
 leaf, from its loop's base to its merge's commit, with nothing checked out; blocked answers and notes come from the
 kept outputs, hash-checked and validated, never from prose. What it cannot read is a warning, not an error.
 

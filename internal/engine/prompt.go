@@ -43,7 +43,7 @@ func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]
 		who, role, realm, file, skillNames, output = n.SessionKey(*rv), rv.Role, "", rv.Prompt, rv.Skills, rv.Output
 	}
 	inputs := sessionInputs(n, rv)
-	b, err := readPrompt(r.Setup, realm, file)
+	b, err := r.ReadPrompt(realm, file) // its hash is kept in run.json, for the record (ruling R55)
 	if err != nil {
 		return "", err
 	}

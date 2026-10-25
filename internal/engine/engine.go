@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -209,15 +208,6 @@ func fail(r *run.Run, n schema.Node, cause error) (Outcome, error) {
 func startAttempt(r *run.Run, n schema.Node) (int, error) {
 	r.State.Attempts[n.ID]++
 	return r.State.Attempts[n.ID], r.Save()
-}
-
-// readPrompt reads the prompt file of the realm named realm ("" is the graph pack).
-func readPrompt(s *run.Setup, realm, file string) ([]byte, error) {
-	path, err := s.PromptFile(realm, file)
-	if err != nil {
-		return nil, err
-	}
-	return os.ReadFile(path)
 }
 
 // runAgent runs agent node n in the repo it works in: one session, whose prompt promptFor builds from the node's

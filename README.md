@@ -52,8 +52,9 @@ same figures for a tool: for one run, its experiment record. It writes nothing.
 
 `ygg record <run-id>` writes that record, `record.json` (`ygg.run-record/v1`), into the run's folder and prints its
 path. Beside the metrics it holds the setup (each role's agent, model, CLI version and reasoning, and the hashes of the
-graph, its prompts, the skills and the realms), each task's estimated size, attempts and the lines it added (written by
-hand, tests and generated, from `git diff --numstat` in its leaf), and the harness's health: the outputs refused and
+graph, its prompts, the skills and the realms, as `run.json` kept them when the run read them), each task's estimated
+size, attempts, findings by source and severity, and the lines it added (written by hand, tests and generated, from
+`git diff --numstat` in its leaf), and the harness's health: the outputs refused and
 repaired by role and model, every `blocked` answer and note from the kept outputs, and the design's open questions that
 no person answered. It is rebuilt from the ledger, `run.json` and the kept files, so it can be written again at any time.
 

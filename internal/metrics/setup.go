@@ -4,14 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"os"
-	"path/filepath"
-	"slices"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
-	"github.com/ouroboric-dev/havamal"
-	"github.com/ouroboric-dev/odin/internal/realm"
 )
 
 // RoleSetup is one role's agent, model, CLI version and reasoning.
@@ -27,7 +24,7 @@ type RoleSetup struct {
 type Setup struct {
 	Roles       map[string]RoleSetup `json:"roles"`
 	Graph       map[string]string    `json:"graph"`   // graph name: the sha256 of its pack's files, as the run recorded it
-	Prompts     map[string]string    `json:"prompts"` // a prompt's path in the graph pack: the sha256 of the file
+	Prompts     map[string]string    `json:"prompts"` // a prompt's path in the graph pack, or <realm>:<path>: the sha256 the run read
 	Skills      map[string]string    `json:"skills"`  // skill name: the sha256 of its files (havamal.SetHash of the one skill)
 	Realms      map[string]string    `json:"realms"`  // realm name: the sha256 of its files, as the run recorded it
 	Task        string               `json:"task,omitempty"`
@@ -40,11 +37,9 @@ func newSetup() Setup {
 		Realms: map[string]string{}}
 }
 
-// setup fills the record's setup. The graph's and the realms' hashes are the ones the run recorded when it
-// loaded them, and a resume refuses a pack whose files changed, so they are the run's. A prompt's hash is read
-// from its file, and only while the pack's files still hash as the run recorded: otherwise it would be another
-// prompt's, and the record leaves the prompts out and says why. A pinned skill's hash comes from this build's
-// library, checked against the set hash the run recorded where it can be.
+// setup fills the record's setup, from what run.json kept when the run started: the graph's and the realms' hashes,
+// which a resume checks, and the hash of each prompt and skill the run read. Only the roles' reasoning is read from
+// factory.yaml, and only while the file is the one the run last used.
 func (r *Run) setup(state *record, events []gungnir.Event) {
 	s := newSetup()
 	cli := map[string]string{}
@@ -65,8 +60,7 @@ func (r *Run) setup(state *record, events []gungnir.Event) {
 			s.Realms[name] = rl.SHA256
 		}
 	}
-	r.prompts(state, s.Prompts)
-	r.skills(state, s.Skills)
+	r.fingerprints(state, &s)
 	if r.Grade != nil {
 		s.Task, s.TaskVersion = r.Grade.Task, r.Grade.TaskVersion
 	}
@@ -105,83 +99,13 @@ func (r *Run) reasoning(state *record) map[string]string {
 	return out
 }
 
-// prompts hashes every prompt file the graph names from the graph pack: each node's that the pack supplies, and
-// each reviewer's.
-func (r *Run) prompts(state *record, out map[string]string) {
-	if state.GraphDir == "" {
-		return
-	}
-	leave := func(why string) {
-		r.Warnings = append(r.Warnings, "the record has no prompt hashes: "+why)
-	}
-	pack, err := realm.Load(state.GraphDir)
-	if err != nil {
-		leave(err.Error())
-		return
-	}
-	if pack.Hash != state.GraphPackSHA256 {
-		leave(fmt.Sprintf("the graph pack at %s changed since the run started", state.GraphDir))
-		return
-	}
-	g, err := schema.LoadGraph(filepath.Join(pack.Dir, pack.Pack.Graph))
-	if err != nil {
-		leave(err.Error())
-		return
-	}
-	var paths []string
-	for _, n := range g.All() {
-		if n.Prompt != "" && n.RealmFrom != schema.RealmLeaf {
-			paths = append(paths, n.Prompt)
-		}
-		for _, rv := range n.Reviewers {
-			if rv.Prompt != "" {
-				paths = append(paths, rv.Prompt)
-			}
-		}
-	}
-	for _, p := range paths {
-		data, err := os.ReadFile(filepath.Join(pack.Dir, filepath.FromSlash(p)))
-		if err != nil {
-			leave(err.Error())
-			clear(out)
-			return
-		}
-		h := sha256.Sum256(data)
-		out[p] = hex.EncodeToString(h[:])
-	}
-}
-
-// skills hashes each skill the run could load: a private one as the run recorded it, a pinned one from this
-// build's library. With no private skill the pinned ones' set hash must be the run's, or they are left out.
-func (r *Run) skills(state *record, out map[string]string) {
-	var private []string
-	for _, p := range state.Skills.Private {
-		out[p.Name] = p.SHA256
-		private = append(private, p.Name)
-	}
-	names := slices.DeleteFunc(slices.Clone(state.Skills.Skills), func(n string) bool { return slices.Contains(private, n) })
-	if len(names) == 0 {
-		return
-	}
-	lib, err := havamal.Embedded()
-	if err != nil {
-		r.Warnings = append(r.Warnings, fmt.Sprintf("the record has no hash of the pinned skills: %v", err))
-		return
-	}
-	var pinned []havamal.Entry
-	for _, name := range names {
-		s, err := lib.Get(name)
-		if err != nil {
-			r.Warnings = append(r.Warnings, fmt.Sprintf("the record has no hash of the skill %s: this build of ygg does not ship it", name))
-			continue
-		}
-		pinned = append(pinned, s.Entry)
-		out[name] = havamal.SetHash([]havamal.Entry{s.Entry})
-	}
-	if len(private) == 0 && len(pinned) > 0 && havamal.SetHash(pinned) != state.Skills.Hash {
-		for _, e := range pinned {
-			delete(out, e.Name)
-		}
-		r.Warnings = append(r.Warnings, "the record has no hash of the pinned skills: this build of ygg ships other files for them than the run loaded")
+// fingerprints copies the hashes of the prompts and skills that run.json kept when the run started, from the bytes
+// the run read (ruling R55). The record never reads the files again: they may have changed since. A run from before
+// run.json kept them has none, and the record says so.
+func (r *Run) fingerprints(state *record, s *Setup) {
+	maps.Copy(s.Prompts, state.PromptSHA256)
+	maps.Copy(s.Skills, state.SkillSHA256)
+	if state.GraphDir != "" && len(state.PromptSHA256) == 0 {
+		r.Warnings = append(r.Warnings, "the record has no prompt or skill hashes: run.json keeps no hash of its prompts, so the run started before ygg kept them")
 	}
 }

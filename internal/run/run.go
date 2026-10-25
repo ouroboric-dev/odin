@@ -1065,6 +1065,12 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		unlock()
 		return nil, err
 	}
+	prompts, skillHashes, err := fingerprints(setup)
+	if err != nil {
+		l.Close()
+		unlock()
+		return nil, err
+	}
 	now := time.Now().UTC()
 	r := &Run{Project: project, Dir: dir, Setup: setup, Ledger: l, unlock: unlock, State: &State{
 		ID: id, Status: StatusRunning, Mode: setup.Mode,
@@ -1072,7 +1078,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Realms: realmRecords(setup), GraphSHA256: setup.GraphSHA256,
 		Factory:    version.Factory(),
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
-		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
+		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills, PromptSHA256: prompts, SkillSHA256: skillHashes,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
 		Waived: map[string]bool{}, Judged: map[string]string{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, NewLeaves: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Outputs: map[string]OutputRef{}, Created: now, Updated: now,

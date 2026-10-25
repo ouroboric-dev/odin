@@ -34,18 +34,12 @@ type record struct {
 	Features []schema.FeatureRecord `json:"features"`
 
 	// What the experiment record's setup reads.
-	Factory         string `json:"factory"`
-	GraphDir        string `json:"graph_dir"`
-	GraphPackSHA256 string `json:"graph_pack_sha256"`
-	ConfigPath      string `json:"config_path"`
-	Skills          struct {
-		Hash    string   `json:"hash"`
-		Skills  []string `json:"skills"`
-		Private []struct {
-			Name   string `json:"name"`
-			SHA256 string `json:"sha256"`
-		} `json:"private"`
-	} `json:"skills"`
+	Factory         string            `json:"factory"`
+	GraphDir        string            `json:"graph_dir"`
+	GraphPackSHA256 string            `json:"graph_pack_sha256"`
+	ConfigPath      string            `json:"config_path"`
+	PromptSHA256    map[string]string `json:"prompt_sha256"`
+	SkillSHA256     map[string]string `json:"skill_sha256"`
 
 	// What the tasks' sizes and the harness read.
 	Root        string `json:"root"`
@@ -118,6 +112,10 @@ func WriteRecord(dir string) (string, error) {
 		return "", err
 	}
 	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o644); err != nil { // as the run's other files; CreateTemp makes it 0600
+		tmp.Close()
+		return "", err
+	}
 	if _, err := tmp.Write(b); err != nil {
 		tmp.Close()
 		return "", err

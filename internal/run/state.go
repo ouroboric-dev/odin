@@ -76,19 +76,21 @@ type State struct {
 	Brief           string                 `json:"brief,omitempty"`
 	BriefSHA256     string                 `json:"brief_sha256,omitempty"`
 	Roles           map[string]RoleRecord  `json:"roles"`
-	Root            string                 `json:"root"`                   // the tree's root: the project, or an umbrella above it
-	ProjectPath     string                 `json:"project"`                // the project's path from the root
-	Leaves          map[string]LeafRecord  `json:"leaves"`                 // leaf path from the project: the run's branch and checkpoint in it
-	Position        int                    `json:"position"`               // index of the next node to run
-	Attempts        map[string]int         `json:"attempts"`               // node id: attempts started
-	Pending         string                 `json:"pending,omitempty"`      // the node waiting for a decision
-	PendingGate     gungnir.Gate           `json:"pending_gate,omitempty"` // the approval point it waits at
-	Reasons         map[string]string      `json:"reasons,omitempty"`      // node id: rejection reason for its next attempt
-	Summaries       map[string]string      `json:"summaries,omitempty"`    // node id: its last result
-	Waived          map[string]bool        `json:"waived,omitempty"`       // pointer node id: shrink-guard approved for its next move
-	Judged          map[string]string      `json:"judged,omitempty"`       // pointer node id: the commit the pointer-contract gate judged, which the move must be to
-	Skills          skills.Record          `json:"skills"`                 // every skill the graph names, with the set's hash (spec §5.1)
-	Sandboxes       map[string]gungnir.Env `json:"sandboxes,omitempty"`    // leaf path: its sandbox, while one is up, so a leftover can be stopped
+	Root            string                 `json:"root"`                    // the tree's root: the project, or an umbrella above it
+	ProjectPath     string                 `json:"project"`                 // the project's path from the root
+	Leaves          map[string]LeafRecord  `json:"leaves"`                  // leaf path from the project: the run's branch and checkpoint in it
+	Position        int                    `json:"position"`                // index of the next node to run
+	Attempts        map[string]int         `json:"attempts"`                // node id: attempts started
+	Pending         string                 `json:"pending,omitempty"`       // the node waiting for a decision
+	PendingGate     gungnir.Gate           `json:"pending_gate,omitempty"`  // the approval point it waits at
+	Reasons         map[string]string      `json:"reasons,omitempty"`       // node id: rejection reason for its next attempt
+	Summaries       map[string]string      `json:"summaries,omitempty"`     // node id: its last result
+	Waived          map[string]bool        `json:"waived,omitempty"`        // pointer node id: shrink-guard approved for its next move
+	Judged          map[string]string      `json:"judged,omitempty"`        // pointer node id: the commit the pointer-contract gate judged, which the move must be to
+	Skills          skills.Record          `json:"skills"`                  // every skill the graph names, with the set's hash (spec §5.1)
+	PromptSHA256    map[string]string      `json:"prompt_sha256,omitempty"` // a prompt (its path in the graph pack, or <realm>:<path>): the sha256 of the bytes the run read (ruling R55)
+	SkillSHA256     map[string]string      `json:"skill_sha256,omitempty"`  // a skill the run may load: the sha256 of its files, havamal.SetHash of the one skill
+	Sandboxes       map[string]gungnir.Env `json:"sandboxes,omitempty"`     // leaf path: its sandbox, while one is up, so a leftover can be stopped
 	Usage           gungnir.Usage          `json:"usage"`
 	PendingSpend    []budget.Entry         `json:"pending_spend,omitempty"` // spends in Usage the journal couldn't take yet, oldest first
 	Paused          *Pause                 `json:"paused,omitempty"`        // why the run is paused

@@ -3,6 +3,7 @@ package metrics
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,7 +30,8 @@ type Lines struct {
 // headLines is how far into a file a generated-code marker counts.
 const headLines = 5
 
-// sizes gives each task the plan's estimate, the loop attempts it took, and for a task that is done the lines it
+// sizes gives each task the plan's estimate, the loop attempts it took, its findings by source and severity (raised
+// and closed, from the finding lines of its nodes), and for a task that is done the lines it
 // added: git diff --numstat in its leaf, from where its loop started (the loop record's base) to the commit its
 // merge landed (the merge node's node_finished line). A pointer node's line names the umbrella's commit, which is
 // not the leaf's, and is passed over. A leaf that can't be read leaves the task without lines, with a warning.
@@ -45,8 +47,35 @@ func (r *Run) sizes(state *record, events []gungnir.Event) {
 		}
 	}
 	attempts, landed := map[string]int{}, map[string]string{}
+	findings, unknown := map[string]map[[2]string]*TaskFindings{}, map[string]int{} // task: (source, severity): counts
 	for _, e := range events {
 		switch e.Name {
+		case gungnir.EventFindingRaised, gungnir.EventFindingClosed:
+			t := e.Task
+			if t == "" {
+				t = taskOf(e.Node, slugs)
+			}
+			if t == "" {
+				continue
+			}
+			if e.FindingSource == "" || severityRank(e.FindingSeverity) < 0 {
+				unknown[t]++
+				continue
+			}
+			if findings[t] == nil {
+				findings[t] = map[[2]string]*TaskFindings{}
+			}
+			k := [2]string{e.FindingSource, e.FindingSeverity}
+			c := findings[t][k]
+			if c == nil {
+				c = &TaskFindings{Source: e.FindingSource, Severity: e.FindingSeverity}
+				findings[t][k] = c
+			}
+			if e.Name == gungnir.EventFindingRaised {
+				c.Raised++
+			} else {
+				c.Closed++
+			}
 		case gungnir.EventLoopAttempt:
 			if t := taskOf(e.Node, slugs); t != "" {
 				attempts[t] = max(attempts[t], e.Attempt)
@@ -70,6 +99,15 @@ func (r *Run) sizes(state *record, events []gungnir.Event) {
 			t.Size = f.Size
 		}
 		t.Attempts = attempts[slug]
+		for _, c := range findings[slug] {
+			t.Findings = append(t.Findings, *c)
+		}
+		slices.SortFunc(t.Findings, func(a, b TaskFindings) int {
+			return cmp.Or(cmp.Compare(a.Source, b.Source), cmp.Compare(severityRank(a.Severity), severityRank(b.Severity)))
+		})
+		if n := unknown[slug]; n > 0 {
+			r.Warnings = append(r.Warnings, fmt.Sprintf("task %s: %d finding lines name no source or no known severity, and are not counted", f.ID, n))
+		}
 		land, base := landed[slug], bases[slug]
 		if f.Status != schema.TaskDone || land == "" || base == "" {
 			continue
@@ -135,6 +173,11 @@ func diffLines(ctx context.Context, state *record, layer, base, land string) (Li
 		}
 	}
 	return n, nil
+}
+
+// severityRank orders the severities, the gravest first; -1 is a severity the record does not know.
+func severityRank(s string) int {
+	return slices.Index([]gungnir.Severity{gungnir.SeverityBlocker, gungnir.SeverityMajor, gungnir.SeverityMinor}, gungnir.Severity(s))
 }
 
 // isTest reports whether the file at name is a test: a Go or TypeScript test file, or any file under an e2e folder.

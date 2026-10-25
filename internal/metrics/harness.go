@@ -47,7 +47,9 @@ func newHarness() Harness {
 // as Odin kept it is left out, with a warning.
 func (r *Run) harness(dir string, state *record, events []gungnir.Event) {
 	h := newHarness()
-	who := map[string]gungnir.Event{} // session key: its last line that names a role
+	// The session that wrote a kept output is its key's last node_finished line; a key with none (a session the
+	// engine logged otherwise) takes its last line that names a role.
+	finished, named := map[string]gungnir.Event{}, map[string]gungnir.Event{}
 	for _, e := range events {
 		key := e.Role + " " + e.Adapter + " " + e.Model
 		switch e.Name {
@@ -57,7 +59,10 @@ func (r *Run) harness(dir string, state *record, events []gungnir.Event) {
 			h.Repaired[key]++
 		}
 		if e.Node != "" && e.Role != "" {
-			who[e.Node] = e
+			named[e.Node] = e
+			if e.Name == gungnir.EventNodeFinished {
+				finished[e.Node] = e
+			}
 		}
 	}
 	answered := map[string]bool{}
@@ -91,7 +96,10 @@ func (r *Run) harness(dir string, state *record, events []gungnir.Event) {
 			r.Warnings = append(r.Warnings, fmt.Sprintf("the kept output of %s is left out of the harness: %v", k, err))
 			continue
 		}
-		w := who[k]
+		w, ok := finished[k]
+		if !ok {
+			w = named[k]
+		}
 		item := func(text string) HarnessItem {
 			return HarnessItem{Node: k, Role: w.Role, Agent: w.Adapter, Model: w.Model, Text: text}
 		}
