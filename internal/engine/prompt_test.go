@@ -89,6 +89,25 @@ func TestAPromptHoldsEachDeclaredInput(t *testing.T) {
 	}
 }
 
+// Ruling R37: change, open_findings and check_results are sources of a loop's sessions wherever the loop is, and a
+// session of a loop outside a foreach body gets exactly what it declares too, as one inside does.
+func TestASessionOfALoopAtTheTopOfTheGraphGetsExactlyItsDeclaredInputs(t *testing.T) {
+	nodes := "  - id: build\n    kind: loop\n    input: [rejection]\n    output: ygg.implement/v1\n    repo: repos/app\n    role: planner\n    prompt: p.md\n" +
+		"    checks: [unit]\n    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change], output: ygg.review/v1 }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"  build-spec:\n    - result: { status: ok, report: [] }\n"
+	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	if h := inputHeadings(promptOf(t, r, "build-spec-1")); !slices.Equal(h, []string{"change"}) {
+		t.Errorf("the reviewer's input sections are %v, want exactly [change]", h)
+	}
+	if h := inputHeadings(promptOf(t, r, "build-1")); !slices.Equal(h, []string{"rejection"}) {
+		t.Errorf("the implementer's input sections are %v, want exactly [rejection]", h)
+	}
+}
+
 func TestAMissingInputStopsBeforeTheSession(t *testing.T) {
 	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [brief, rejection], output: ygg.implement/v1 }\n",
 		"steps:\n  a:\n    - result: { status: ok, summary: done, output: '{\"summary\": \"done\"}' }\n")
@@ -377,7 +396,7 @@ func TestATaskRendersItsContractWholeInAFenceItCannotClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checks, err := checkResults([]checkView{{Check: "unit", Passed: true}})
+	checks, err := checkResults([]run.CheckView{{Check: "unit", Passed: true}}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,8 +494,8 @@ func TestInputFilesAreDroppedOnAnErrorAndIgnoredInALeafTheRunDoesNotTrack(t *tes
 }
 
 func TestAReviewerOfALoopWithNoBaseIsToldWhyItHasNoDiff(t *testing.T) {
-	nodes := "  - id: build\n    kind: loop\n    input: [rejection, refusal]\n    output: ygg.implement/v1\n    repo: repos/app\n    role: planner\n    prompt: p.md\n" +
-		"    checks: [unit]\n    reviewers:\n      - { id: spec, role: planner, prompt: p.md, output: ygg.review/v1 }\n"
+	nodes := "  - id: build\n    kind: loop\n    input: [rejection, refusal, open_findings, check_results]\n    output: ygg.implement/v1\n    repo: repos/app\n    role: planner\n    prompt: p.md\n" +
+		"    checks: [unit]\n    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results], output: ygg.review/v1 }\n"
 	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})
@@ -502,7 +521,7 @@ func sampleReviewerPrompt(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checks, err := checkResults([]checkView{{Check: "vet", Passed: true}, {Check: "unit", Passed: true}})
+	checks, err := checkResults([]run.CheckView{{Check: "vet", Passed: true, PassedTests: []string{"app.TestVet"}}, {Check: "unit", Passed: true, PassedTests: []string{"app.TestAlbumPhotos"}}}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

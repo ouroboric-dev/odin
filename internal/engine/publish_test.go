@@ -236,7 +236,8 @@ func TestABlockedOutputStopsAtItsPublishForAPerson(t *testing.T) {
 				}
 				gf, _ := os.ReadFile(filepath.Join(r.Dir, "gates", fmt.Sprintf("%s-%d.md", docs, attempt)))
 				for _, want := range []string{"# Hard stop at node " + docs + " (external-input)", c.node + " is blocked: " + reason,
-					"Nothing was published.", "approving runs " + c.node + " again, with the note as its rejection"} {
+					"Nothing was published.", "approving runs " + c.node + " again, with the note as its rejection",
+					"ygg approve " + r.State.ID + " " + docs + ` [--note "..." | --decisions <file>]`} {
 					if !strings.Contains(string(gf), want) {
 						t.Errorf("the gate file lacks %q:\n%s", want, gf)
 					}

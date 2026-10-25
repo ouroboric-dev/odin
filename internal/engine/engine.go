@@ -333,15 +333,16 @@ func orDefault(timeout time.Duration) time.Duration {
 }
 
 // runCheck runs one command through the check runner: in repo's sandbox when it has one, on the host
-// otherwise. A failure of the sandbox, or of the log, fails the node; a context that ended is the
-// context's error.
+// otherwise. A typed check (spec.Typed) is typed in a sandbox only: the host runner takes no environment, and
+// its /tmp is shared, so a command on the host runs as it is and writes no typed result. A failure of the
+// sandbox, or of the log, fails the node; a context that ended is the context's error.
 func runCheck(ctx context.Context, r *run.Run, node, repo, dir string, spec checks.Spec, logPath string) (checks.Result, error) {
 	runner, err := r.Runner(ctx, repo)
 	if err != nil {
 		return checks.Result{}, sandboxStart(err)
 	}
 	if runner == nil {
-		runner = hostRunner{r: r, node: node, dir: dir}
+		runner, spec.Typed = hostRunner{r: r, node: node, dir: dir}, false
 	}
 	return runOn(ctx, runner, spec, logPath)
 }

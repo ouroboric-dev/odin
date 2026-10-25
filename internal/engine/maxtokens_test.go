@@ -124,7 +124,7 @@ func TestMaxTokensReachesTheTaskOfAnAgentNode(t *testing.T) {
 
 func TestMaxTokensReachesTheTasksOfALoopsImplementerAndReviewer(t *testing.T) {
 	nodes := strings.Replace(reviewLoop, "    attempts: 3\n", "    attempts: 3\n    max_tokens: 2000\n", 1)
-	nodes = strings.Replace(nodes, "prompt: p.md, output: ygg.review/v1 }\n", "prompt: p.md, output: ygg.review/v1, max_tokens: 900 }\n", 1)
+	nodes = strings.Replace(nodes, "output: ygg.review/v1 }\n", "output: ygg.review/v1, max_tokens: 900 }\n", 1)
 	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{mode: "key-points", pack: unitCheck, nodes: nodes, script: script})

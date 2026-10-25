@@ -38,7 +38,7 @@ func TestMetricsReadTheVetoRateOfARealLoopWhereTheReviewerFirstRunsInAttempt3(t 
 }
 
 func usedStep(node, file string) string {
-	return "  " + node + ":\n    - actions: [ { write: { path: " + file + ", content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote " + file + ", usage: { in: 100, out: 10, turns: 3, cost_usd: 0.5 } }\n"
+	return "  " + node + ":\n    - actions: [ { write: { path: " + file + ", content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote " + file + ", usage: { in: 100, out: 10, turns: 3, cost_usd: 0.5 }, output: '{\"summary\": \"done\"}' }\n"
 }
 
 // A session line carries no task id; the metrics attribute it to its task by the node's slug prefix.

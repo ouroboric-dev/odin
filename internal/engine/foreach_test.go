@@ -34,7 +34,7 @@ const taskShape = `  - { id: plan, kind: agent, role: planner, prompt: p.md, scr
 
 // writeStep is the script entry of an implementer that writes file.
 func writeStep(node, file string) string {
-	return "  " + node + ":\n    - actions: [ { write: { path: " + file + ", content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote " + file + " }\n"
+	return "  " + node + ":\n    - actions: [ { write: { path: " + file + ", content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote " + file + ", output: '{\"summary\": \"wrote " + file + "\"}' }\n"
 }
 
 func galleryRun(t *testing.T, mode, script string) *run.Run {

@@ -38,7 +38,8 @@ func TestAStopWritesAGateFileAndWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"stopped for a decision", "spec (agent, attempt 1): wrote spec v1",
-		"check (exec, attempt 1): exit 0", "ygg approve " + s.ID + " spec-gate", "ygg reject " + s.ID + " spec-gate"} {
+		"check (exec, attempt 1): exit 0", "ygg approve " + s.ID + ` spec-gate [--note "..." | --decisions <file>]`,
+		"ygg reject " + s.ID + ` spec-gate --reason "..." | --decisions <file>`} {
 		if !strings.Contains(string(gf), want) {
 			t.Errorf("the gate file lacks %q:\n%s", want, gf)
 		}

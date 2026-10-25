@@ -8,11 +8,13 @@ import (
 	"testing"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-// printingCheck is a unit check that prints the test it ran when it passes, as the realms' test checks do.
+// printingCheck is a unit check that prints the test it ran when it passes. On the host it writes no typed result,
+// so it can't show that a test passed.
 const printingCheck = "checks:\n  unit: [sh, -c, \"grep -q done build.txt && echo 'ok TestFindIndex'\"]\n"
 
 // findIndexClaim is the finding of run 20261020-190818-5b02ff: a reviewer says a method does not exist.
@@ -42,9 +44,18 @@ func startDispute(t *testing.T, script string) *run.Run {
 	return startWith(t, setup{mode: "key-points", pack: printingCheck, nodes: reviewLoop, script: script})
 }
 
-func TestADisputeSettledByAPassingCheckThatPrintsTheTestOverrulesTheFinding(t *testing.T) {
-	t.Skip("typed-T20: a dispute holds only on a test the check's typed result lists as passed (jormungandr R23), and Check fills PassedTests from gleipnir's typed checks in T20")
-	r := startDispute(t, disputeScript(disputeOf("unit", "TestFindIndex"), 3))
+// startTypedDispute is a dispute loop in a sandbox whose unit check writes its typed result: TestFindIndex is among
+// the tests that passed when it passes.
+func startTypedDispute(t *testing.T, script string) *run.Run {
+	t.Helper()
+	r, _ := startTyped(t, typedCheck(t, "unit", []string{"TestFindIndex", "TestSort"}, []schema.CheckFailure{{Kind: "test", Test: "TestBuild", Message: "build.txt is not done"}}), reviewLoop, script)
+	return r
+}
+
+// Ruling R23: a dispute holds when the check it names ran in this attempt and its typed result lists the test among
+// the tests that passed.
+func TestADisputeSettledByAPassingCheckThatListsTheTestOverrulesTheFinding(t *testing.T) {
+	r := startTypedDispute(t, disputeScript(disputeOf("unit", "TestFindIndex"), 3))
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v; want done", out, err)
@@ -57,7 +68,7 @@ func TestADisputeSettledByAPassingCheckThatPrintsTheTestOverrulesTheFinding(t *t
 	if f == nil || f.Status != gungnir.FindingOverruled {
 		t.Fatalf("spec-1 = %+v; want overruled", f)
 	}
-	for _, want := range []string{"curl showed findIndex is defined", "check unit ran in attempt 2 and passed", "logs/build-2-unit.log"} {
+	for _, want := range []string{"curl showed findIndex is defined", "check unit ran in attempt 2 and TestFindIndex is among the tests that passed"} {
 		if !strings.Contains(f.Proof, want) {
 			t.Errorf("the proof lacks %q: %s", want, f.Proof)
 		}
@@ -79,8 +90,8 @@ func TestADisputeSettledByAPassingCheckThatPrintsTheTestOverrulesTheFinding(t *t
 	}
 }
 
-func TestADisputeWhoseTestIsNotInTheCheckOutputDoesNotHoldAndTheLoopEscalatesAsDisputed(t *testing.T) {
-	r := startDispute(t, disputeScript(disputeOf("unit", "TestNotRun"), 3))
+func TestADisputeWhoseTestIsNotAmongThePassedTestsDoesNotHoldAndTheLoopEscalatesAsDisputed(t *testing.T) {
+	r := startTypedDispute(t, disputeScript(disputeOf("unit", "TestNotRun"), 3))
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateEscalation {
 		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at escalation", out, err, r.State.PendingGate)
@@ -95,7 +106,7 @@ func TestADisputeWhoseTestIsNotInTheCheckOutputDoesNotHoldAndTheLoopEscalatesAsD
 	if !strings.Contains(transcript(t, r, "build-3"), "Your disputes that did not hold") || !strings.Contains(transcript(t, r, "build-3"), "TestNotRun") {
 		t.Error("the third attempt was not told the dispute did not hold, and why")
 	}
-	for _, want := range []string{"reviewer's claim: findIndex is not a JavaScript method", "implementer's evidence", "curl showed findIndex is defined", "can't show that TestNotRun"} {
+	for _, want := range []string{"reviewer's claim: findIndex is not a JavaScript method", "implementer's evidence", "curl showed findIndex is defined", "TestNotRun is not among the tests that passed"} {
 		if !strings.Contains(rec.Escalation.Detail, want) {
 			t.Errorf("the escalation detail lacks %q:\n%s", want, rec.Escalation.Detail)
 		}
@@ -108,6 +119,18 @@ func TestADisputeWhoseTestIsNotInTheCheckOutputDoesNotHoldAndTheLoopEscalatesAsD
 	}
 	if !Approvable(r) || !Rejectable(r) {
 		t.Error("a disputed finding takes the operator's ruling: approve (overrule) or reject (send back)")
+	}
+}
+
+// On the host a check writes no typed result: it lists no passing test, so no dispute can hold on it.
+func TestADisputeOfACheckWithNoTypedResultDoesNotHold(t *testing.T) {
+	r := startDispute(t, disputeScript(disputeOf("unit", "TestFindIndex"), 3))
+	Advance(context.Background(), r) //nolint:errcheck // the run's end is not what this test reads
+	if got := r.State.Loops["build"].State.Book.Records["spec-1"]; got.Status != gungnir.FindingOpen {
+		t.Errorf("spec-1 = %+v; a check that lists no passing test settles no dispute", got)
+	}
+	if got := transcript(t, r, "build-3"); !strings.Contains(got, "its result lists no passing tests, so it can't show that TestFindIndex ran and passed") {
+		t.Errorf("the third attempt was not told why the dispute did not hold:\n%s", got)
 	}
 }
 
@@ -144,8 +167,7 @@ func TestADisputeOfACheckThatFailedDoesNotHoldAndSaysSo(t *testing.T) {
 	if got := transcript(t, r, "build-3"); !strings.Contains(got, "Your disputes that did not hold") || !strings.Contains(got, "check unit failed in attempt 2 and names no failing test") {
 		t.Errorf("the third attempt was not told the check failed:\n%s", got)
 	}
-	// Until the check's typed result lists the tests that passed (typed-T20), no dispute holds, and the one in
-	// attempt 3 leaves spec-1 open too.
+	// On the host the check writes no typed result, so the dispute in attempt 3 leaves spec-1 open too.
 	if got := r.State.Loops["build"].State.Book.Records["spec-1"]; got.Status != gungnir.FindingOpen {
 		t.Errorf("spec-1 = %+v; no dispute settles it", got)
 	}
@@ -163,12 +185,15 @@ func TestADisputeOfAFindingThatIsNotOpenIsIgnoredWithALedgerLine(t *testing.T) {
 	}
 }
 
-// A malformed dispute makes the implementer's answer no ygg.implement/v1 document: the attempt is an agent failure,
-// and the next attempt is told why. Nothing is ignored silently (typed-T15).
+// A malformed dispute makes the implementer's answer no ygg.implement/v1 document: it is asked for once more, with the
+// errors, and then the attempt is an agent failure, and the next attempt is told why. Nothing is ignored silently.
 func TestAMalformedDisputeIsAnAgentFailure(t *testing.T) {
-	r := startDispute(t, disputeScript(`'{"summary": "disputed", "disputes": [{"id": "spec-1"}]}'`, 3))
+	r := startDispute(t, disputeScript(`'{"summary": "disputed", "disputes": [{"id": "spec-1"}]}'`, 4))
 	Advance(context.Background(), r) //nolint:errcheck // the run's end is not what this test reads
-	if got := transcript(t, r, "build-3"); !strings.Contains(got, "the answer can't be used") || !strings.Contains(got, "/disputes/0") {
+	if got := promptOf(t, r, "build-3"); !strings.Contains(got, "## Your answer could not be used") || !strings.Contains(got, "/disputes/0") {
+		t.Errorf("the second attempt's answer was not asked for again with its errors:\n%s", got)
+	}
+	if got := transcript(t, r, "build-4"); !strings.Contains(got, "after being asked twice") || !strings.Contains(got, "/disputes/0") {
 		t.Errorf("the third attempt was not told the second answer could not be used:\n%s", got)
 	}
 	if text := ledgerText(t, r); strings.Contains(text, `"event":"dispute_ignored"`) {

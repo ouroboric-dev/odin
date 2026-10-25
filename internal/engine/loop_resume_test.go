@@ -120,6 +120,11 @@ func TestARunInterruptedInAnAttemptResumesThatAttemptWithTheFindings(t *testing.
 	if !strings.Contains(promptOf(t, r, "build-3"), `"id": "check-unit-result"`) {
 		t.Error("the resumed attempt wasn't given the finding")
 	}
+	// What the attempt is told comes from the run's state, not from the process that ran the attempt before: the
+	// resumed session's prompt is the interrupted one's, check results and all.
+	if before, after := promptOf(t, r, "build-2"), promptOf(t, r, "build-3"); before != after || !strings.Contains(after, `"check": "unit"`) {
+		t.Errorf("the resumed attempt was told something else; before the interrupt:\n%s\nafter the resume:\n%s", before, after)
+	}
 }
 
 func TestACheckThatPlantsARepositoryInTheLeafStopsTheRunAtPolicyViolationAndTheLoopDoesNotGoOn(t *testing.T) {

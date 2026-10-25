@@ -43,11 +43,14 @@ const implementOnce = `steps:
 `
 
 // The exit criterion: a malformed reviewer output stops the loop. Nothing counts it as a pass, an
-// approval is refused, and sending the work back asks the reviewer again.
+// approval is refused, and sending the work back asks the reviewer again. Each time it is asked, an answer that is
+// not valid is asked for once more, with its errors.
 func TestAMalformedReviewerOutputStopsTheLoopForAPerson(t *testing.T) {
 	script := implementOnce + `  build-spec:
     - result: { status: ok, output: "LGTM, ship it.", usage: { in: 100, out: 10, turns: 1 } }
     - result: { status: ok, output: "Looks fine to me.", usage: { in: 100, out: 10, turns: 1 } }
+    - result: { status: ok, output: "Still fine.", usage: { in: 100, out: 10, turns: 1 } }
+    - result: { status: ok, output: "Fine.", usage: { in: 100, out: 10, turns: 1 } }
     - result: { status: ok, report: [], usage: { in: 100, out: 10, turns: 1 } }
   build-quality:
     - result: { status: ok, report: [], usage: { in: 100, out: 10, turns: 1 } }
@@ -73,7 +76,7 @@ func TestAMalformedReviewerOutputStopsTheLoopForAPerson(t *testing.T) {
 		t.Errorf("reject: exit %d:\n%s%s; want the loop to go on to the end", code, out, errOut)
 	}
 	s, _ := run.LoadState(run.Dir(dir, id))
-	if s.Attempts["build"] != 1 || s.Attempts["build-spec"] != 3 {
+	if s.Attempts["build"] != 1 || s.Attempts["build-spec"] != 5 {
 		t.Errorf("sessions: implementer %d, spec reviewer %d; the implementer must not run again for an unreadable reviewer", s.Attempts["build"], s.Attempts["build-spec"])
 	}
 }

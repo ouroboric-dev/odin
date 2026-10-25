@@ -129,7 +129,7 @@ const decisionLoop = `  - { id: design, kind: agent, role: planner, prompt: p.md
   - { id: design-gate, kind: gate, gate: spec, reruns: design }
   - id: build
     kind: loop
-    input: [decisions, rejection, refusal]
+    input: [decisions, rejection, refusal, open_findings, check_results]
     output: ygg.implement/v1
     repo: repos/app
     role: planner
@@ -137,8 +137,8 @@ const decisionLoop = `  - { id: design, kind: agent, role: planner, prompt: p.md
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: planner, prompt: p.md, input: [decisions], output: ygg.review/v1 }
-      - { id: arch, role: planner, prompt: p.md, input: [decisions], output: ygg.review/v1 }
+      - { id: spec, role: planner, prompt: p.md, input: [decisions, change, open_findings, check_results], output: ygg.review/v1 }
+      - { id: arch, role: planner, prompt: p.md, input: [decisions, change, open_findings, check_results], output: ygg.review/v1 }
 `
 
 func TestNoteReachesLoopSessions(t *testing.T) {

@@ -49,7 +49,8 @@ func TestALoopThatRunsOutOfAttemptsStopsTheRunForAPersonInEveryMode(t *testing.T
 			t.Errorf("%s: the ledger lacks an escalation that is %s:\n%s", mode, want, text)
 		}
 		gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "build-3.md"))
-		for _, want := range []string{"Escalation at loop build", "3 attempts ended with 1 blocking finding(s) open", "- check-unit-result (blocker, from unit)", "ygg reject " + r.State.ID + " build --reason", "ygg approve " + r.State.ID + " build"} {
+		for _, want := range []string{"Escalation at loop build", "3 attempts ended with 1 blocking finding(s) open", "- check-unit-result (blocker, from unit)",
+			"ygg reject " + r.State.ID + ` build --reason "..." | --decisions <file>`, "ygg approve " + r.State.ID + ` build [--note "..." | --decisions <file>]`} {
 			if !strings.Contains(string(gate), want) {
 				t.Errorf("%s: the gate file lacks %q:\n%s", mode, want, gate)
 			}
@@ -111,10 +112,12 @@ func TestApprovingAnExhaustedLoopGoesOnWithTheFindingsOpen(t *testing.T) {
 	}
 }
 
-// The exit criterion: a malformed reviewer output stops the loop, and is never a pass.
+// The exit criterion: a malformed reviewer output stops the loop, and is never a pass. Each time the reviewer is
+// asked, an answer that is not valid is asked for once more with its errors; asked twice, it escalates.
 func TestAMalformedReviewerOutputStopsTheLoopAndIsNeverAPass(t *testing.T) {
 	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, output: \"LGTM, ship it\" }\n    - result: { status: ok, output: \"Looks fine to me.\" }\n" +
+		"    - result: { status: ok, output: \"Still fine.\" }\n    - result: { status: ok, output: \"Fine.\" }\n" +
 		"    - result: { status: ok, report: [] }\n"
 	r := startReview(t, "unattended", script)
 	out, err := Advance(context.Background(), r)
@@ -122,8 +125,8 @@ func TestAMalformedReviewerOutputStopsTheLoopAndIsNeverAPass(t *testing.T) {
 		t.Fatalf("Advance() = %+v, %v; want a stop at escalation", out, err)
 	}
 	rec := r.State.Loops["build"]
-	if rec.State.Passed || rec.Escalation.Reason != jormungandr.ReasonUnreadable || r.State.Attempts["build-spec"] != 2 || r.State.Attempts["build"] != 1 {
-		t.Errorf("record %+v; reviewer sessions %d, implementer sessions %d; want a retry of the reviewer once and no second implementer attempt",
+	if rec.State.Passed || rec.Escalation.Reason != jormungandr.ReasonUnreadable || r.State.Attempts["build-spec"] != 4 || r.State.Attempts["build"] != 1 {
+		t.Errorf("record %+v; reviewer sessions %d, implementer sessions %d; want the reviewer asked twice, each with a repair, and no second implementer attempt",
 			rec, r.State.Attempts["build-spec"], r.State.Attempts["build"])
 	}
 	if !strings.Contains(rec.Escalation.Detail, "reviewer spec") {
@@ -213,5 +216,62 @@ func TestAnEscalatedLoopSurvivesAReopenedRun(t *testing.T) {
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Errorf("Advance() = %+v, %v", out, err)
+	}
+}
+
+const blockedReview = `'{"blocked": {"reason": "I cannot read the diff."}}'`
+
+// A reviewer that answers twice in a row that it could not review stops the loop with its own reason (ruling R19,
+// amended), and a person may accept the work without its report.
+func TestAReviewerThatIsBlockedTwiceStopsTheLoopForAPersonWhoMayApprove(t *testing.T) {
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"  build-spec:\n    - result: { status: ok, output: " + blockedReview + " }\n    - result: { status: ok, output: " + blockedReview + " }\n"
+	r := startReview(t, "key-points", script)
+	out, err := Advance(context.Background(), r)
+	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateEscalation {
+		t.Fatalf("Advance() = %+v, %v; want a stop at escalation", out, err)
+	}
+	rec := r.State.Loops["build"]
+	if rec.Escalation == nil || rec.Escalation.Reason != jormungandr.ReasonReviewerBlocked || !strings.Contains(rec.Escalation.Detail, "reviewer spec is blocked: I cannot read the diff.") {
+		t.Fatalf("escalation = %+v; want reviewer-blocked, naming the reviewer and its reason", rec.Escalation)
+	}
+	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "build-1.md"))
+	for _, want := range []string{"Reason: reviewer-blocked", "I cannot read the diff.", "The reviewer answered that it could not review the work",
+		"ygg approve " + r.State.ID + ` build [--note "..." | --decisions <file>]`} {
+		if !strings.Contains(string(gate), want) {
+			t.Errorf("the gate file lacks %q:\n%s", want, gate)
+		}
+	}
+	if strings.Contains(string(gate), "can't be read") {
+		t.Errorf("the gate file calls a blocked reviewer unreadable:\n%s", gate)
+	}
+	if !Approvable(r) || !Rejectable(r) {
+		t.Fatal("a blocked reviewer takes a person's ruling")
+	}
+	if err := Approve(context.Background(), r, "build", Note(r, "build", "I read the diff myself")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v; want done", out, err)
+	}
+	if got := r.State.Summaries["build"]; !strings.Contains(got, "accepted by the operator after 1 attempt(s)") {
+		t.Errorf("summary = %q", got)
+	}
+}
+
+// Rejecting a blocked reviewer asks it again on the same work: the implementer does not run again.
+func TestRejectingABlockedReviewerAsksItAgainOnTheSameWork(t *testing.T) {
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"  build-spec:\n    - result: { status: ok, output: " + blockedReview + " }\n    - result: { status: ok, output: " + blockedReview + " }\n" +
+		"    - result: { status: ok, report: [] }\n"
+	r := startReview(t, "key-points", script)
+	if out, _ := Advance(context.Background(), r); out.Status != run.StatusStopped {
+		t.Fatalf("Advance() = %+v; want a stop", out)
+	}
+	if err := Reject(context.Background(), r, "build", Reason("The diff is in the leaf now.")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone || r.State.Attempts["build"] != 1 || r.State.Attempts["build-spec"] != 3 {
+		t.Errorf("Advance() = %+v, %v; implementer sessions %d, reviewer sessions %d; want done with 1 and 3", out, err, r.State.Attempts["build"], r.State.Attempts["build-spec"])
 	}
 }

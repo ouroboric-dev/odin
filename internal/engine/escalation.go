@@ -10,12 +10,13 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
 // escalation is a loop that gave up: it ran out of attempts, an implementer disputed a finding that no
-// check settles, or a reviewer's answer could not be used twice in a row (spec §4.6, §7.3). The run stops
-// for a person.
+// check settles, an implementer or a reviewer answered that it could not do its work, or a reviewer's answer
+// could not be used twice in a row (spec §4.6, §7.3). The run stops for a person.
 type escalation struct{ out jormungandr.Outcome }
 
 func (e *escalation) Error() string {
@@ -31,7 +32,8 @@ func stopEscalation(r *run.Run, n schema.Node, e *escalation) (Outcome, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Escalation at loop %s (%s)\n\n", n.ID, gungnir.GateEscalation)
 	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Time: %s\n- Reason: %s\n\n", s.ID, s.Mode, time.Now().UTC().Format(time.RFC3339), e.out.Reason)
-	fmt.Fprintf(&b, "## What happened\n\n%s\n\n## Findings still open\n\n", e.out.Detail)
+	// The detail holds agents' words (a blocked reason, a claim, a dispute's evidence): it can't start a heading here.
+	fmt.Fprintf(&b, "## What happened\n\n%s\n\n## Findings still open\n\n", mdsafe.Text(e.out.Detail))
 	if len(e.out.Open) == 0 {
 		b.WriteString("None.\n")
 	}
@@ -43,17 +45,7 @@ func stopEscalation(r *run.Run, n schema.Node, e *escalation) (Outcome, error) {
 	}
 	u := s.Usage
 	fmt.Fprintf(&b, "\n## Cost so far\n\n- Tokens: %d in, %d out, %d from cache\n- Turns: %d\n- Cost: $%.4f\n", u.InTok, u.OutTok, u.CacheTok, u.Turns, u.CostUSD)
-	b.WriteString("\n## Decide\n\n")
-	fmt.Fprintf(&b, "    ygg reject %s %s --reason \"...\"\n\nThe reason goes to the implementer, and the loop gets %d more attempts, with the findings above.\n", s.ID, n.ID, n.Attempts)
-	switch {
-	case e.out.Reason == jormungandr.ReasonDisputed:
-		fmt.Fprintf(&b, "\n    ygg approve %s %s [--note \"...\"]\n\nThe implementer is right: the work goes on as it is, and the reviewer's claim above does not stop it. "+
-			"The finding stays open in the ledger, with both sides: only a check or a reviewer can close one.\n", s.ID, n.ID)
-	case e.out.Reason == jormungandr.ReasonExhausted:
-		fmt.Fprintf(&b, "\n    ygg approve %s %s [--note \"...\"]\n\nThe work goes on as it is. The findings stay open in the ledger: only a check or a reviewer can close one.\n", s.ID, n.ID)
-	default:
-		b.WriteString("\nApproving is not offered: a reviewer whose answer can't be read has not approved anything. Fix the reviewer, its role or its prompt, and then reject, to ask it again.\n")
-	}
+	b.WriteString("\n## Decide\n\n" + decideText(s.ID, n, e.out.Reason))
 	if err := os.MkdirAll(filepath.Join(r.Dir, "gates"), 0o755); err != nil {
 		return Outcome{}, err
 	}
@@ -67,4 +59,31 @@ func stopEscalation(r *run.Run, n schema.Node, e *escalation) (Outcome, error) {
 	}
 	s.Status, s.Pending, s.PendingGate = run.StatusStopped, n.ID, gungnir.GateEscalation
 	return Outcome{Status: run.StatusStopped, Gate: n.ID}, r.Save()
+}
+
+// decideText is the gate file's Decide section for a loop that escalated for reason: what a rejection and an
+// approval do, each reason in its own words. A reviewer whose answer can't be read is offered no approval.
+func decideText(id string, n schema.Node, reason string) string {
+	reject := fmt.Sprintf("    ygg reject %s %s --reason \"...\" | --decisions <file>\n\n", id, n.ID)
+	approve := fmt.Sprintf("\n    ygg approve %s %s [--note \"...\" | --decisions <file>]\n\n", id, n.ID)
+	again := fmt.Sprintf("The reason goes to the implementer, and the loop gets %d more attempts, with the findings above.\n", n.Attempts)
+	switch reason {
+	case jormungandr.ReasonDisputed:
+		return reject + again + approve + "The implementer is right: the work goes on as it is, and the reviewer's claim above does not stop it. " +
+			"The finding stays open in the ledger, with both sides: only a check or a reviewer can close one.\n"
+	case jormungandr.ReasonExhausted:
+		return reject + again + approve + "The work goes on as it is. The findings stay open in the ledger: only a check or a reviewer can close one.\n"
+	case jormungandr.ReasonBlocked:
+		return "The implementer answered that it could not do the work, for the reason above; no check or reviewer judged the attempt.\n\n" +
+			reject + "The reason is the answer to what it lacked: it goes to the implementer, and the loop gets " + fmt.Sprint(n.Attempts) +
+			" more attempts.\n" + approve + "The work goes on as the blocked attempt left it, unjudged. The findings stay open in the ledger: " +
+			"only a check or a reviewer can close one.\n"
+	case jormungandr.ReasonReviewerBlocked:
+		return "The reviewer answered that it could not review the work, twice in a row, for the reason above.\n\n" +
+			reject + "The checks and the reviewer run again on the same work, and the implementer does not. The reason is the rejection " +
+			"input of the loop's sessions that declare it.\n" + approve + "The work goes on as it is, without that reviewer's report. The findings stay open " +
+			"in the ledger: only a check or a reviewer can close one.\n"
+	}
+	return reject + "The checks and the reviewer run again on the same work.\n\nApproving is not offered: a reviewer whose answer can't be read has " +
+		"not approved anything. Fix the reviewer, its role or its prompt, and then reject, to ask it again.\n"
 }

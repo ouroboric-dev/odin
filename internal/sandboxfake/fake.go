@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ouroboric-dev/gleipnir/checks"
 	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
 )
@@ -45,6 +46,8 @@ type Sandbox struct {
 	Fail func(gungnir.Cmd) error
 	// Intercept, if set, sees every command first. A true handled result is the command's result.
 	Intercept func(gungnir.Cmd) (res gungnir.ExecResult, handled bool)
+	// results are what the last typed check of each sandbox wrote to its checks.ResultPath, by sandbox.
+	results map[string][]byte
 }
 
 var _ gungnir.Sandbox = (*Sandbox)(nil)
@@ -102,14 +105,34 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 			return res, nil
 		}
 	}
+	if res, ok := s.typedResult(env, c); ok {
+		return res, nil
+	}
+	// A typed check writes its result to checks.ResultPath, in the sandbox's own /tmp. Here it is told a file of its
+	// own instead, never the host's /tmp, which tests that run at once would share.
+	var resultFile string
+	if c.Env[checks.ResultEnv] == checks.ResultPath {
+		dir, err := os.MkdirTemp("", "sandboxfake-result-")
+		if err != nil {
+			return gungnir.ExecResult{}, err
+		}
+		defer os.RemoveAll(dir)
+		resultFile = filepath.Join(dir, filepath.Base(checks.ResultPath))
+	}
 	cmd := exec.CommandContext(ctx, c.Argv[0], c.Argv[1:]...)
 	cmd.Dir = filepath.Join(env.Workdir, c.Dir)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.TempDir(), "LANG=C.UTF-8"}
 	for k, v := range c.Env {
+		if k == checks.ResultEnv && resultFile != "" {
+			v = resultFile
+		}
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = c.Stdin, c.Stdout, c.Stderr
 	err := cmd.Run()
+	if resultFile != "" {
+		s.keepResult(env, resultFile)
+	}
 	if ctx.Err() != nil { // like the real driver: a command stopped by its context is the context's error
 		return gungnir.ExecResult{}, ctx.Err()
 	}
@@ -119,6 +142,46 @@ func (s *Sandbox) Exec(ctx context.Context, env gungnir.Env, c gungnir.Cmd) (gun
 	}
 	return gungnir.ExecResult{}, err
 }
+
+// typedResult answers the two commands of a typed check that act on checks.ResultPath, the removal before the check
+// and the read after it, from what the sandbox's last typed check wrote. handled is false for any other command.
+func (s *Sandbox) typedResult(env gungnir.Env, c gungnir.Cmd) (res gungnir.ExecResult, handled bool) {
+	key := resultKey(env)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case slices.Equal(c.Argv, []string{"rm", "-f", "--", checks.ResultPath}):
+		delete(s.results, key)
+		return gungnir.ExecResult{}, true
+	case len(c.Argv) == 5 && c.Argv[0] == "sh" && c.Argv[1] == "-c" && c.Argv[4] == checks.ResultPath:
+		b, ok := s.results[key]
+		if !ok {
+			return gungnir.ExecResult{ExitCode: 1}, true // test -f fails: no result file
+		}
+		if c.Stdout != nil {
+			c.Stdout.Write(b)
+		}
+		return gungnir.ExecResult{}, true
+	}
+	return gungnir.ExecResult{}, false
+}
+
+// keepResult keeps what a typed check wrote to file as the sandbox's result; a check that wrote none leaves none.
+func (s *Sandbox) keepResult(env gungnir.Env, file string) {
+	b, err := os.ReadFile(file)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil {
+		delete(s.results, resultKey(env))
+		return
+	}
+	if s.results == nil {
+		s.results = map[string][]byte{}
+	}
+	s.results[resultKey(env)] = b
+}
+
+func resultKey(env gungnir.Env) string { return env.Name + "\x00" + env.Workdir }
 
 func (s *Sandbox) Down(_ context.Context, env gungnir.Env) error {
 	s.mu.Lock()

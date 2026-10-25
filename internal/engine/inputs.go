@@ -334,15 +334,9 @@ func reviewerFindings(open []gungnir.Finding) (string, error) {
 		"as open if the problem is still there, or as fixed with proof if it is gone. One you leave out is an error.\n\n" + block, nil
 }
 
-// checkView is how one check of the loop ended, as a session reads it: until the checks' results are typed
-// (ygg.check/v1), its name and whether it passed.
-type checkView struct {
-	Check  string `json:"check"`
-	Passed bool   `json:"passed"`
-}
-
-// checkResults is the check_results section: "" is none.
-func checkResults(checks []checkView) (string, error) {
+// checkResults is the check_results section: how the checks of the ladder ended the last time they ran, in attempt,
+// as their typed results say. "" is none.
+func checkResults(checks []run.CheckView, attempt int) (string, error) {
 	if len(checks) == 0 {
 		return "", nil
 	}
@@ -350,5 +344,6 @@ func checkResults(checks []checkView) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "How the checks of this loop ended when they last ran on the work:\n\n" + block, nil
+	return fmt.Sprintf("How the checks of this loop ended when they last ran on the work, in attempt %d. The checks run in order "+
+		"and stop at the first that fails, so a check not listed here did not run.\n\n", attempt) + block, nil
 }

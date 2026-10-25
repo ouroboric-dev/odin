@@ -72,7 +72,7 @@ func TestTheImplementerGetsTheTasksTextAndContract(t *testing.T) {
 	over.Tasks = append([]schema.PlanTask{}, good.Tasks...)
 	over.Tasks[1].Text = strings.Repeat("é", 40000) // 40000 characters, within the schema; 80000 bytes, over readiness
 	step := func(node, content string) string {
-		return "  " + node + ":\n    - actions: [ { write: { path: api.txt, content: " + quote(content) + " } } ]\n      result: { status: ok, summary: wrote api.txt }\n"
+		return "  " + node + ":\n    - actions: [ { write: { path: api.txt, content: " + quote(content) + " } } ]\n      result: { status: ok, summary: wrote api.txt, output: '{\"summary\": \"done\"}' }\n"
 	}
 	clean := "    - result: { status: ok, summary: no findings, output: '{\"findings\": []}' }\n"
 	script := "steps:\n  plan:\n" +

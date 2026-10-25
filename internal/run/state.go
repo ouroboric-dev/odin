@@ -136,6 +136,21 @@ type LoopRecord struct {
 	// Base is the leaf's commit when the loop started, before its first attempt: the task's diff starts there.
 	// A state written before this field has none, and the loop records the leaf's commit when it next runs.
 	Base string `json:"base,omitempty"`
+	// Checks are how the checks of the ladder ended the last time they ran, in attempt ChecksAttempt, read from their
+	// typed results: the check_results of the sessions after them. They are kept here, so a resumed session is told
+	// what it was told before the stop.
+	Checks        []CheckView `json:"checks,omitempty"`
+	ChecksAttempt int         `json:"checks_attempt,omitempty"`
+}
+
+// CheckView is how one check of a loop's ladder ended, as its typed result (ygg.check/v1) says, for the sessions of
+// the loop to read. The lists are empty for a check with no valid typed result: the exit code alone decided it.
+type CheckView struct {
+	Check       string   `json:"check"`
+	Passed      bool     `json:"passed"`
+	TimedOut    bool     `json:"timed_out,omitempty"`
+	FailedTests []string `json:"failed_tests,omitempty"`
+	PassedTests []string `json:"passed_tests,omitempty"`
 }
 
 // Escalation is why a loop gave up (spec §7.3): see the Reason constants of Jormungandr.

@@ -99,8 +99,8 @@ func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]
 }
 
 // sessionInputs lists the inputs of a session of node n, or of its reviewer rv when rv is set, in order: what it
-// declares, then what the node reviews when it does not list it (ruling R12), and for a loop outside a foreach
-// body the loop's own sources (withLoopSources).
+// declares, then what the node reviews when it does not list it (ruling R12). A loop's sessions declare the loop's
+// own sources (change, open_findings, check_results) as any other (ruling R37).
 func sessionInputs(n schema.Node, rv *schema.Reviewer) []string {
 	inputs := n.Input
 	if rv != nil {
@@ -108,28 +108,7 @@ func sessionInputs(n schema.Node, rv *schema.Reviewer) []string {
 	} else if n.Reviews != "" && !slices.Contains(inputs, n.Reviews) {
 		inputs = append(slices.Clone(inputs), n.Reviews)
 	}
-	if n.Kind == schema.KindLoop && n.Task == "" {
-		inputs = withLoopSources(inputs, rv != nil)
-	}
 	return inputs
-}
-
-// withLoopSources adds to the inputs of a session of a loop outside a foreach body the loop's own sources it
-// lacks: the open findings and the check results, and for a reviewer the change. The graph check lets only a
-// foreach body declare them (ruling R13), and a loop's sessions can't work without them; inside a body, a session
-// gets only what it declares.
-func withLoopSources(inputs []string, reviewer bool) []string {
-	own := []string{schema.SourceOpenFindings, schema.SourceCheckResults}
-	if reviewer {
-		own = append([]string{schema.SourceChange}, own...)
-	}
-	out := slices.Clone(inputs)
-	for _, s := range own {
-		if !slices.Contains(out, s) {
-			out = append(out, s)
-		}
-	}
-	return out
 }
 
 // workspaceNote tells a scratch agent what its workspace holds. Its documents are its answer: Odin publishes the

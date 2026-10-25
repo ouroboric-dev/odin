@@ -36,7 +36,7 @@ func runLoop(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := recordBase(ctx, r, n, rec); err != nil {
 		return err
 	}
-	steps := &loopSteps{r: r, n: n, st: &rec.State, base: rec.Base}
+	steps := &loopSteps{r: r, n: n, rec: rec}
 	out, err := jormungandr.Run(ctx, cfg, &rec.State, steps)
 	if err != nil {
 		return nodeError(err)
@@ -78,31 +78,29 @@ func loopConfig(n schema.Node) jormungandr.Config {
 	return cfg
 }
 
-// loopSteps is what a loop's steps do in a run: sessions, checks, ledger lines and run.json.
+// loopSteps is what a loop's steps do in a run: sessions, checks, ledger lines and run.json. rec is the loop's
+// record in run.json: its state, the leaf's commit when it started (the task's diff, which the reviewers read,
+// starts there), and how its checks last ended (the sessions' check_results).
 type loopSteps struct {
-	r  *run.Run
-	n  schema.Node
-	st *jormungandr.State
-	// base is the leaf's commit when the loop started: the task's diff, which the reviewers read, starts there.
-	base string
-	// checks are how the checks of each attempt ended, as this run of the loop saw them: the next attempt's
-	// check_results. A resumed loop has none of the attempts before it.
-	checks map[int][]checkView
+	r   *run.Run
+	n   schema.Node
+	rec *run.LoopRecord
 }
 
 var _ jormungandr.Steps = (*loopSteps)(nil)
 
 // Implement runs one implementer session with the findings that are open, and commits what it did. It
-// returns the implementer's answer as a ygg.implement/v1 document, which holds its disputes; an answer that
-// is not one is an agent failure. A session that failed as an agent does leaves the leaf as the last
-// attempt left it: what it wrote is discarded, so the next attempt does not build on half a thought.
+// returns the implementer's answer, a ygg.implement/v1 document that came through the output channel
+// (sessionWithOutput: asked for once more when it does not validate, and kept); one that is not valid after that
+// is an agent failure. A session that failed as an agent does leaves the leaf as the last attempt left it: what
+// it wrote is discarded, so the next attempt does not build on half a thought.
 func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.Input) (schema.Implement, error) {
 	r, n := l.r, l.n
 	findings, err := implementerFindings(in)
 	if err != nil {
 		return schema.Implement{}, err
 	}
-	checks, err := checkResults(l.checks[attempt-1])
+	checks, err := checkResults(l.rec.Checks, l.rec.ChecksAttempt)
 	if err != nil {
 		return schema.Implement{}, err
 	}
@@ -114,10 +112,10 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 	text = jormungandr.WithDisputeFormat(text, in.Open, n.Checks)
 	started := func() error {
 		return r.Log(gungnir.Event{Name: gungnir.EventLoopAttempt, Node: n.ID, Attempt: attempt,
-			Result: fmt.Sprintf("attempt %d of %d starts with %d finding(s) open", attempt, l.st.Limit, len(in.Open))})
+			Result: fmt.Sprintf("attempt %d of %d starts with %d finding(s) open", attempt, l.rec.State.Limit, len(in.Open))})
 	}
-	res, ev, err := session(ctx, r, sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, output: schema.ContractImplement,
-		maxTurns: n.MaxTurns, maxTokens: n.MaxTokens, timeout: time.Duration(n.Timeout), started: started})
+	ans, res, ev, err := sessionWithOutput[schema.Implement](ctx, r, sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text,
+		output: schema.ContractImplement, maxTurns: n.MaxTurns, maxTokens: n.MaxTokens, timeout: time.Duration(n.Timeout), started: started})
 	if derr := dropInputs(r, n); derr != nil && err == nil {
 		err = derr
 	}
@@ -137,21 +135,15 @@ func (l *loopSteps) Implement(ctx context.Context, attempt int, in jormungandr.I
 	if err := r.Log(ev); err != nil {
 		return schema.Implement{}, err
 	}
-	// Until the loop's implementer is asked for its answer (typed-T20), a session that hands back nothing stands
-	// for a summary and no disputes, as it did before.
-	if len(res.Submitted) == 0 && strings.TrimSpace(res.Output) == "" {
-		return schema.Implement{Summary: res.Summary}, nil
-	}
-	ans, _, err := readOutput[schema.Implement](r, n.Role, schema.ContractImplement, res)
-	if err != nil {
-		return schema.Implement{}, &jormungandr.AgentFailure{Reason: "the answer can't be used: " + err.Error()}
-	}
 	return ans, nil
 }
 
 // Check runs one check of the ladder in the leaf, on the work the attempt committed, and puts the leaf
-// back to that commit afterwards (backlog B-004). A failing check is a finding; a check that could not
-// run, because the sandbox failed under it, is an error.
+// back to that commit afterwards (backlog B-004). The check is typed (gleipnir's checks.Spec.Typed, ruling
+// R28): its result (ygg.check/v1) gives one finding per failure, the tests that failed and the tests that
+// passed, which settle disputes (ruling R23). A failing check always reports at least one finding. A check
+// that could not run, because the sandbox failed under it, is an error. How it ended is kept in the loop's
+// record, for the sessions after it.
 func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormungandr.CheckOutcome, error) {
 	r, n := l.r, l.n
 	rel := filepath.Join("logs", fmt.Sprintf("%s-%d-%s.log", n.ID, attempt, name))
@@ -163,7 +155,7 @@ func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormun
 	if len(argv) == 0 {
 		return jormungandr.CheckOutcome{}, &nodeFailure{fmt.Errorf("the realm %s defines no check %s", rl.Name, name)}
 	}
-	res, err := runCheck(ctx, r, n.ID, n.Repo, r.RepoDir(n.Repo), checks.Spec{Name: name, Argv: argv, Timeout: ExecTimeout},
+	res, err := runCheck(ctx, r, n.ID, n.Repo, r.RepoDir(n.Repo), checks.Spec{Name: name, Argv: argv, Timeout: ExecTimeout, Typed: true},
 		filepath.Join(r.Dir, rel))
 	if err == nil {
 		var lf *leaf.Leaf
@@ -184,32 +176,46 @@ func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormun
 			result = name + ": timed out"
 		}
 	}
-	if err := r.Log(gungnir.Event{Name: gungnir.EventCheckResult, Node: n.ID, Attempt: attempt, Result: result,
-		DurationMS: res.Duration.Milliseconds()}); err != nil {
+	ev := gungnir.Event{Name: gungnir.EventCheckResult, Node: n.ID, Attempt: attempt, Result: result, DurationMS: res.Duration.Milliseconds()}
+	if res.TypedRun && res.TypedErr != nil {
+		ev.Note = firstLine("its typed result: " + res.TypedErr.Error())
+	}
+	if err := r.Log(ev); err != nil {
 		return jormungandr.CheckOutcome{}, err
 	}
-	if l.checks == nil {
-		l.checks = map[int][]checkView{}
-	}
-	l.checks[attempt] = append(l.checks[attempt], checkView{Check: name, Passed: res.Passed})
-	out := jormungandr.CheckOutcome{Passed: res.Passed, Check: name,
+	out := jormungandr.CheckOutcome{Passed: res.Passed, Check: name, Failed: res.Failed(), PassedTests: res.PassedTests(),
 		Proof: fmt.Sprintf("check %s ran in attempt %d and passed (%s)", name, attempt, filepath.ToSlash(rel))}
-	// Until the ladder's checks are typed (typed-T20), a failing check is the one finding check-<name>-result, at the
-	// log, named from the run folder as before.
 	for _, f := range res.Findings() {
-		if f.Location == res.Log+":1" {
+		if f.Location == res.Log+":1" { // the log, named from the run folder, as every location is relative
 			f.Location = filepath.ToSlash(rel) + ":1"
 		}
 		out.Findings = append(out.Findings, f)
 	}
+	l.keepCheck(attempt, run.CheckView{Check: name, Passed: res.Passed, TimedOut: res.TimedOut, FailedTests: out.Failed, PassedTests: out.PassedTests})
 	return out, nil
 }
 
-// Review runs one read-only reviewer on the committed work and returns its report, its answer read as a
-// ygg.review/v1 document; an answer that is not one is an *UnreadableError. The reviewer is told what it
-// reported before and which checks passed. Whatever it changed in the leaf, an ignored file too, is a hard
-// stop at policy-violation.
-func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, open []gungnir.Finding, passed []string) (schema.Review, error) {
+// keepCheck records how check v ended in attempt, in the loop's record: a check of a new attempt starts the list
+// again, and a check run again in the same attempt (a ladder resumed after a stop) replaces its line. The ladder
+// saves the record with each rung.
+func (l *loopSteps) keepCheck(attempt int, v run.CheckView) {
+	if l.rec.ChecksAttempt != attempt {
+		l.rec.Checks, l.rec.ChecksAttempt = nil, attempt
+	}
+	if i := slices.IndexFunc(l.rec.Checks, func(c run.CheckView) bool { return c.Check == v.Check }); i >= 0 {
+		l.rec.Checks[i] = v
+		return
+	}
+	l.rec.Checks = append(l.rec.Checks, v)
+}
+
+// Review runs one read-only reviewer on the committed work and returns its report, a ygg.review/v1 document
+// that came through the output channel (sessionWithOutput: asked for once more when it does not validate, and
+// kept); one that is not valid after that is an agent failure, which the loop counts as an answer it can't use.
+// The reviewer is told what it reported before and how the checks of this attempt ended, all of which passed:
+// reviewers run only then. Whatever it changed in the leaf, an ignored file too, is a hard stop at
+// policy-violation.
+func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, open []gungnir.Finding, _ []string) (schema.Review, error) {
 	r, n := l.r, l.n
 	var rv schema.Reviewer
 	for _, c := range n.Reviewers {
@@ -221,17 +227,13 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if err != nil {
 		return schema.Review{}, err
 	}
-	var ran []checkView
-	for _, c := range passed {
-		ran = append(ran, checkView{Check: c, Passed: true})
-	}
-	checks, err := checkResults(ran)
+	checks, err := checkResults(l.rec.Checks, l.rec.ChecksAttempt)
 	if err != nil {
 		return schema.Review{}, err
 	}
 	extra := map[string]string{schema.SourceOpenFindings: findings, schema.SourceCheckResults: checks}
 	if slices.Contains(sessionInputs(n, &rv), schema.SourceChange) {
-		change, err := reviewChange(ctx, r, n, l.base, attempt)
+		change, err := reviewChange(ctx, r, n, l.rec.Base, attempt)
 		if err != nil {
 			return schema.Review{}, err
 		}
@@ -249,7 +251,7 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	}
 	sp := sessionSpec{key: n.SessionKey(rv), role: rv.Role, repo: n.Repo, text: text, output: schema.ContractReview, readOnly: true, before: before,
 		maxTurns: rv.MaxTurns, maxTokens: rv.MaxTokens, timeout: time.Duration(rv.Timeout)}
-	res, ev, err := session(ctx, r, sp)
+	report, res, ev, err := sessionWithOutput[schema.Review](ctx, r, sp)
 	err = checkReadOnly(ctx, r, sp, ev, err)
 	if derr := dropInputs(r, n); derr != nil && err == nil {
 		err = derr
@@ -260,10 +262,6 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
 	if err := r.Log(ev); err != nil {
 		return schema.Review{}, err
-	}
-	report, _, err := readOutput[schema.Review](r, rv.Role, schema.ContractReview, res)
-	if err != nil {
-		return schema.Review{}, &jormungandr.UnreadableError{Reviewer: rv.ID, Err: err}
 	}
 	return report, nil
 }

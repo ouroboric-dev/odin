@@ -14,7 +14,7 @@ import (
 // reviewLoop is a loop with the check unit and one reviewer, spec, who runs as the scripted planner.
 const reviewLoop = `  - id: build
     kind: loop
-    input: [rejection, refusal]
+    input: [rejection, refusal, open_findings, check_results]
     output: ygg.implement/v1
     repo: repos/app
     role: planner
@@ -22,7 +22,7 @@ const reviewLoop = `  - id: build
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: planner, prompt: p.md, output: ygg.review/v1 }
+      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results], output: ygg.review/v1 }
 `
 
 func startReview(t *testing.T, mode, script string) *run.Run {

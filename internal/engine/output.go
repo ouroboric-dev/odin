@@ -101,6 +101,7 @@ func sessionWithOutput[T any](ctx context.Context, r *run.Run, sp sessionSpec) (
 		}
 		repair := sp
 		repair.text, repair.repair = sp.text+"\n\n"+repairSection(sp.output, rerr), true
+		repair.started = nil // what started is the first session's; the repair belongs to it
 		if res, ev, err = session(ctx, r, repair); err != nil {
 			return zero, res, ev, err
 		}

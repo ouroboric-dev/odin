@@ -166,7 +166,7 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, v
 		fmt.Fprintf(&b, "\n## Blocked\n\nThe task %s is blocked, and the tasks that depend on it. Nothing is waiting for an approval. "+
 			"What the task did is kept on a ref for the operator (see the task's reason in the report).\n", n.Task)
 	} else if action != gate.Auto {
-		fmt.Fprintf(&b, "\n## Decide\n\n    ygg approve %s %s [--note \"...\"]\n    ygg reject %s %s --reason \"...\"\n\n"+
+		fmt.Fprintf(&b, "\n## Decide\n\n    ygg approve %s %s [--note \"...\" | --decisions <file>]\n    ygg reject %s %s --reason \"...\" | --decisions <file>\n\n"+
 			"A rejection re-runs %s with the reason. Either takes a decisions file instead (--decisions FILE, ygg.decisions/v1): "+
 			"decisions under ids of your own, answers to the design's open questions by their ids, and for a rejection the reason. "+
 			"The decisions hold for every later stage, and the spec must cite each.\n", s.ID, n.ID, s.ID, n.ID, n.Reruns)
@@ -293,8 +293,12 @@ func Approve(ctx context.Context, r *run.Run, gateID string, d schema.Decisions)
 		// The operator accepts the work with its findings open. They stay open in the ledger: only their
 		// source can close a finding.
 		rec := s.Loops[n.ID]
+		attempts := rec.State.Attempt // a loop stopped in its ladder (a blocked reviewer) is still in the attempt it judged
+		if rec.State.Phase == jormungandr.PhaseImplement {
+			attempts--
+		}
 		rec.State.Passed, rec.Escalation = true, nil
-		s.Summaries[n.ID] = fmt.Sprintf("accepted by the operator after %d attempt(s), with %d finding(s) open", rec.State.Attempt-1, len(rec.State.Book.Open()))
+		s.Summaries[n.ID] = fmt.Sprintf("accepted by the operator after %d attempt(s), with %d finding(s) open", attempts, len(rec.State.Book.Open()))
 		delete(s.Reasons, n.ID)
 		s.Position++
 	case n.Kind == schema.KindPublish && s.PendingGate == gungnir.GateRealSecrets:
@@ -342,10 +346,15 @@ func Rejectable(r *run.Run) bool {
 	return n.Kind == schema.KindGate || (n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation)
 }
 
-// approvableReason is true for the reasons a person can rule on: attempts that ran out, and a dispute no
-// check settled. A reviewer whose answer can't be read is not one.
+// approvableReason is true for the reasons a person can rule on: attempts that ran out, a dispute no check
+// settled, and an implementer or a reviewer that answered it could not do its work. A reviewer whose answer
+// can't be read is not one: nobody can approve on its behalf.
 func approvableReason(reason string) bool {
-	return reason == jormungandr.ReasonExhausted || reason == jormungandr.ReasonDisputed
+	switch reason {
+	case jormungandr.ReasonExhausted, jormungandr.ReasonDisputed, jormungandr.ReasonBlocked, jormungandr.ReasonReviewerBlocked:
+		return true
+	}
+	return false
 }
 
 // Approvable reports whether the pending stop takes an approval. A loop that gave up because a
@@ -467,7 +476,7 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 	}
 	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Time: %s\n\n## Why\n\n%s\n\n", s.ID, s.Mode,
 		time.Now().UTC().Format(time.RFC3339), why)
-	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
+	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\" | --decisions <file>]\n\n", s.ID, n.ID)
 	switch {
 	case n.Kind == schema.KindPublish && h.gate == gungnir.GateRealSecrets:
 		fmt.Fprintf(&b, "Nothing was published, and nothing is while a finding stands. What the scan found is in the output of %s. "+

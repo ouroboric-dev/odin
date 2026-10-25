@@ -70,17 +70,23 @@ These are the findings you reported before and still hold open. Report each of t
 
 ## Input: check_results
 
-How the checks of this loop ended when they last ran on the work:
+How the checks of this loop ended when they last ran on the work, in attempt 2. The checks run in order and stop at the first that fails, so a check not listed here did not run.
 
 ```json
 [
   {
     "check": "vet",
-    "passed": true
+    "passed": true,
+    "passed_tests": [
+      "app.TestVet"
+    ]
   },
   {
     "check": "unit",
-    "passed": true
+    "passed": true,
+    "passed_tests": [
+      "app.TestAlbumPhotos"
+    ]
   }
 ]
 ```

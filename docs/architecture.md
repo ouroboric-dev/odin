@@ -76,15 +76,31 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   merge gate or pointer move that refuses the work's checks sends it back into the loop that made it
   (`back_to`, a few times). An unattended run gives up a task whose loop gave up, keeps its work on a
   ref, and goes on with the tasks that do not depend on it.
-- Settles a disputed finding with a check (change disputed-findings). `loopSteps.Implement` returns the
-  implementer's whole answer; `loopSteps.Dispute` holds a dispute only when the named check ran and passed
-  in this attempt and its log (`logs/<node>-<attempt>-<check>.log`, read in blocks, at most 9 MiB) contains
-  the test id. `Record` writes `finding_overruled` for a finding that was overruled and, for a dispute that
-  could not be used, a `loop_attempt` line whose result begins `dispute ignored:` (the event list is closed).
-  A dispute no check of the loop can settle stops the run at escalation with the reason `finding-disputed`
-  (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve` accepts the
-  implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
+- Runs a loop on typed answers and typed checks (change typed-boundaries). `loopSteps.Implement` and
+  `loopSteps.Review` read the implementer's `ygg.implement/v1` answer and the reviewer's `ygg.review/v1` report
+  through the output channel, as every node does: asked for once more when it does not validate, and kept in
+  `outputs/<session>.json`. The ladder's checks are typed (`checks.Spec.Typed`, ruling R28) in a sandbox; on the
+  host a command takes no environment, so there a check writes no typed result. A failing check gives one
+  finding per failure its `ygg.check/v1` result lists, with the test's id and place, or the one finding
+  `check-<name>-result` when it lists none, is missing or contradicts the exit code. How the checks last ended
+  (each check's pass, the tests that failed and the tests that passed) is kept in the loop's record in
+  `run.json` (`LoopRecord.Checks`), and every session after them reads it as `check_results`, the same after a
+  resume. Exec nodes, generators, host runs and the deps bump run their commands untyped.
+- Settles a disputed finding with a check (change disputed-findings, ruling R23). Jormungandr's loop settles
+  each dispute on this attempt's check outcomes: it holds only when the named check ran in this attempt and its
+  typed result lists the test among the tests that passed, and not among those that failed. `Record` writes
+  `finding_overruled` for a finding that was overruled and, for a dispute that could not be used, a
+  `dispute_ignored` line. A dispute no check of the loop can settle stops the run at escalation with the reason
+  `finding-disputed` (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve`
+  accepts the implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
   implementer's evidence and the check run.
+- Stops for a person when a loop's agent says it could not do its work. An implementer that answers `blocked`
+  ends its attempt before any check or reviewer, and the loop escalates as `implementer-blocked` with the
+  reason; a reviewer that answers `blocked` twice in a row escalates as `reviewer-blocked`. Each reason has its
+  own words in the gate file. A rejection gives the loop its attempts again, with the reason as the next
+  sessions' `rejection` (for a blocked reviewer, the checks and the reviewer run again on the same work); an
+  approval accepts the work as it is. A reviewer whose answer can't be used twice (`reviewer-unreadable`) takes
+  a rejection only.
 - Puts the task's diff in every task reviewer's prompt (change review-diff). A read-only reviewer has no shell, so
   it cannot run `git diff`. Odin records the leaf's commit in the loop's record (`LoopRecord.Base`) when the loop
   starts, keeps it across resumes (a state without it records the leaf's commit when the loop next runs), and
@@ -171,10 +187,9 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   section names: `inputs/<name>.md` in a scratch workspace, and in a repo `.ygg-inputs/<name>.md`, which the repo's
   git ignores by a rule in its git dir (`git.Repo.Exclude`) and which Odin removes after the session, before the
   checkpoint, and on every other way out (ruling R36). A loop with no base commit gives its reviewers a change that
-  says so. A scratch workspace holds `out/` and those files, and nothing of the project. A loop
-  outside a foreach body can't declare its own sources, so its sessions get the open findings, the check results
-  and, for a reviewer, the change without declaring them. A foreach body's input that names a body node names the
-  task's copy of it.
+  says so. A scratch workspace holds `out/` and those files, and nothing of the project. A loop's
+  sessions declare its own sources (`change`, `open_findings`, `check_results`) wherever the loop is (ruling R37),
+  and get exactly what they declare. A foreach body's input that names a body node names the task's copy of it.
 - Checks the graphs with `ygg doctor`: each pack in `graphs.dir` must load, hold a graph and have the
   name of its folder, or `--graph <name>` could not find it. When `graphs.dir` is `realms.dir`, a pack with
   no graph is a realm and is not an error. It warns when `factory.yaml` has no `graphs`

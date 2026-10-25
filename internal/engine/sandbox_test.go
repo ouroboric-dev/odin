@@ -19,8 +19,10 @@ import (
 	"github.com/ouroboric-dev/odin/internal/tree/treetest"
 )
 
-const sandboxPack = "checks:\n  unit: [grep, -q, done, build.txt]\n  junk: [sh, -c, \"echo scratch > junk.txt; grep -q done build.txt\"]\n  plant: [sh, -c, \"mkdir -p vendor/x/.git && grep -q done build.txt\"]\n" +
-	"leaves:\n  repos/app: { description: the app, template: t, first_commit: [LICENSE] }\n" +
+const sandboxPack = "checks:\n  unit: [grep, -q, done, build.txt]\n  junk: [sh, -c, \"echo scratch > junk.txt; grep -q done build.txt\"]\n  plant: [sh, -c, \"mkdir -p vendor/x/.git && grep -q done build.txt\"]\n" + sandboxLeaves
+
+// sandboxLeaves are the lines of a sandboxed test pack after its checks: the leaf and the sandbox.
+const sandboxLeaves = "leaves:\n  repos/app: { description: the app, template: t, first_commit: [LICENSE] }\n" +
 	"sandbox:\n  stack: docker.io/library/golang:1.26.7-bookworm@sha256:e8c859f5632dcfde7b32d2012b4351728f6437930887c2f6a91ea242459e5514\n  egress: [proxy.golang.org]\n"
 
 // startSandboxed starts a run whose leaf commands go through a fake sandbox.
