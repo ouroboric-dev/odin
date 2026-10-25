@@ -112,10 +112,13 @@ type State struct {
 
 // GateDecisions is what a person gave at a gate node, approving or rejecting it (spec §7.2, change typed-boundaries):
 // the product owner's decisions and answers, which every later session reads and the spec must cite. A rejection's
-// reason is not kept here: it goes to the node the gate runs again.
+// reason is not kept here: it goes to the node the gate runs again. Questions holds, by question id, the text of the
+// question each answer answered, as the design asked it when the answer was given: a later design may renumber its
+// questions (ruling R51).
 type GateDecisions struct {
-	Gate      string           `json:"gate"`
-	Decisions schema.Decisions `json:"decisions"`
+	Gate      string            `json:"gate"`
+	Decisions schema.Decisions  `json:"decisions"`
+	Questions map[string]string `json:"questions,omitempty"`
 }
 
 // OutputRef is where a session's typed output is kept: the document, as the session handed it back and Odin
@@ -153,10 +156,12 @@ type CheckView struct {
 	PassedTests []string `json:"passed_tests,omitempty"`
 }
 
-// Escalation is why a loop gave up (spec §7.3): see the Reason constants of Jormungandr.
+// Escalation is why a loop gave up (spec §7.3): see the Reason constants of Jormungandr. Reviewer is the reviewer
+// that was blocked, for reviewer-blocked: a person's rejection answers it (ruling R52).
 type Escalation struct {
-	Reason string `json:"reason"`
-	Detail string `json:"detail"`
+	Reason   string `json:"reason"`
+	Detail   string `json:"detail"`
+	Reviewer string `json:"reviewer,omitempty"`
 }
 
 // Pause is why a run waits for the provider (spec §12).
@@ -254,10 +259,8 @@ func LoadState(dir string) (*State, error) {
 	if head.Schema == stateSchemaV2 {
 		return nil, fmt.Errorf("%s/run.json: run %s was led by a realm (schema %s), from before graphs, so it can't be resumed; start a new run with --graph", dir, head.ID, stateSchemaV2)
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	var s State
-	if err := dec.Decode(&s); err != nil {
+	s, err := decodeState(data)
+	if err != nil {
 		return nil, fmt.Errorf("%s/run.json: %w", dir, err)
 	}
 	if s.Schema != StateSchema {
@@ -267,11 +270,6 @@ func LoadState(dir string) (*State, error) {
 		if err := s.Exec.Check(); err != nil {
 			return nil, fmt.Errorf("%s/run.json: %w", dir, err)
 		}
-	}
-	// Outputs is written even when it is empty: a run.json without it was started before typed boundaries,
-	// and is left nil for Open to refuse.
-	if s.Outputs == nil && hasOutputs(data) {
-		s.Outputs = map[string]OutputRef{}
 	}
 	// Empty maps aren't written (omitempty), so make them again: the engine writes to all three.
 	if s.Attempts == nil {
@@ -310,17 +308,69 @@ func LoadState(dir string) (*State, error) {
 	if s.Leaves == nil {
 		s.Leaves = map[string]LeafRecord{}
 	}
+	return s, nil
+}
+
+// decodeState decodes run.json strictly. Outputs is written even when it is empty: a run.json without it was started
+// before typed boundaries, and is read in that run's shape, its gates' notes as {gate, note}, with Outputs left nil
+// for Open to refuse (ruling R49). The read-only commands still read it.
+func decodeState(data []byte) (*State, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	if _, ok := fields["outputs"]; ok {
+		var s State
+		if err := strictDecode(data, &s); err != nil {
+			return nil, err
+		}
+		if s.Outputs == nil {
+			s.Outputs = map[string]OutputRef{}
+		}
+		return &s, nil
+	}
+	// The outer Decisions hides State's: it takes the old shape.
+	var old struct {
+		State
+		Decisions []legacyNote `json:"decisions,omitempty"`
+	}
+	if err := strictDecode(data, &old); err != nil {
+		return nil, err
+	}
+	s := old.State
+	for _, n := range old.Decisions {
+		s.Decisions = append(s.Decisions, GateDecisions{Gate: n.Gate, Decisions: schema.Decisions{Decisions: []schema.Decision{{ID: legacyNoteID(&s, n.Gate), Text: n.Note}}}})
+	}
 	return &s, nil
 }
 
-// hasOutputs reports whether the run.json data has the outputs field.
-func hasOutputs(data []byte) bool {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(data, &fields) != nil {
-		return false
+// legacyNote is a gate's note as a run started before typed boundaries kept it.
+type legacyNote struct {
+	Gate string `json:"gate"`
+	Note string `json:"note"`
+}
+
+// legacyNoteID is the id an old note at gate reads under: the one the --note shorthand gives today, note-<gate>, then
+// note-<gate>-2 and on (ruling R47).
+func legacyNoteID(s *State, gate string) string {
+	taken := map[string]bool{}
+	for _, g := range s.Decisions {
+		for _, d := range g.Decisions.Decisions {
+			taken[d.ID] = true
+		}
 	}
-	_, ok := fields["outputs"]
-	return ok
+	id := "note-" + gate
+	for i := 2; taken[id]; i++ {
+		id = fmt.Sprintf("note-%s-%d", gate, i)
+	}
+	return id
+}
+
+// strictDecode decodes data into v, refusing unknown fields.
+func strictDecode(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
 }
 
 // ExecProcess is an exec node's running command: its process group, and its leader's start time,

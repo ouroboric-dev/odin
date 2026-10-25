@@ -19,7 +19,7 @@ nodes:
     timeout: 20m
     checks: [unit]
     reviewers:
-      - { id: review, role: reviewer, prompt: prompts/review.md, input: [change, open_findings, check_results], max_turns: 10, timeout: 5m, output: ygg.review/v1 }
+      - { id: review, role: reviewer, prompt: prompts/review.md, input: [change, open_findings, check_results, rejection], max_turns: 10, timeout: 5m, output: ygg.review/v1 }
   - { id: feature-gate, kind: gate, gate: feature }
   - { id: merge-gate, kind: gate, gate: merge }
   - { id: merge, kind: merge, repo: repos/notes, checks: [unit] }

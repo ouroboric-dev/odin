@@ -35,3 +35,33 @@ func TestATasksNodeWhosePlannerTakesNoRejectionIsRefused(t *testing.T) {
 		t.Errorf("checkPublish() of a planner that takes a rejection = %v", err)
 	}
 }
+
+// A loop's reviewer must take a rejection: a person's answer to its block is sent to it (ruling R52). At the top of a
+// graph and in a foreach body alike.
+func TestALoopReviewerThatTakesNoRejectionIsRefused(t *testing.T) {
+	loop := schema.Node{ID: "build", Kind: schema.KindLoop, Input: []string{"rejection"}, Output: string(schema.ContractImplement),
+		Reviewers: []schema.Reviewer{{ID: "spec", Input: []string{"change"}, Output: string(schema.ContractReview)}}}
+	want := "graph.yaml: node build: reviewer spec must declare rejection: a person's answer to its block is sent to it"
+	if err := checkPublish("graph.yaml", []schema.Node{loop}, map[string]schema.Node{}); err == nil || err.Error() != want {
+		t.Errorf("checkPublish() = %v; want %q", err, want)
+	}
+	if err := checkPublish("graph.yaml", []schema.Node{{ID: "each", Kind: schema.KindForeach, Body: []schema.Node{loop}}}, map[string]schema.Node{}); err == nil || err.Error() != want {
+		t.Errorf("checkPublish() of a body = %v; want %q", err, want)
+	}
+	loop.Reviewers[0].Input = []string{"change", "rejection"}
+	if err := checkPublish("graph.yaml", []schema.Node{loop}, map[string]schema.Node{}); err != nil {
+		t.Errorf("checkPublish() of a reviewer that takes a rejection = %v", err)
+	}
+}
+
+// A loop must take a rejection: a person's rejection of its escalation is sent to its implementer.
+func TestALoopThatTakesNoRejectionIsRefused(t *testing.T) {
+	loop := schema.Node{ID: "build", Kind: schema.KindLoop, Input: []string{"refusal"}, Output: string(schema.ContractImplement)}
+	want := "graph.yaml: node build: a loop must declare rejection: a person's rejection of its escalation is sent to its implementer"
+	if err := checkPublish("graph.yaml", []schema.Node{loop}, map[string]schema.Node{}); err == nil || err.Error() != want {
+		t.Errorf("checkPublish() = %v; want %q", err, want)
+	}
+	if err := checkPublish("graph.yaml", []schema.Node{{ID: "each", Kind: schema.KindForeach, Body: []schema.Node{loop}}}, map[string]schema.Node{}); err == nil || err.Error() != want {
+		t.Errorf("checkPublish() of a body = %v; want %q", err, want)
+	}
+}

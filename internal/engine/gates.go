@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,7 +141,8 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, v
 	b.WriteString("## What happened\n\n")
 	since := sinceLastGate(r)
 	for _, m := range since {
-		fmt.Fprintf(&b, "- %s (%s, attempt %d): %s\n", m.ID, m.Kind, s.Attempts[m.ID], s.Summaries[m.ID])
+		// A summary may be an agent's final answer, its words: it reads as its text (mdsafe).
+		b.WriteString("- " + mdsafe.Item(mdsafe.After(fmt.Sprintf("%s (%s, attempt %d): ", m.ID, m.Kind, s.Attempts[m.ID]), s.Summaries[m.ID]), 2) + "\n")
 	}
 	for _, m := range since {
 		section, err := gateSection(r, m.ID)
@@ -166,15 +168,25 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, v
 		fmt.Fprintf(&b, "\n## Blocked\n\nThe task %s is blocked, and the tasks that depend on it. Nothing is waiting for an approval. "+
 			"What the task did is kept on a ref for the operator (see the task's reason in the report).\n", n.Task)
 	} else if action != gate.Auto {
+		cite := "."
+		if specAfter(r) {
+			cite = ", and the spec must cite each."
+		}
 		fmt.Fprintf(&b, "\n## Decide\n\n    ygg approve %s %s [--note \"...\" | --decisions <file>]\n    ygg reject %s %s --reason \"...\" | --decisions <file>\n\n"+
 			"A rejection re-runs %s with the reason. Either takes a decisions file instead (--decisions FILE, ygg.decisions/v1): "+
 			"decisions under ids of your own, answers to the design's open questions by their ids, and for a rejection the reason. "+
-			"The decisions hold for every later stage, and the spec must cite each.\n", s.ID, n.ID, s.ID, n.ID, n.Reruns)
+			"The decisions hold for every later stage%s\n", s.ID, n.ID, s.ID, n.ID, n.Reruns, cite)
 	}
 	if err := os.MkdirAll(filepath.Join(r.Dir, "gates"), 0o755); err != nil {
 		return "", err
 	}
 	return rel, os.WriteFile(filepath.Join(r.Dir, rel), []byte(b.String()), 0o644)
+}
+
+// specAfter reports whether a node after the run's position writes a spec (ygg.spec/v1): the owner check then holds
+// that spec to the decisions given at the gate there.
+func specAfter(r *run.Run) bool {
+	return slices.ContainsFunc(r.Nodes()[r.State.Position+1:], func(m schema.Node) bool { return schema.Contract(m.Output) == schema.ContractSpec })
 }
 
 // gateSection is what a gate shows of the output node kept, for the person who decides there to read: a design's
@@ -287,7 +299,9 @@ func Approve(ctx context.Context, r *run.Run, gateID string, d schema.Decisions)
 	case n.Kind == schema.KindGate:
 		// What a person gives at a gate is the product owner's word (spec §7.2); what they give at any other stop is
 		// about that stop: on the event, and the rejection of a stage the stop runs again.
-		keepDecisions(s, n.ID, d)
+		if err := keepDecisions(r, n.ID, d); err != nil {
+			return err
+		}
 		s.Position++
 	case n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation:
 		// The operator accepts the work with its findings open. They stay open in the ledger: only their
@@ -299,7 +313,7 @@ func Approve(ctx context.Context, r *run.Run, gateID string, d schema.Decisions)
 		}
 		rec.State.Passed, rec.Escalation = true, nil
 		s.Summaries[n.ID] = fmt.Sprintf("accepted by the operator after %d attempt(s), with %d finding(s) open", attempts, len(rec.State.Book.Open()))
-		delete(s.Reasons, n.ID)
+		dropLoopReasons(s, n)
 		s.Position++
 	case n.Kind == schema.KindPublish && s.PendingGate == gungnir.GateRealSecrets:
 		// The founder's rule (2026-10-24): the output a scan stopped is kept as Odin validated it, so its source runs
@@ -307,14 +321,14 @@ func Approve(ctx context.Context, r *run.Run, gateID string, d schema.Decisions)
 		// again without what was found. Its new output is kept, published and scanned again; nothing is published while
 		// a finding stands.
 		s.Reasons[n.From] = rejection
-		if err := runAgainFrom(r, n.From); err != nil {
+		if err := runAgainFrom(r, n.From, false); err != nil {
 			return err
 		}
 	case blockedStop(n, s.PendingGate):
 		// A blocked output (ruling R43; a plan at the tasks node, R44): its stage said what only a person can give,
 		// and what the person gave is the answer. The stage runs again with it as its rejection.
 		s.Reasons[n.From] = rejection
-		if err := runAgainFrom(r, n.From); err != nil {
+		if err := runAgainFrom(r, n.From, false); err != nil {
 			return err
 		}
 	case run.Quarantines(s.PendingGate) && n.Repo == "":
@@ -401,24 +415,37 @@ func Reject(ctx context.Context, r *run.Run, gateID string, d schema.Decisions) 
 	}
 	if n.Kind == schema.KindLoop {
 		rec := s.Loops[n.ID]
+		s.Reasons[loopRejectionKey(n, rec.Escalation)] = reason
 		rec.State.Extend(loopConfig(n))
 		rec.Escalation = nil
-		s.Reasons[n.ID] = reason
 	} else {
 		s.Reasons[n.Reruns] = reason
-		if err := runAgainFrom(r, n.Reruns); err != nil {
+		if err := runAgainFrom(r, n.Reruns, true); err != nil {
 			return err
 		}
-		keepDecisions(s, n.ID, d)
+		if err := keepDecisions(r, n.ID, d); err != nil {
+			return err
+		}
 	}
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
 	return r.Save()
 }
 
+// loopRejectionKey is the session a person's rejection of loop n's escalation e goes to: the blocked reviewer's, for
+// reviewer-blocked, as the person answered its block (ruling R52); the implementer's, under the loop's id, otherwise.
+func loopRejectionKey(n schema.Node, e *run.Escalation) string {
+	if e != nil && e.Reason == jormungandr.ReasonReviewerBlocked && e.Reviewer != "" {
+		return n.SessionKey(schema.Reviewer{ID: e.Reviewer})
+	}
+	return n.ID
+}
+
 // runAgainFrom moves the run back from the node it stands at to target, which runs again with its reason in
 // s.Reasons. Every loop from the target up to where the run stood starts over: the work under a loop that passed
-// changes when a node before it runs again (review I2). The nodes before target are kept.
-func runAgainFrom(r *run.Run, target string) error {
+// changes when a node before it runs again (review I2). The nodes before target are kept. A person's rejection at a
+// gate (rejected) drops what the gates in between were given, as the run meets them again; a re-run from a hard stop
+// (a secret, a blocked output) keeps it, since nobody went back on those decisions (ruling R50).
+func runAgainFrom(r *run.Run, target string, rejected bool) error {
 	s, nodes := r.State, r.Nodes()
 	at := s.Position
 	s.Position = indexOf(nodes, target)
@@ -432,7 +459,9 @@ func runAgainFrom(r *run.Run, target string) error {
 		}
 		delete(s.Returns, m.ID) // a rejection is a fresh start: a refusal may go back again
 	}
-	dropDecisions(s, past) // the run meets those gates again
+	if rejected {
+		dropDecisions(s, past)
+	}
 	return replan(r, nodes[s.Position:at])
 }
 

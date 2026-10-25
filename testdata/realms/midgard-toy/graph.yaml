@@ -20,7 +20,7 @@ nodes:
     kind: foreach
     over: tasks
     nodes:
-      - { id: implement, kind: loop, realm: leaf, role: implementer, attempts: 2, input: [rejection, refusal], output: ygg.implement/v1 }
+      - { id: implement, kind: loop, realm: leaf, role: implementer, attempts: 2, input: [task, rejection, refusal, open_findings, check_results], output: ygg.implement/v1 }
       - { id: feature-gate, kind: gate, gate: feature }
       - { id: land, kind: merge, realm: leaf, back_to: implement }
       - { id: move, kind: pointer, realm: leaf, acceptance: [accept], back_to: implement }

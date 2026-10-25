@@ -59,8 +59,8 @@ const reviewedTasks = `  - { id: plan, kind: agent, role: planner, prompt: p.md,
         input: [task, rejection, refusal]
         output: ygg.implement/v1
         reviewers:
-          - { id: spec, role: reviewer, prompt: p.md, input: [task, change], output: ygg.review/v1 }
-          - { id: quality, role: reviewer, prompt: p.md, input: [task], output: ygg.review/v1 }
+          - { id: spec, role: reviewer, prompt: p.md, input: [task, change, rejection], output: ygg.review/v1 }
+          - { id: quality, role: reviewer, prompt: p.md, input: [task, rejection], output: ygg.review/v1 }
 `
 
 // B-176: run 1 stopped because a Markdown parser of tasks.md dropped T002's text and its OpenAPI contract. The tasks

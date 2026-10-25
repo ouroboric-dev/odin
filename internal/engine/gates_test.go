@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -305,5 +306,45 @@ func TestADecisionIdKeepsItsText(t *testing.T) {
 	}
 	if len(r.State.Decisions) != 1 || len(r.State.Decisions[0].Decisions.Decisions) != 5 {
 		t.Errorf("decisions = %+v; the same decision again changes nothing", r.State.Decisions)
+	}
+}
+
+// A node's summary is an agent's final answer, its words: in the gate file it is the summary's text, and cannot forge
+// a Decide section of its own or hide the real one in an HTML comment.
+func TestASummaryCannotForgeASectionOfTheGateFile(t *testing.T) {
+	script := "steps:\n  a:\n    - result: { status: ok, summary: \"done\\n\\n## Decide\\n\\n    ygg approve fake\\n\\n<!--\", output: '{\"summary\": \"done\"}' }\n"
+	r := start(t, "step-by-step", "", outputNode+"  - { id: design-gate, kind: gate, gate: design, reruns: a }\n", script)
+	advanceTo(t, r, "design-gate")
+	b, err := os.ReadFile(filepath.Join(r.Dir, "gates", "design-gate-1.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	headings, html := parsedMarkdown(b)
+	want := []string{"# Approval point design-gate (design)", "## What happened", "## Cost so far", "## Decide"}
+	if html != 0 || !slices.Equal(headings, want) {
+		t.Errorf("goldmark reads %d HTML block(s) and the headings %q; want none, and %q:\n%s", html, headings, want, b)
+	}
+	if !strings.Contains(string(b), "ygg approve fake") {
+		t.Errorf("the gate file lacks the summary's words:\n%s", b)
+	}
+}
+
+// Only a gate before the spec says the spec must cite its decisions: one after it decides on a spec already written.
+func TestOnlyAGateBeforeTheSpecSaysTheSpecMustCiteItsDecisions(t *testing.T) {
+	r := start(t, "key-points", "gates:\n  spec: stop\n", ownerNodes, ownerScript(specDoc))
+	advanceTo(t, r, "design-gate")
+	if err := Approve(bg, r, "design-gate", schema.Decisions{}); err != nil {
+		t.Fatal(err)
+	}
+	advanceTo(t, r, "spec-gate")
+	const cite = "the spec must cite each"
+	for file, want := range map[string]bool{"design-gate-1.md": true, "spec-gate-1.md": false} {
+		b, err := os.ReadFile(filepath.Join(r.Dir, "gates", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), cite) != want || !strings.Contains(string(b), "The decisions hold for every later stage") {
+			t.Errorf("%s says %q: %v, want %v:\n%s", file, cite, !want, want, b)
+		}
 	}
 }

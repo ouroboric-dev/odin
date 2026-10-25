@@ -22,7 +22,7 @@ const reviewLoop = `  - id: build
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results], output: ygg.review/v1 }
+      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results, rejection], output: ygg.review/v1 }
 `
 
 func startReview(t *testing.T, mode, script string) *run.Run {

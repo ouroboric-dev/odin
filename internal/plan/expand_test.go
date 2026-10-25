@@ -26,7 +26,7 @@ nodes:
         realm: leaf
         role: implementer
         reviewers:
-          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, output: ygg.review/v1 }
+          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, input: [rejection], output: ygg.review/v1 }
       - { id: feature-gate, kind: gate, gate: feature }
       - { id: land, kind: merge, realm: leaf, back_to: implement }
       - { id: merge-gate, kind: gate, gate: merge }
@@ -145,8 +145,8 @@ func TestAnInputOfAnEarlierBodyNodeNamesTheTasksOwnCopy(t *testing.T) {
 	body := strings.Replace(shape, "      - { id: feature-gate", "      - { id: sum, kind: agent, role: planner, prompt: p.md, input: [task, implement, before-plan, rejection], output: ygg.implement/v1 }\n      - { id: feature-gate", 1)
 	body = strings.Replace(body, "  - { id: before, kind: exec, run: [echo, before], repo: . }\n",
 		"  - { id: before, kind: exec, run: [echo, before], repo: . }\n  - { id: before-plan, kind: agent, role: planner, prompt: p.md, input: [brief], output: ygg.plan/v1 }\n", 1)
-	body = strings.Replace(body, "          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, output: ygg.review/v1 }",
-		"          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, input: [task, change], output: ygg.review/v1 }", 1)
+	body = strings.Replace(body, "          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, input: [rejection], output: ygg.review/v1 }",
+		"          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, input: [task, change, rejection], output: ygg.review/v1 }", 1)
 	g, err := schema.ParseGraph("graph.yaml", []byte(body))
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestAnInputOfAnEarlierBodyNodeNamesTheTasksOwnCopy(t *testing.T) {
 	if want := []string{"task", "gallery-t001-implement", "before-plan", "rejection"}; !slices.Equal(nodes[i].Input, want) {
 		t.Errorf("sum's input = %v, want %v", nodes[i].Input, want)
 	}
-	if got := nodes[0].Reviewers[0].Input; !slices.Equal(got, []string{"task", "change"}) {
+	if got := nodes[0].Reviewers[0].Input; !slices.Equal(got, []string{"task", "change", "rejection"}) {
 		t.Errorf("the reviewer's input = %v", got)
 	}
 	if g.Nodes[2].Body[1].Input[1] != "implement" {

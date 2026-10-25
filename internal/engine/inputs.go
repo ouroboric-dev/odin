@@ -54,11 +54,12 @@ func inputBody(r *run.Run, n schema.Node, who, name string, extra map[string]str
 		}
 		return block, nil
 	case schema.SourceRejection:
-		// Odin wrote the rejection safe already (rejectionText): the person's fields, or its own words.
-		if strings.TrimSpace(s.Reasons[n.ID]) == "" {
+		// Odin wrote the rejection safe already (rejectionText): the person's fields, or its own words. It is the
+		// session's own: a loop's implementer's under the loop's id, a reviewer's under its session key (ruling R52).
+		if strings.TrimSpace(s.Reasons[who]) == "" {
 			return none, nil
 		}
-		return "A person sent the last attempt back at an approval point, and this is why:\n\n" + withNewline(s.Reasons[n.ID]), nil
+		return "A person sent the last attempt back at an approval point, and this is why:\n\n" + withNewline(s.Reasons[who]), nil
 	case schema.SourceRefusal:
 		return reasonBody("A later step of the factory refused the last attempt's work. Fix what it says; do not say it is fixed: the step looks again after your work and decides.", s.Refusals[n.ID]), nil
 	case schema.SourceDate:

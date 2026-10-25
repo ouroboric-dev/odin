@@ -43,7 +43,7 @@ func runLoop(ctx context.Context, r *run.Run, n schema.Node) error {
 	}
 	switch out.Kind {
 	case jormungandr.Passed:
-		delete(s.Reasons, n.ID)
+		dropLoopReasons(s, n)
 		delete(s.Refusals, n.ID)
 		s.Summaries[n.ID] = fmt.Sprintf("passed in attempt %d of %d with %d minor finding(s) open", out.Attempts, rec.State.Limit, len(rec.State.Book.Open()))
 		if over := Overruled(&rec.State); len(over) > 0 {
@@ -59,6 +59,9 @@ func runLoop(ctx context.Context, r *run.Run, n schema.Node) error {
 	// the rest would go on; a linear graph has no rest, so the run stops here in every mode, and the
 	// ledger says "blocked" for unattended runs (Phase 4, decision 7).
 	rec.Escalation = &run.Escalation{Reason: out.Reason, Detail: out.Detail}
+	if out.Reason == jormungandr.ReasonReviewerBlocked {
+		rec.Escalation.Reviewer = steps.blocked
+	}
 	result := "stopped"
 	if s.Mode == gungnir.ModeUnattended {
 		result = "blocked"
@@ -82,9 +85,10 @@ func loopConfig(n schema.Node) jormungandr.Config {
 // record in run.json: its state, the leaf's commit when it started (the task's diff, which the reviewers read,
 // starts there), and how its checks last ended (the sessions' check_results).
 type loopSteps struct {
-	r   *run.Run
-	n   schema.Node
-	rec *run.LoopRecord
+	r       *run.Run
+	n       schema.Node
+	rec     *run.LoopRecord
+	blocked string // the reviewer whose last answer was blocked: a reviewer-blocked escalation names it
 }
 
 var _ jormungandr.Steps = (*loopSteps)(nil)
@@ -196,15 +200,15 @@ func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormun
 }
 
 // keepCheck records how check v ended in attempt, in the loop's record: a check of a new attempt starts the list
-// again, and a check run again in the same attempt (a ladder resumed after a stop) replaces its line. The ladder
-// saves the record with each rung.
+// again, and a check run again in the same attempt (a ladder resumed after a stop, or run again after a person
+// rejected a reviewer's block) cuts the list at its rung, so no line of a later check from before survives a ladder
+// that may stop sooner. The ladder saves the record with each rung.
 func (l *loopSteps) keepCheck(attempt int, v run.CheckView) {
 	if l.rec.ChecksAttempt != attempt {
 		l.rec.Checks, l.rec.ChecksAttempt = nil, attempt
 	}
 	if i := slices.IndexFunc(l.rec.Checks, func(c run.CheckView) bool { return c.Check == v.Check }); i >= 0 {
-		l.rec.Checks[i] = v
-		return
+		l.rec.Checks = l.rec.Checks[:i]
 	}
 	l.rec.Checks = append(l.rec.Checks, v)
 }
@@ -259,11 +263,22 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	if err != nil {
 		return schema.Review{}, err
 	}
+	if report.Blocked != nil {
+		l.blocked = reviewer
+	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
 	if err := r.Log(ev); err != nil {
 		return schema.Review{}, err
 	}
 	return report, nil
+}
+
+// dropLoopReasons drops the rejections a person gave loop n: its implementer's and each reviewer's.
+func dropLoopReasons(s *run.State, n schema.Node) {
+	delete(s.Reasons, n.ID)
+	for _, rv := range n.Reviewers {
+		delete(s.Reasons, n.SessionKey(rv))
+	}
 }
 
 // Record writes the changes to the findings to the ledger (spec §10.1): when each was raised, how

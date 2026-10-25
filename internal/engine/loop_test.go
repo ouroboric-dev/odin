@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -149,7 +150,7 @@ const typedLoop = `  - id: build
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results], output: ygg.review/v1 }
+      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results, rejection], output: ygg.review/v1 }
 `
 
 // typedCheck is the realm check name, which passes when build.txt says done and writes its typed result
@@ -267,7 +268,7 @@ func TestAFailingCheckRaisesOneFindingPerFailure(t *testing.T) {
 		{Kind: "test", Test: "app.TestAlbums", Location: "albums_test.go:12:3", Message: "want 2 albums, got 0"},
 		{Kind: "test", Test: "app.TestPhotos", Location: "photos_test.go:7", Message: "no photos"},
 	}
-	nodes := strings.Replace(typedLoop, "    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results], output: ygg.review/v1 }\n", "", 1) +
+	nodes := strings.Replace(typedLoop, "    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results, rejection], output: ygg.review/v1 }\n", "", 1) +
 		"  - { id: after, kind: exec, run: [grep, -q, done, build.txt], repo: repos/app }\n"
 	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
@@ -328,7 +329,7 @@ func TestAFailingCheckWhoseResultListsNoFailureRaisesOneFinding(t *testing.T) {
 	} {
 		script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 			"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
-		nodes := strings.Replace(typedLoop, "    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results], output: ygg.review/v1 }\n", "", 1)
+		nodes := strings.Replace(typedLoop, "    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results, rejection], output: ygg.review/v1 }\n", "", 1)
 		r, _ := startTyped(t, tc.check, nodes, script)
 		if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 			t.Fatalf("%s: Advance() = %+v, %v; want done", name, out, err)
@@ -422,5 +423,28 @@ func TestAnAnswerThatCannotBeAskedForStopsTheAttemptBeforeItsSession(t *testing.
 	}
 	if r.State.Attempts["build"] != 0 || strings.Contains(ledgerText(t, r), `"event":"node_started"`) {
 		t.Errorf("a session started though its answer could not be asked for: %d sessions", r.State.Attempts["build"])
+	}
+}
+
+// A ladder run again in one attempt (a rejected reviewer block runs the checks again on the same work) starts its list
+// again at the rung it is at: a later check's line from before cannot say "passed" for a ladder that stopped earlier.
+func TestAChecksLinesAreCutAtTheRungThatRunsAgain(t *testing.T) {
+	rec := &run.LoopRecord{}
+	l := &loopSteps{rec: rec}
+	l.keepCheck(1, run.CheckView{Check: "unit", Passed: true})
+	l.keepCheck(1, run.CheckView{Check: "lint", Passed: true})
+	l.keepCheck(1, run.CheckView{Check: "e2e", Passed: true})
+	l.keepCheck(1, run.CheckView{Check: "lint", Passed: false, FailedTests: []string{"x"}})
+	want := []run.CheckView{{Check: "unit", Passed: true}, {Check: "lint", Passed: false, FailedTests: []string{"x"}}}
+	if !reflect.DeepEqual(rec.Checks, want) {
+		t.Errorf("after lint ran again: %+v; want %+v", rec.Checks, want)
+	}
+	l.keepCheck(1, run.CheckView{Check: "unit", Passed: false})
+	if want := []run.CheckView{{Check: "unit", Passed: false}}; !reflect.DeepEqual(rec.Checks, want) {
+		t.Errorf("after the first check ran again: %+v; want %+v", rec.Checks, want)
+	}
+	l.keepCheck(2, run.CheckView{Check: "lint", Passed: true})
+	if want := []run.CheckView{{Check: "lint", Passed: true}}; !reflect.DeepEqual(rec.Checks, want) || rec.ChecksAttempt != 2 {
+		t.Errorf("a new attempt: %+v in attempt %d; want %+v in 2", rec.Checks, rec.ChecksAttempt, want)
 	}
 }

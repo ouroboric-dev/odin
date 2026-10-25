@@ -239,8 +239,17 @@ func noteOf(d schema.Decisions) string {
 // given before, and moves to the end, the order in which they were given. A decision already kept, at any gate, is
 // not kept again: checkGiven refused it with another text (ruling R46(3)), so it is the same. An answer to a question
 // answered at this gate before replaces it. Nothing new restates nothing, and the earlier decisions hold. A
-// rejection's reason is not kept: it goes to the node the gate runs again.
-func keepDecisions(s *run.State, gate string, d schema.Decisions) {
+// rejection's reason is not kept: it goes to the node the gate runs again. Each answer keeps the text of its question
+// as the run's design asks it now (ruling R51), so a later design that renumbers its questions changes nothing.
+func keepDecisions(r *run.Run, gate string, d schema.Decisions) error {
+	s := r.State
+	var questions map[string]string
+	if len(d.Answers) > 0 {
+		var err error
+		if questions, _, _, err = designQuestions(r); err != nil {
+			return err
+		}
+	}
 	var fresh []schema.Decision
 	for _, x := range d.Decisions {
 		if _, _, ok := keptDecision(s, x.ID); !ok {
@@ -248,19 +257,26 @@ func keepDecisions(s *run.State, gate string, d schema.Decisions) {
 		}
 	}
 	if len(fresh) == 0 && len(d.Answers) == 0 {
-		return
+		return nil
 	}
-	var kept schema.Decisions
+	kept := run.GateDecisions{Gate: gate}
 	if i := slices.IndexFunc(s.Decisions, func(g run.GateDecisions) bool { return g.Gate == gate }); i >= 0 {
-		kept = s.Decisions[i].Decisions
+		kept = s.Decisions[i]
 		s.Decisions = slices.Delete(s.Decisions, i, i+1)
 	}
-	kept.Decisions = append(kept.Decisions, fresh...)
+	kept.Decisions.Decisions = append(kept.Decisions.Decisions, fresh...)
 	for _, x := range d.Answers {
-		kept.Answers = slices.DeleteFunc(kept.Answers, func(k schema.Answer) bool { return k.Question == x.Question })
-		kept.Answers = append(kept.Answers, x)
+		kept.Decisions.Answers = slices.DeleteFunc(kept.Decisions.Answers, func(k schema.Answer) bool { return k.Question == x.Question })
+		kept.Decisions.Answers = append(kept.Decisions.Answers, x)
+		if q, ok := questions[x.Question]; ok {
+			if kept.Questions == nil {
+				kept.Questions = map[string]string{}
+			}
+			kept.Questions[x.Question] = q
+		}
 	}
-	s.Decisions = append(s.Decisions, run.GateDecisions{Gate: gate, Decisions: kept})
+	s.Decisions = append(s.Decisions, kept)
+	return nil
 }
 
 // dropDecisions drops what the gates with these ids were given: the run meets them again.
@@ -308,19 +324,9 @@ func rejectionText(r *run.Run, d schema.Decisions, otherwise string, owner bool)
 // given, each with its id and the gate it was given at, as the lists of ygg.decisions/v1; None. before any.
 func decisionsBody(r *run.Run) (string, error) {
 	var decisions, answers strings.Builder
-	var questions map[string]string
 	for _, g := range r.State.Decisions {
 		decisions.WriteString(decisionItems(g.Decisions.Decisions, g.Gate))
-		if len(g.Decisions.Answers) == 0 {
-			continue
-		}
-		if questions == nil {
-			var err error
-			if questions, _, _, err = designQuestions(r); err != nil {
-				return "", err
-			}
-		}
-		answers.WriteString(answerItems(g.Decisions.Answers, g.Gate, questions))
+		answers.WriteString(answerItems(g.Decisions.Answers, g.Gate, g.Questions))
 	}
 	if decisions.Len() == 0 && answers.Len() == 0 {
 		return none, nil
@@ -347,13 +353,13 @@ func decisionItems(ds []schema.Decision, gate string) string {
 }
 
 // answerItems is a list item for each answer: its question's id, the gate it was given at (unless gate is ""), the
-// answer, and the question as the design asks it.
+// answer, and the question as the design asked it when the answer was given (questions, by id).
 func answerItems(as []schema.Answer, gate string, questions map[string]string) string {
 	var b strings.Builder
 	for _, a := range as {
-		q, ok := questions[a.Question]
-		if !ok {
-			q = "(no longer an open question of this run's design)"
+		q := questions[a.Question]
+		if q == "" {
+			q = "(its text was not kept)"
 		}
 		b.WriteString("- " + mdsafe.Item(mdsafe.After(mdsafe.Line(a.Question)+givenAt(gate)+": ", a.Text)+"\nThe question: "+mdsafe.Line(q), 2) + "\n")
 	}

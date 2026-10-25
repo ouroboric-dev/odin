@@ -462,3 +462,60 @@ func TestPublishCommitsTheBytesTheScanRead(t *testing.T) {
 		}
 	}
 }
+
+// Ruling R50: a re-run from a hard stop (a blocked output, a secret) keeps the decisions of the gates between its
+// source and the stop. The spec gate stops on a deviation and is approved with dark-mode; the spec's publish then
+// stops; approving it runs the spec again, whose prompt holds dark-mode, and the owner check still requires it.
+func TestAReRunFromAHardStopKeepsTheDecisionsOfTheGatesBetween(t *testing.T) {
+	darkMode := schema.Decisions{Decisions: []schema.Decision{{ID: "dark-mode", Text: "No dark mode."}}}
+	nodes := "  - { id: spec, kind: agent, role: planner, prompt: p.md, scratch: true, input: [decisions, rejection, refusal], output: ygg.spec/v1 }\n" +
+		"  - { id: conformance, kind: agent, role: planner, prompt: p.md, scratch: true, reviews: spec, input: [spec], output: ygg.conformance/v1 }\n" +
+		"  - { id: spec-gate, kind: gate, gate: spec, reruns: spec, deviation_from: conformance }\n" +
+		"  - { id: spec-docs, kind: publish, from: spec, to: docs }\n"
+	leaky := strings.Replace(specDoc, `"summary": "An API and a web app."`, `"summary": "An API. The key is `+fakeKey+`."`, 1)
+	for name, c := range map[string]struct {
+		first string
+		gate  gungnir.Gate
+	}{
+		"blocked": {`{"blocked": {"reason": "The brief names no way to sign in."}}`, gungnir.GateExternalInput},
+		"secret":  {leaky, gungnir.GateRealSecrets},
+	} {
+		t.Run(name, func(t *testing.T) {
+			script := "steps:\n  spec:\n" +
+				"    - result: { status: ok, summary: wrote the spec, output: '" + c.first + "' }\n" +
+				"    - result: { status: ok, summary: wrote it again, output: '" + specDoc + "' }\n" +
+				"    - result: { status: ok, summary: cited it, output: '" + specCiting("dark-mode", "dark-mode") + "' }\n" +
+				"  conformance:\n    - result: { status: ok, summary: checked, output: '" + deviation + "' }\n" +
+				"    - result: { status: ok, summary: checked, output: '" + noDeviation + "' }\n"
+			r, fake := startSandboxed(t, nodes, script)
+			onDay(r)
+			keyScanner(t, fake)
+			advanceTo(t, r, "spec-gate")
+			if err := Approve(bg, r, "spec-gate", darkMode); err != nil {
+				t.Fatal(err)
+			}
+			out, err := Advance(bg, r)
+			if err != nil || out.Gate != "spec-docs" || r.State.PendingGate != c.gate {
+				t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at spec-docs (%s)", out, err, r.State.PendingGate, c.gate)
+			}
+			if err := Approve(bg, r, "spec-docs", Note(r, "spec-docs", "")); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(r.State.Decisions, []run.GateDecisions{{Gate: "spec-gate", Decisions: darkMode}}) {
+				t.Errorf("decisions after the stop's approval = %+v; want spec-gate's dark-mode kept", r.State.Decisions)
+			}
+			if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+				t.Fatalf("Advance() after the approval = %+v, %v", out, err)
+			}
+			if p := promptOf(t, r, "spec-2"); !strings.Contains(p, "- dark-mode (at spec-gate): No dark mode.") {
+				t.Errorf("the re-run spec's prompt lacks the kept decision:\n%s", p)
+			}
+			if p := promptOf(t, r, "spec-3"); !strings.Contains(p, "the spec does not cite the product owner's decisions dark-mode") {
+				t.Errorf("the owner check did not require the kept decision:\n%s", p)
+			}
+			if r.State.Attempts["spec"] != 3 || !reflect.DeepEqual(r.State.Decisions, []run.GateDecisions{{Gate: "spec-gate", Decisions: darkMode}}) {
+				t.Errorf("spec ran %d times, decisions %+v; want 3, and dark-mode kept", r.State.Attempts["spec"], r.State.Decisions)
+			}
+		})
+	}
+}

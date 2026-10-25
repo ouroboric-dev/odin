@@ -37,15 +37,14 @@ func stopEscalation(r *run.Run, n schema.Node, e *escalation) (Outcome, error) {
 	if len(e.out.Open) == 0 {
 		b.WriteString("None.\n")
 	}
+	// A finding's fields are its source's words too: each reads as its text (mdsafe).
 	for _, f := range e.out.Open {
-		fmt.Fprintf(&b, "- %s (%s, from %s) at %s\n", f.ID, f.Severity, f.Source, f.Location)
-		for _, line := range strings.Split(strings.TrimSpace(f.Claim), "\n") {
-			fmt.Fprintf(&b, "  %s\n", line)
-		}
+		fmt.Fprintf(&b, "- %s (%s, from %s) at %s\n", mdsafe.Line(f.ID), mdsafe.Line(string(f.Severity)), mdsafe.Line(f.Source), mdsafe.Line(f.Location))
+		b.WriteString("  " + mdsafe.Item(strings.TrimSpace(f.Claim), 2) + "\n")
 	}
 	u := s.Usage
 	fmt.Fprintf(&b, "\n## Cost so far\n\n- Tokens: %d in, %d out, %d from cache\n- Turns: %d\n- Cost: $%.4f\n", u.InTok, u.OutTok, u.CacheTok, u.Turns, u.CostUSD)
-	b.WriteString("\n## Decide\n\n" + decideText(s.ID, n, e.out.Reason))
+	b.WriteString("\n## Decide\n\n" + decideText(s.ID, n, e.out.Reason, s.Loops[n.ID].Escalation))
 	if err := os.MkdirAll(filepath.Join(r.Dir, "gates"), 0o755); err != nil {
 		return Outcome{}, err
 	}
@@ -62,8 +61,9 @@ func stopEscalation(r *run.Run, n schema.Node, e *escalation) (Outcome, error) {
 }
 
 // decideText is the gate file's Decide section for a loop that escalated for reason: what a rejection and an
-// approval do, each reason in its own words. A reviewer whose answer can't be read is offered no approval.
-func decideText(id string, n schema.Node, reason string) string {
+// approval do, each reason in its own words. A reviewer whose answer can't be read is offered no approval. esc is the
+// loop's escalation record, which names a blocked reviewer.
+func decideText(id string, n schema.Node, reason string, esc *run.Escalation) string {
 	reject := fmt.Sprintf("    ygg reject %s %s --reason \"...\" | --decisions <file>\n\n", id, n.ID)
 	approve := fmt.Sprintf("\n    ygg approve %s %s [--note \"...\" | --decisions <file>]\n\n", id, n.ID)
 	again := fmt.Sprintf("The reason goes to the implementer, and the loop gets %d more attempts, with the findings above.\n", n.Attempts)
@@ -80,10 +80,18 @@ func decideText(id string, n schema.Node, reason string) string {
 			"only a check or a reviewer can close one.\n"
 	case jormungandr.ReasonReviewerBlocked:
 		return "The reviewer answered that it could not review the work, twice in a row, for the reason above.\n\n" +
-			reject + "The checks and the reviewer run again on the same work, and the implementer does not. The reason is the rejection " +
-			"input of the loop's sessions that declare it.\n" + approve + "The work goes on as it is, without that reviewer's report. The findings stay open " +
+			reject + "The checks and the reviewer run again on the same work, and the implementer does not. The reason goes to the reviewer " +
+			mdsafe.Line(blockedReviewer(esc)) + ", as its rejection input: it answers what the reviewer lacked.\n" + approve + "The work goes on as it is, without that reviewer's report. The findings stay open " +
 			"in the ledger: only a check or a reviewer can close one.\n"
 	}
 	return reject + "The checks and the reviewer run again on the same work.\n\nApproving is not offered: a reviewer whose answer can't be read has " +
 		"not approved anything. Fix the reviewer, its role or its prompt, and then reject, to ask it again.\n"
+}
+
+// blockedReviewer is the reviewer a reviewer-blocked escalation names, or "that was blocked" for a record without one.
+func blockedReviewer(esc *run.Escalation) string {
+	if esc == nil || esc.Reviewer == "" {
+		return "that was blocked"
+	}
+	return esc.Reviewer
 }

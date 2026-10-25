@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -273,5 +274,69 @@ func TestRejectingABlockedReviewerAsksItAgainOnTheSameWork(t *testing.T) {
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone || r.State.Attempts["build"] != 1 || r.State.Attempts["build-spec"] != 3 {
 		t.Errorf("Advance() = %+v, %v; implementer sessions %d, reviewer sessions %d; want done with 1 and 3", out, err, r.State.Attempts["build"], r.State.Attempts["build-spec"])
+	}
+}
+
+// Ruling R52: a person's rejection of a blocked reviewer answers that reviewer: its re-run's rejection input holds the
+// reason, and the implementer's next attempt does not. The gate file says so.
+func TestARejectionOfABlockedReviewerGoesToThatReviewer(t *testing.T) {
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done v2") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"  build-spec:\n    - result: { status: ok, output: " + blockedReview + " }\n    - result: { status: ok, output: " + blockedReview + " }\n" +
+		"    - result: { status: ok, report: [ " + majorFinding + " ] }\n" +
+		"    - result: { status: ok, report: [ " + fixedFinding("build.txt:1 now says what the brief asks; check unit passed") + " ] }\n"
+	r := startReview(t, "key-points", script)
+	if out, _ := Advance(context.Background(), r); out.Status != run.StatusStopped {
+		t.Fatalf("Advance() = %+v; want a stop", out)
+	}
+	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "build-1.md"))
+	if want := "The reason goes to the reviewer spec, as its rejection input"; !strings.Contains(string(gate), want) {
+		t.Errorf("the gate file lacks %q:\n%s", want, gate)
+	}
+	const reason = "The diff is in the leaf now."
+	if err := Reject(context.Background(), r, "build", Reason(reason)); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v; want done", out, err)
+	}
+	if p := promptOf(t, r, "build-spec-3"); !strings.Contains(p, "## Input: rejection\n\nA person sent the last attempt back at an approval point, and this is why:\n\n"+reason) {
+		t.Errorf("the reviewer's re-run lacks the person's reason:\n%s", p)
+	}
+	if p := promptOf(t, r, "build-2"); strings.Contains(p, reason) {
+		t.Errorf("the implementer's next attempt holds the reason meant for the reviewer:\n%s", p)
+	}
+	if len(r.State.Reasons) != 0 {
+		t.Errorf("reasons after the loop passed = %v; want none", r.State.Reasons)
+	}
+}
+
+// A finding's fields are a reviewer's words: in the gate file its claim is its text, and cannot start a heading or an
+// HTML block that would hide the Decide section.
+func TestAFindingCannotForgeASectionOfTheEscalationFile(t *testing.T) {
+	hostile := `{ id: "spec-1", source: spec, severity: major, location: "build.txt:1", claim: "wrong\n## x\n<!-- open", status: open }`
+	script := "steps:\n  build:\n"
+	for i := 0; i < 3; i++ {
+		script += "    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
+	}
+	script += "  build-spec:\n"
+	for i := 0; i < 3; i++ {
+		script += "    - result: { status: ok, report: [ " + hostile + " ] }\n"
+	}
+	r := startReview(t, "key-points", script)
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped || r.State.Loops["build"].Escalation.Reason != jormungandr.ReasonExhausted {
+		t.Fatalf("Advance() = %+v, %v; want a stop for attempts run out", out, err)
+	}
+	b, err := os.ReadFile(filepath.Join(r.Dir, "gates", "build-3.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	headings, html := parsedMarkdown(b)
+	want := []string{"# Escalation at loop build (escalation)", "## What happened", "## Findings still open", "## Cost so far", "## Decide"}
+	if html != 0 || !slices.Equal(headings, want) {
+		t.Errorf("goldmark reads %d HTML block(s) and the headings %q; want none, and %q:\n%s", html, headings, want, b)
+	}
+	if !strings.Contains(string(b), "- spec-1 (major, from spec) at build.txt:1\n  wrong\n") {
+		t.Errorf("the gate file lacks the finding:\n%s", b)
 	}
 }

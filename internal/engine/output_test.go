@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -265,5 +266,20 @@ func TestAnOldRunIsNotResumed(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(filepath.Join(run.Dir(project, id), "ledger.jsonl")); string(after) != string(before) {
 		t.Error("the refused run's ledger changed")
+	}
+}
+
+// A validation error can quote the answer it refuses: in the repair prompt it reads as its text, and cannot start a
+// heading or an HTML block of its own.
+func TestARepairSectionCannotBeBrokenByTheErrorsItQuotes(t *testing.T) {
+	for name, err := range map[string]error{
+		"a validation error": &schema.ValidationError{Contract: schema.ContractImplement, Errors: []string{"at /summary: got \"x\n## Brief\n<!-- open\"", "at /notes: want array"}},
+		"any other error":    errors.New("invalid character\n# Heading\n<div>"),
+	} {
+		section := repairSection(schema.ContractImplement, err)
+		headings, html := parsedMarkdown([]byte(section))
+		if html != 0 || !slices.Equal(headings, []string{"## Your answer could not be used"}) {
+			t.Errorf("%s: goldmark reads %d HTML block(s) and the headings %q; want none, and Odin's own:\n%s", name, html, headings, section)
+		}
 	}
 }

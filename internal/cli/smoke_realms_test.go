@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -107,5 +108,46 @@ func TestTheSmokeRealmsPrepareWithTheRealAdapter(t *testing.T) {
 	}
 	if got := strings.Join(s.Realms.Names(), ","); got != "smoke-lead" {
 		t.Errorf("realms = %s; smoke-api joins when init creates its leaf", got)
+	}
+}
+
+// The loops of the realm smoke graphs see what a loop is for (rulings R37, R52): the implementer its task, the open
+// findings and how the checks ended, so a second attempt can fix a failing check; each reviewer the task, the change,
+// the findings, the checks and a person's answer to its block.
+func TestTheRealmSmokeLoopsDeclareWhatALoopIsFor(t *testing.T) {
+	implementer := []string{schema.SourceTask, schema.SourceOpenFindings, schema.SourceCheckResults, schema.SourceRejection}
+	reviewer := []string{schema.SourceTask, schema.SourceChange, schema.SourceOpenFindings, schema.SourceCheckResults, schema.SourceRejection}
+	for _, p := range []string{"../../testdata/smoke-realms/smoke-lead/graph.yaml", "../../testdata/realms/midgard-toy/graph.yaml"} {
+		g, err := schema.LoadGraph(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loops := 0
+		var walk func([]schema.Node)
+		walk = func(nodes []schema.Node) {
+			for _, n := range nodes {
+				walk(n.Body)
+				if n.Kind != schema.KindLoop {
+					continue
+				}
+				loops++
+				for _, in := range implementer {
+					if !slices.Contains(n.Input, in) {
+						t.Errorf("%s: loop %s does not declare %s: %v", p, n.ID, in, n.Input)
+					}
+				}
+				for _, rv := range n.Reviewers {
+					for _, in := range reviewer {
+						if !slices.Contains(rv.Input, in) {
+							t.Errorf("%s: reviewer %s of loop %s does not declare %s: %v", p, rv.ID, n.ID, in, rv.Input)
+						}
+					}
+				}
+			}
+		}
+		walk(g.Nodes)
+		if loops == 0 {
+			t.Errorf("%s has no loop", p)
+		}
 	}
 }

@@ -314,9 +314,11 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 // output, or one with no view (Odin publishes an output's JSON and the view it renders from it, change
 // typed-boundaries); and one whose source takes no rejection, which it is given when a person approves its run again
 // after the secret scan stops the publish, or after the source's output is blocked (ruling R43). It refuses a tasks
-// node whose plan node takes no rejection too: a blocked plan is sent back to it with a person's note (R44); and an
+// node whose plan node takes no rejection too: a blocked plan is sent back to it with a person's note (R44); an
 // agent whose output is a spec that does not take the decisions and a refusal: Odin checks that the spec cites every
-// owner decision, and sends it back with the ids it misses (typed-T19). before holds the nodes before nodes, by id.
+// owner decision, and sends it back with the ids it misses (typed-T19); and a loop, or a reviewer of one, that takes no
+// rejection: a person's rejection of the loop's escalation goes to its implementer, or to the reviewer whose block it
+// answers (R52). before holds the nodes before nodes, by id.
 func checkPublish(graphPath string, nodes []schema.Node, before map[string]schema.Node) error {
 	for _, n := range nodes {
 		if n.Kind == schema.KindPublish {
@@ -342,6 +344,16 @@ func checkPublish(graphPath string, nodes []schema.Node, before map[string]schem
 			(!slices.Contains(n.Input, schema.SourceDecisions) || !slices.Contains(n.Input, schema.SourceRefusal)) {
 			return fmt.Errorf("%s: node %s: Odin checks that the spec cites every owner decision, and sends it back with the ids it misses, "+
 				"so %s must declare the inputs decisions and refusal", graphPath, n.ID, n.ID)
+		}
+		if n.Kind == schema.KindLoop {
+			if !slices.Contains(n.Input, schema.SourceRejection) {
+				return fmt.Errorf("%s: node %s: a loop must declare rejection: a person's rejection of its escalation is sent to its implementer", graphPath, n.ID)
+			}
+			for _, rv := range n.Reviewers {
+				if !slices.Contains(rv.Input, schema.SourceRejection) {
+					return fmt.Errorf("%s: node %s: reviewer %s must declare rejection: a person's answer to its block is sent to it", graphPath, n.ID, rv.ID)
+				}
+			}
 		}
 		if err := checkPublish(graphPath, n.Body, maps.Clone(before)); err != nil {
 			return err

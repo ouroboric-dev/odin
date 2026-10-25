@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -242,6 +243,71 @@ func TestAResumeOfARunLedByARealmExitsTwoWithTheWayOn(t *testing.T) {
 	code, out, errOut := ygg(t, "status", id, "--project", dir)
 	if code != ExitRefused || out != "" || !strings.Contains(errOut, "can't be resumed") || !strings.Contains(errOut, "start a new run with --graph") {
 		t.Errorf("status: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+// A run started before typed boundaries kept each gate's note as {gate, note} and no outputs (ruling R49). The
+// fixture is that shape, written here by hand: status, report and metrics read it, doctor warns, and resume refuses it
+// with the change's message.
+func TestARunFromBeforeTypedBoundariesStaysReadable(t *testing.T) {
+	dir, config := project(t, "script.yaml", "")
+	if code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t), "--mode", "step-by-step"); code != ExitStopped {
+		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
+	}
+	id := runID(t, dir)
+	runDir := filepath.Join(dir, ".factory", "runs", id)
+	file := filepath.Join(runDir, "run.json")
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(b, &state); err != nil {
+		t.Fatal(err)
+	}
+	delete(state, "outputs")
+	state["decisions"] = []map[string]string{{"gate": "design-gate", "note": "Guests may download photos."}, {"gate": "design-gate", "note": "No SMS."}}
+	if b, err = json.Marshal(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := run.LoadState(runDir)
+	if err != nil {
+		t.Fatalf("LoadState of a run from before typed boundaries: %v", err)
+	}
+	want := []run.GateDecisions{
+		{Gate: "design-gate", Decisions: schema.Decisions{Decisions: []schema.Decision{{ID: "note-design-gate", Text: "Guests may download photos."}}}},
+		{Gate: "design-gate", Decisions: schema.Decisions{Decisions: []schema.Decision{{ID: "note-design-gate-2", Text: "No SMS."}}}},
+	}
+	if !reflect.DeepEqual(s.Decisions, want) || s.Outputs != nil {
+		t.Errorf("LoadState: decisions %+v, outputs %v; want %+v and none", s.Decisions, s.Outputs, want)
+	}
+	if code, out, errOut := ygg(t, "status", id, "--project", dir); code != ExitDone || !strings.Contains(out, "run:      "+id) {
+		t.Errorf("status: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if code, out, errOut := ygg(t, "report", id, "--project", dir); code != ExitDone || !strings.Contains(out, id) {
+		t.Errorf("report: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if code, out, errOut := ygg(t, "metrics", id, "--project", dir); code != ExitDone || out == "" {
+		t.Errorf("metrics: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	if want := "WARN  run " + id + ": started before typed boundaries"; !strings.Contains(out, want) || strings.Contains(out, "ERROR  run "+id) {
+		t.Errorf("doctor: exit %d; want %q and no error for the run:\n%s", code, want, out)
+	}
+	before, _ := os.ReadFile(filepath.Join(runDir, "ledger.jsonl"))
+	code, out, errOut := ygg(t, "resume", id, "--project", dir)
+	if code != ExitRefused || !strings.Contains(errOut, "run "+id+" was started before typed boundaries; start a new run") {
+		t.Errorf("resume: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if after, _ := os.ReadFile(filepath.Join(runDir, "ledger.jsonl")); string(after) != string(before) {
+		t.Error("the refused resume changed the run's ledger")
+	}
+	if after, _ := os.ReadFile(file); string(after) != string(b) {
+		t.Error("a read of the run rewrote its run.json")
 	}
 }
 

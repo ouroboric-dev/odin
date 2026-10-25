@@ -61,7 +61,7 @@ func inputHeadings(prompt string) []string {
 
 func TestAPromptHoldsEachDeclaredInput(t *testing.T) {
 	shape := strings.Replace(taskShape, "      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [rejection, refusal], output: ygg.implement/v1 }\n",
-		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md, input: [task, change], output: ygg.review/v1 } ], input: [rejection, refusal], output: ygg.implement/v1 }\n", 1)
+		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md, input: [task, change, rejection], output: ygg.review/v1 } ], input: [rejection, refusal], output: ygg.implement/v1 }\n", 1)
 	script := "steps:\n" + writeStep("p-t001-implement", "api.txt") + "  p-t001-implement-spec:\n    - result: { status: ok, summary: no findings, output: '{\"findings\": []}' }\n"
 	r := startRealms(t, realmsSetup{nodes: shape, script: withPlan(planOf(taskOf("p-T001", "repos/api", "S")), script),
 		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API.")},
@@ -71,8 +71,8 @@ func TestAPromptHoldsEachDeclaredInput(t *testing.T) {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
 	got := promptOf(t, r, "p-t001-implement-spec-1")
-	if h := inputHeadings(got); !slices.Equal(h, []string{"task", "change"}) {
-		t.Errorf("the reviewer's input sections are %v, want [task change], in that order:\n%s", h, got)
+	if h := inputHeadings(got); !slices.Equal(h, []string{"task", "change", "rejection"}) {
+		t.Errorf("the reviewer's input sections are %v, want [task change rejection], in that order:\n%s", h, got)
 	}
 	task, change, answer := strings.Index(got, "## Input: task"), strings.Index(got, "## Input: change"), strings.Index(got, "## Your answer")
 	if !(task < change && change < answer) {
@@ -93,15 +93,15 @@ func TestAPromptHoldsEachDeclaredInput(t *testing.T) {
 // session of a loop outside a foreach body gets exactly what it declares too, as one inside does.
 func TestASessionOfALoopAtTheTopOfTheGraphGetsExactlyItsDeclaredInputs(t *testing.T) {
 	nodes := "  - id: build\n    kind: loop\n    input: [rejection]\n    output: ygg.implement/v1\n    repo: repos/app\n    role: planner\n    prompt: p.md\n" +
-		"    checks: [unit]\n    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change], output: ygg.review/v1 }\n"
+		"    checks: [unit]\n    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change, rejection], output: ygg.review/v1 }\n"
 	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if h := inputHeadings(promptOf(t, r, "build-spec-1")); !slices.Equal(h, []string{"change"}) {
-		t.Errorf("the reviewer's input sections are %v, want exactly [change]", h)
+	if h := inputHeadings(promptOf(t, r, "build-spec-1")); !slices.Equal(h, []string{"change", "rejection"}) {
+		t.Errorf("the reviewer's input sections are %v, want exactly [change rejection]", h)
 	}
 	if h := inputHeadings(promptOf(t, r, "build-1")); !slices.Equal(h, []string{"rejection"}) {
 		t.Errorf("the implementer's input sections are %v, want exactly [rejection]", h)
@@ -495,7 +495,7 @@ func TestInputFilesAreDroppedOnAnErrorAndIgnoredInALeafTheRunDoesNotTrack(t *tes
 
 func TestAReviewerOfALoopWithNoBaseIsToldWhyItHasNoDiff(t *testing.T) {
 	nodes := "  - id: build\n    kind: loop\n    input: [rejection, refusal, open_findings, check_results]\n    output: ygg.implement/v1\n    repo: repos/app\n    role: planner\n    prompt: p.md\n" +
-		"    checks: [unit]\n    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results], output: ygg.review/v1 }\n"
+		"    checks: [unit]\n    reviewers:\n      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results, rejection], output: ygg.review/v1 }\n"
 	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{pack: unitCheck, nodes: nodes, script: script})

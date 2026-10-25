@@ -137,8 +137,8 @@ const decisionLoop = `  - { id: design, kind: agent, role: planner, prompt: p.md
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: planner, prompt: p.md, input: [decisions, change, open_findings, check_results], output: ygg.review/v1 }
-      - { id: arch, role: planner, prompt: p.md, input: [decisions, change, open_findings, check_results], output: ygg.review/v1 }
+      - { id: spec, role: planner, prompt: p.md, input: [decisions, change, open_findings, check_results, rejection], output: ygg.review/v1 }
+      - { id: arch, role: planner, prompt: p.md, input: [decisions, change, open_findings, check_results, rejection], output: ygg.review/v1 }
 `
 
 func TestNoteReachesLoopSessions(t *testing.T) {
@@ -236,6 +236,11 @@ func TestOnlyAGateNoteIsADecision(t *testing.T) {
 // before replaces it. Nothing given restates nothing, and the earlier decisions hold.
 func TestAGateMetAgainAddsToWhatItWasGiven(t *testing.T) {
 	s := &run.State{}
+	keepDecisions := func(s *run.State, gate string, d schema.Decisions) {
+		if err := keepDecisions(&run.Run{State: s}, gate, d); err != nil {
+			t.Fatal(err)
+		}
+	}
 	one := func(id, text string) schema.Decisions {
 		return schema.Decisions{Decisions: []schema.Decision{{ID: id, Text: text}}}
 	}
@@ -416,5 +421,33 @@ func TestANoteAtAGateMetAgainTakesTheNextFreeId(t *testing.T) {
 	}
 	if r.State.Attempts["spec"] != 1 {
 		t.Errorf("spec ran %d time(s); want 1: it cites both ids", r.State.Attempts["spec"])
+	}
+}
+
+// Ruling R51: an answer keeps the text of the question it answered, as the design asked it when the answer was given.
+// A redesign renumbers its questions; the answer still reads with its own.
+func TestAnAnswerKeepsItsQuestion(t *testing.T) {
+	redesign := strings.Replace(designDoc, "May guests download photos?", "Do albums expire?", 1)
+	script := "steps:\n  design:\n    - result: { status: ok, summary: designed, output: '" + designDoc + "' }\n" +
+		"    - result: { status: ok, summary: designed again, output: '" + redesign + "' }\n" +
+		"  spec:\n    - result: { status: ok, summary: wrote the spec, output: '" + specDoc + "' }\n" +
+		"  conformance:\n    - result: { status: ok, summary: checked, output: '" + noDeviation + "' }\n"
+	r := start(t, "key-points", "", ownerNodes, script)
+	advanceTo(t, r, "design-gate")
+	given := schema.Decisions{Reason: "Say who may share.", Answers: []schema.Answer{{Question: "q1", Text: "Yes, but not originals."}}}
+	if err := Reject(bg, r, "design-gate", given); err != nil {
+		t.Fatal(err)
+	}
+	advanceTo(t, r, "design-gate")
+	if err := Approve(bg, r, "design-gate", schema.Decisions{}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	p := promptOf(t, r, "spec-1")
+	want := "- q1 (at design-gate): Yes, but not originals.\n  The question: May guests download photos?\n"
+	if !strings.Contains(p, want) || strings.Contains(p, "The question: Do albums expire?") {
+		t.Errorf("the decisions input does not show the answer with its own question %q:\n%s", want, p)
 	}
 }

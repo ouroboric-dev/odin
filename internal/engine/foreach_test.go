@@ -171,7 +171,7 @@ func TestATaskInALeafWhoseRealmOffersNoRecipeFailsTheNode(t *testing.T) {
 
 func TestTheTaskIsInThePromptOfItsImplementerAndItsReviewer(t *testing.T) {
 	shape := strings.Replace(taskShape, "      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [rejection, refusal], output: ygg.implement/v1 }\n",
-		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md, input: [task], output: ygg.review/v1 } ], input: [task, rejection, refusal], output: ygg.implement/v1 }\n", 1)
+		"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: p.md, input: [task, rejection], output: ygg.review/v1 } ], input: [task, rejection, refusal], output: ygg.implement/v1 }\n", 1)
 	task := schema.PlanTask{ID: "p-T001", Title: "the API stores galleries", Criteria: []string{"a gallery can be created", "a name is required"},
 		NamedTest: "repos/api/gallery_test.go TestCreate", Layer: "repos/api", Size: "S", DependsOn: []string{}, Text: "Store galleries."}
 	script := "steps:\n" + writeStep("p-t001-implement", "api.txt") + "  p-t001-implement-spec:\n    - result: { status: ok, summary: no findings, report: [] }\n"

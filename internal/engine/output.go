@@ -14,6 +14,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -160,20 +161,21 @@ func sessionForOutput(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.
 	return res, ev, err
 }
 
-// repairSection is what the repair session is told: every error of the answer, and how to hand it back.
+// repairSection is what the repair session is told: every error of the answer, and how to hand it back. An error may
+// quote the answer, so each reads as its text (mdsafe).
 func repairSection(c schema.Contract, err error) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Your answer could not be used\n\nYour answer is not a valid `%s` document:\n\n", c)
 	var ve *schema.ValidationError
 	if errors.As(err, &ve) {
 		for _, e := range ve.Errors {
-			b.WriteString("- " + e + "\n")
+			b.WriteString("- " + mdsafe.Item(e, 2) + "\n")
 		}
 		if len(ve.Errors) >= maxValidationErrors {
 			fmt.Fprintf(&b, "\nThese are the first %d errors; there may be more.\n", maxValidationErrors)
 		}
 	} else {
-		b.WriteString("- " + err.Error() + "\n")
+		b.WriteString("- " + mdsafe.Item(err.Error(), 2) + "\n")
 	}
 	fmt.Fprintf(&b, "\nFix every error and hand back the whole `%s` document again: through the tool `submit`, or, if you do not "+
 		"have it, as your final answer, which is then exactly one JSON document, bare or in one code fence, and nothing else.\n", c)

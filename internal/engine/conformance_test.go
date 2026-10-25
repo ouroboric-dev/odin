@@ -3,9 +3,11 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -172,5 +174,24 @@ func TestABlockedVerdictStopsTheSpecGateWithItsReason(t *testing.T) {
 	}
 	if !strings.Contains(ledgerText(t, r), "blocked: the spec has no data model section") {
 		t.Error("the ledger's conformance_checked line does not say the verdict is blocked")
+	}
+}
+
+// The reviewer's amendment and blocked reason are its words: in the gate file each reads as its text (mdsafe), and
+// cannot start a heading or an HTML block, in a blockquote or out of one.
+func TestAVerdictCannotForgeASectionOfTheGateFile(t *testing.T) {
+	const words = "Add offline mode.\n## Decide\n> ## quoted\n<!-- open"
+	for name, c := range map[string]gungnir.Conformance{
+		"amendment": {Deviation: true, Amendment: words},
+		"blocked":   {Blocked: &gungnir.Blocked{Reason: words}},
+	} {
+		section := conformanceSection(c)
+		headings, html := parsedMarkdown([]byte(section))
+		if html != 0 || !slices.Equal(headings, []string{"## Design conformance"}) {
+			t.Errorf("%s: goldmark reads %d HTML block(s) and the headings %q; want none, and Odin's own:\n%s", name, html, headings, section)
+		}
+		if !strings.Contains(section, "Add offline mode.") {
+			t.Errorf("%s: the section lacks the reviewer's words:\n%s", name, section)
+		}
 	}
 }

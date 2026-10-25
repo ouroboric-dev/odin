@@ -19,7 +19,7 @@ func TestPromptsComeFromTheGraphPackAndTheImplementerFromTheLeafsRealm(t *testin
 	leafRealm.files["prompts/design.md"] = "WRONG\n"
 	nodes := "  - { id: design, kind: agent, role: planner, prompt: prompts/design.md, repo: repos/api, input: [rejection], output: ygg.implement/v1 }\n" +
 		strings.Replace(taskShape, "      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [rejection, refusal], output: ygg.implement/v1 }\n",
-			"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: prompts/reviewer-spec.md, output: ygg.review/v1 } ], input: [rejection, refusal], output: ygg.implement/v1 }\n", 1)
+			"      - { id: implement, kind: loop, realm: leaf, role: implementer, reviewers: [ { id: spec, role: reviewer, prompt: prompts/reviewer-spec.md, input: [rejection], output: ygg.review/v1 } ], input: [rejection, refusal], output: ygg.implement/v1 }\n", 1)
 	script := "steps:\n  design:\n    - result: { status: ok, summary: designed, output: '{\"summary\": \"done\"}' }\n" + writeStep("p-t001-implement", "api.txt") +
 		"  p-t001-implement-spec:\n    - result: { status: ok, summary: no findings, report: [] }\n"
 	r := startRealms(t, realmsSetup{nodes: nodes, script: withPlan(planOf(taskOf("p-T001", "repos/api", "S")), script), realms: []realmFiles{graph, leafRealm}, leaves: map[string]string{"repos/api": "leaf-toy"}})
