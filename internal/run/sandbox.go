@@ -59,7 +59,7 @@ func (r *Run) Runner(ctx context.Context, repo string) (gungnir.Runner, error) {
 		return nil, err
 	}
 	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: repo, Parent: parent.Dir, Leaf: leaf.Dir,
-		GitDir: leaf.GitDir, Egress: egress, Stack: stack, Services: services})
+		GitDir: leaf.GitDir, Egress: egress, Stack: stack, Services: services, Models: r.Setup.Sandbox.Models})
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (r *Run) ScratchRunner(ctx context.Context, node string) (gungnir.Runner, e
 		return gungnir.Bind(r.Sandbox, env), nil
 	}
 	env, err := r.Sandbox.Up(ctx, gungnir.SandboxSpec{Run: r.State.ID, Name: key, Parent: r.Dir, Leaf: r.ScratchDir(node), Scratch: true,
-		Egress: r.Setup.Sandbox.Hosts})
+		Egress: r.Setup.Sandbox.Hosts, Models: r.Setup.Sandbox.Models})
 	if err != nil {
 		return nil, err
 	}
