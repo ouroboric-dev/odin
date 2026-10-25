@@ -299,6 +299,8 @@ killed process to the next `run_resumed` is stopped time; neither is the factory
 grade time. A finding line says whether a check or a reviewer raised it (`ygg.finding.origin`), a dispute that could not
 be used is a `dispute_ignored` line, and every run records the build of ygg that wrote it (`ygg.factory.version`).
 
+The operator's judgements (`ygg score`, `judgements.json`, `ygg.judgement/v1`) are a score from 0 to 10 with what went well and what went wrong, of the run or of one task. A new one replaces the last of the same run or task in the file, the ledger keeps each as a `judged` line, and the record carries the file's list.
+
 The experiment record (`ygg record`, `record.json`, `ygg.run-record/v1`) is the same figures with the run's setup, each
 task's size and findings and the harness's health; `ygg metrics --json` prints it, validated. The setup's hashes are
 the ones `run.json` keeps: the graph's and the realms', and each prompt's and skill's, which the run takes from the

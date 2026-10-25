@@ -25,6 +25,7 @@ ygg grade   <run-id> [--task <id>] [--project <dir>]
 ygg metrics <run-id|first..last> [--json] [--project <dir>]
 ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
 ygg record  <run-id> [--project <dir>]
+ygg score   <run-id> --score <0-10> --well <text> --wrong <text> [--task <id>] [--project <dir>]
 ygg report  <run-id> [--commit] [--project <dir>]
 ygg board   [--project <dir>] | --all [--projects <file>]
 ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <mode>]
@@ -57,6 +58,13 @@ size, attempts, findings by source and severity, and the lines it added (written
 `git diff --numstat` in its leaf), and the harness's health: the outputs refused and
 repaired by role and model, every `blocked` answer and note from the kept outputs, and the design's open questions that
 no person answered. It is rebuilt from the ledger, `run.json` and the kept files, so it can be written again at any time.
+
+`ygg score <run-id> --score N --well TEXT --wrong TEXT [--task ID]` records your judgement of the run, or with `--task`
+of one task of its plan (`ygg.judgement/v1`): a score from 0 to 10, and 1 to 16384 characters each on what went well and
+what went wrong. Give it at any time, a run that stopped included. A new judgement replaces the last one of the same run
+or task in `judgements.json`; the ledger keeps each as a `judged` line (`ygg.result` is the score, `ygg.task.id` the
+task); `record.json` is rebuilt with the judgements. A task the plan does not have is refused, and so is a run that
+another ygg process is advancing, because that process owns the ledger.
 
 `ygg metrics --compare <runA> <runB>` prints what differed between two runs of one project (the factory build, the
 config hash, the agent and model of each role, the realm versions, the mode, the graph) and the deltas, B minus A.

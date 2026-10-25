@@ -43,6 +43,7 @@ const usage = `usage:
   ygg metrics <run-id|first..last> [--json] [--project <dir>]
   ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
   ygg record  <run-id> [--project <dir>]
+  ygg score   <run-id> --score <0-10> --well <text> --wrong <text> [--task <id>] [--project <dir>]
   ygg report  <run-id> [--commit] [--project <dir>]
   ygg board   [--project <dir>] | --all [--projects <file>]
   ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <mode>]   (started by the Harbor adapter)
@@ -67,7 +68,7 @@ func MainWithInput(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	c := &command{ctx: ctx, in: stdin, out: stdout, err: stderr}
 	cmds := map[string]func([]string) int{
 		"run": c.run, "resume": c.resume, "approve": c.approve, "reject": c.reject,
-		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics, "record": c.record, "report": c.report, "board": c.board, "bridge": c.bridge,
+		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics, "record": c.record, "score": c.score, "report": c.report, "board": c.board, "bridge": c.bridge,
 	}
 	f, ok := cmds[args[0]]
 	if !ok {
@@ -88,6 +89,8 @@ type flags struct {
 	project, config, graph, realm, brief, mode, note, reason, decisions, root, task, canary string
 	realms, rollout                                                                         []string        // sandbox build: every --realm given; deps bump: every --rollout given
 	all, host, json                                                                         bool            // sandbox build: --all; deps bump: --host; metrics: --json
+	score                                                                                   int             // score: --score
+	well, wrong                                                                             string          // score: --well, --wrong
 	set                                                                                     map[string]bool // the flags given
 }
 

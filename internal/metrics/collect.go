@@ -100,6 +100,7 @@ func (r *Run) experiment(dir string, state *record, events []gungnir.Event) {
 	r.setup(state, events)
 	r.harness(dir, state, events)
 	r.sizes(state, events)
+	r.judgements(dir)
 }
 
 func readEvents(path string) ([]gungnir.Event, error) {

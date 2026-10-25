@@ -107,34 +107,42 @@ func WriteRecord(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tmp, err := os.CreateTemp(dir, RecordFile+".tmp-*")
-	if err != nil {
+	if err := writeAtomic(dir, RecordFile, b); err != nil {
 		return "", err
+	}
+	return filepath.Join(dir, RecordFile), nil
+}
+
+// writeAtomic writes data to dir/name with mode 0644: a synced temporary file in dir, renamed over the name, and
+// the directory synced.
+func writeAtomic(dir, name string, data []byte) error {
+	tmp, err := os.CreateTemp(dir, name+".tmp-*")
+	if err != nil {
+		return err
 	}
 	defer os.Remove(tmp.Name())
 	if err := tmp.Chmod(0o644); err != nil { // as the run's other files; CreateTemp makes it 0600
 		tmp.Close()
-		return "", err
+		return err
 	}
-	if _, err := tmp.Write(b); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return "", err
+		return err
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return "", err
+		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return "", err
+		return err
 	}
-	path := filepath.Join(dir, RecordFile)
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return "", err
+	if err := os.Rename(tmp.Name(), filepath.Join(dir, name)); err != nil {
+		return err
 	}
 	d, err := os.Open(dir)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer d.Close()
-	return path, d.Sync()
+	return d.Sync()
 }
