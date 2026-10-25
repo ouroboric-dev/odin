@@ -23,7 +23,7 @@ func graphStore(t *testing.T) string {
 	}
 	files := map[string]string{
 		"pack.yaml":  "name: software\nversion: 0.1.0\ngraph: graph.yaml\n",
-		"graph.yaml": "name: software\nversion: 0.1.0\nnodes:\n  - { id: a, kind: exec, run: [true], repo: . }\n",
+		"graph.yaml": "name: software\nversion: 0.1.0\nschema: 2\nnodes:\n  - { id: a, kind: exec, run: [\"true\"], repo: . }\n",
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
@@ -269,5 +269,49 @@ func TestDoctorSaysAnOlderYggIsStillRunningARunBeforeGraphsAndKeepsItsFolder(t *
 	}
 	if strings.Contains(out, "remove its folder") {
 		t.Errorf("doctor tells the operator to remove the folder of a run that is still going:\n%s", out)
+	}
+}
+
+// A prompt that backticks an input its session does not declare, in a graph pack or in the implementer prompt
+// of a realm, is an error of doctor's, naming the file and the input (ruling R66).
+func TestDoctorReportsAPromptThatNamesAnInputItsSessionDoesNotDeclare(t *testing.T) {
+	dir, plain := project(t, "script.yaml", "")
+	store := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		p := filepath.Join(store, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("flow/pack.yaml", "name: flow\nversion: 0.1.0\ngraph: graph.yaml\n")
+	write("flow/graph.yaml", "name: flow\nversion: 0.1.0\nschema: 2\nnodes:\n"+
+		"  - { id: design, kind: agent, role: planner, prompt: prompts/design.md, scratch: true, input: [rejection], output: ygg.design/v1 }\n"+
+		"  - { id: plan, kind: agent, role: planner, prompt: prompts/design.md, scratch: true, input: [rejection, refusal], output: ygg.plan/v1 }\n"+
+		"  - { id: ready, kind: tasks, from: plan, leaves: docs/leaves.yaml, back_to: plan }\n"+
+		"  - id: tasks\n    kind: foreach\n    over: tasks\n    nodes:\n"+
+		"      - { id: implement, kind: loop, realm: leaf, role: implementer, attempts: 2, input: [task, rejection, refusal, open_findings, check_results], output: ygg.implement/v1 }\n"+
+		"      - { id: land, kind: merge, realm: leaf, back_to: implement }\n")
+	write("flow/prompts/design.md", "Write the design for the `brief`.\n")
+	write("ground/pack.yaml", "name: ground\nversion: 0.1.0\nchecks:\n  unit: [test, -f, x]\nleaf:\n  description: A leaf.\n  template: templates/app\n  first_commit: [LICENSE]\n  implementer: prompts/implementer.md\n  checks: [unit]\n")
+	write("ground/templates/app/LICENSE", "x\n")
+	write("ground/prompts/implementer.md", "Build the `task`, then read the `design`.\n")
+	config := withGraphs(t, plain, store)
+	b, _ := os.ReadFile(config)
+	config2 := filepath.Join(t.TempDir(), "factory.yaml")
+	if err := os.WriteFile(config2, append(b, []byte("realms:\n  dir: "+store+"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config2)
+	for _, w := range []string{"ERROR graphs: flow: graph.yaml: node design: prompts/design.md", "prompts/design.md", "brief", "implementer prompt prompts/implementer.md", "the input design"} {
+		if !strings.Contains(out, w) {
+			t.Errorf("doctor's output lacks %q:\n%s", w, out)
+		}
+	}
+	if code != ExitFailed {
+		t.Errorf("exit %d, want %d", code, ExitFailed)
 	}
 }

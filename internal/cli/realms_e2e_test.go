@@ -200,3 +200,29 @@ func TestARunWhoseRealmPinsDisagreeIsRefusedAndCreatesNothing(t *testing.T) {
 		t.Errorf("a name with no store: exit %d:\n%s", code, errOut)
 	}
 }
+
+// A realm's implementer prompt may name only the inputs the loop declares; a run that would start with one that
+// names another is refused before anything is created (ruling R66).
+func TestARunWhoseRealmImplementerPromptNamesAnUndeclaredInputIsRefused(t *testing.T) {
+	store := t.TempDir()
+	if err := os.CopyFS(store, os.DirFS(realmsDir(t))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "midgard-toy", "prompts", "implementer.md"), []byte("Build the `task` in the web leaf, from the `brief`.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := treetest.Project(t)
+	cfg := galleryConfig(t, "key-points", "", "../../testdata/realms-scripts/gallery.yaml")
+	b, _ := os.ReadFile(cfg)
+	cfg2 := filepath.Join(t.TempDir(), "factory.yaml")
+	if err := os.WriteFile(cfg2, []byte(strings.ReplaceAll(string(b), "dir: "+realmsDir(t)+"\n", "dir: "+store+"\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := ygg(t, "run", "--project", dir, "--config", cfg2, "--graph", "midgard-toy", "--brief", writeFile(t, "brief.md", "Build the toy product.\n"))
+	if code == ExitDone || !strings.Contains(errOut, "implementer prompt prompts/implementer.md") || !strings.Contains(errOut, "names the input brief") {
+		t.Errorf("exit %d:\n%s", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".factory")); err == nil {
+		t.Error("a refused run created .factory/")
+	}
+}

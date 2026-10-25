@@ -167,6 +167,18 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if err := checkPublish(graphPath, s.Graph.Nodes, map[string]schema.Node{}); err != nil {
 		return nil, err
 	}
+	// A session sees only the inputs its node declares, so a prompt may name only those (ruling R66). The prompts
+	// of the graph pack, then the implementer prompts the loaded realms give to loops that have none.
+	if err := s.Graph.CheckPrompts(s.GraphPack.Dir); err != nil {
+		return nil, err
+	}
+	loaded := make([]*realm.Realm, 0, len(s.Realms.Realms))
+	for _, r := range s.Realms.Realms {
+		loaded = append(loaded, r)
+	}
+	if err := CheckRealmPrompts(s.Graph, loaded); err != nil {
+		return nil, err
+	}
 	for _, p := range s.projectLeaves() { // every leaf the project has, whether or not the graph names it
 		if _, err := s.RealmOf(p); err != nil {
 			return nil, err

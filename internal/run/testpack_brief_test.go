@@ -34,6 +34,9 @@ func TestEveryTestPackSessionThatNamesTheBriefDeclaresIt(t *testing.T) {
 			continue // not a graph pack that loads on its own
 		}
 		dir := filepath.Dir(file)
+		if err := g.CheckPrompts(dir); err != nil {
+			t.Errorf("%s: %v", file, err)
+		}
 		check := func(node, prompt string, input []string) {
 			if prompt == "" {
 				return
@@ -45,6 +48,10 @@ func TestEveryTestPackSessionThatNamesTheBriefDeclaresIt(t *testing.T) {
 			checked++
 			if strings.Contains(strings.ToLower(string(b)), "brief") && !slices.Contains(input, "brief") {
 				t.Errorf("%s: %s: the prompt %s names the brief, but input %v does not declare it", file, node, prompt, input)
+			}
+			// The rule of the prompts (R66) reads backticks: a prompt that works from the brief names it as `brief`.
+			if strings.Contains(strings.ToLower(string(b)), "brief") && !slices.Contains(schema.PromptInputs(string(b), nil), "brief") {
+				t.Errorf("%s: %s: the prompt %s says brief, but does not name the input in backticks", file, node, prompt)
 			}
 		}
 		for _, n := range g.All() {

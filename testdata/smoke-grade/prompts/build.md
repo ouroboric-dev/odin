@@ -1,4 +1,4 @@
-Build the product of the brief below in this repository. The brief says `/app`: the root of this repository
+Build the product of the `brief` below in this repository. The brief says `/app`: the root of this repository
 plays that part. The product is started with the `start.sh` of this repository, so this repository must
 hold an executable `start.sh` that starts the whole product on port 3000.
 
