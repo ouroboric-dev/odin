@@ -235,6 +235,7 @@ func checkGraphs(f *schema.Factory, report func(level, what, msg string)) {
 			report("ERROR", "graphs", e.Name()+": the pack holds no graph, so --graph "+e.Name()+" would be refused")
 		default:
 			found = append(found, r.Name+" "+r.Version)
+			checkGraphPrompts(f, r, report)
 		}
 	}
 	if len(found) == 0 {
@@ -511,4 +512,36 @@ func (c *command) checkTree(root string, report func(level, what, msg string)) {
 		return
 	}
 	report("OK", "tree", fmt.Sprintf("%s: %d nodes, %d checked out", root, nodes, present))
+}
+
+// checkGraphPrompts reports each prompt of the graph pack that names, in backticks, an input its session does not
+// declare (ruling R66): the prompts of the pack, and the implementer prompts of the realms of the store, which
+// the pack's loops with no prompt of their own take. A run would refuse the same graph at its start.
+func checkGraphPrompts(f *schema.Factory, pack *realm.Realm, report func(level, what, msg string)) {
+	g, err := schema.LoadGraph(filepath.Join(pack.Dir, pack.Pack.Graph))
+	if err != nil {
+		report("ERROR", "graphs", pack.Name+": "+err.Error())
+		return
+	}
+	if err := g.CheckPrompts(pack.Dir); err != nil {
+		report("ERROR", "graphs", pack.Name+": "+err.Error())
+	}
+	// A store that cannot be read, a realm that does not load, and a config with no realms section are reported by
+	// checkRealms, so this walk leaves them out rather than report them twice.
+	var realms []*realm.Realm
+	if f.Realms != nil {
+		entries, _ := os.ReadDir(f.Realms.Dir)
+		for _, e := range entries {
+			dir := filepath.Join(f.Realms.Dir, e.Name())
+			if _, err := os.Stat(filepath.Join(dir, "pack.yaml")); err != nil {
+				continue // not a realm leaf
+			}
+			if r, err := realm.Load(dir); err == nil {
+				realms = append(realms, r)
+			}
+		}
+	}
+	if err := run.CheckRealmPrompts(g, realms); err != nil {
+		report("ERROR", "graphs", pack.Name+": "+err.Error())
+	}
 }

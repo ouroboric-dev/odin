@@ -50,7 +50,7 @@ func galleryConfig(t *testing.T, mode, gates, script string) string {
 func TestARunOfTheToyRealmsBuildsAProductFromTwoRealms(t *testing.T) {
 	dir := treetest.Project(t)
 	cfg := galleryConfig(t, "key-points", "", "../../testdata/realms-scripts/gallery.yaml")
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy", "--brief", writeFile(t, "brief.md", "Build the toy product.\n"))
 	if code != ExitStopped || !strings.Contains(out, "stopped at approval point design-gate") {
 		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
 	}
@@ -153,7 +153,7 @@ func TestAnUnattendedRunOfTheToyRealmsGivesUpATaskAndExitsFive(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := galleryConfig(t, "unattended", "gates:\n  design: auto\n", path)
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy", "--brief", writeFile(t, "brief.md", "Build the toy product.\n"))
 	if code != ExitBlocked {
 		t.Fatalf("exit %d, want %d:\n%s%s", code, ExitBlocked, out, errOut)
 	}
@@ -198,5 +198,31 @@ func TestARunWhoseRealmPinsDisagreeIsRefusedAndCreatesNothing(t *testing.T) {
 	os.WriteFile(noStore, []byte(strings.Split(string(b), "realms:")[0]), 0o644)
 	if code, _, errOut := ygg(t, "run", "--project", dir, "--config", noStore, "--graph", "midgard-toy"); code != ExitRefused || !strings.Contains(errOut, "graphs") {
 		t.Errorf("a name with no store: exit %d:\n%s", code, errOut)
+	}
+}
+
+// A realm's implementer prompt may name only the inputs the loop declares; a run that would start with one that
+// names another is refused before anything is created (ruling R66).
+func TestARunWhoseRealmImplementerPromptNamesAnUndeclaredInputIsRefused(t *testing.T) {
+	store := t.TempDir()
+	if err := os.CopyFS(store, os.DirFS(realmsDir(t))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, "midgard-toy", "prompts", "implementer.md"), []byte("Build the `task` in the web leaf, from the `brief`.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := treetest.Project(t)
+	cfg := galleryConfig(t, "key-points", "", "../../testdata/realms-scripts/gallery.yaml")
+	b, _ := os.ReadFile(cfg)
+	cfg2 := filepath.Join(t.TempDir(), "factory.yaml")
+	if err := os.WriteFile(cfg2, []byte(strings.ReplaceAll(string(b), "dir: "+realmsDir(t)+"\n", "dir: "+store+"\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := ygg(t, "run", "--project", dir, "--config", cfg2, "--graph", "midgard-toy", "--brief", writeFile(t, "brief.md", "Build the toy product.\n"))
+	if code == ExitDone || !strings.Contains(errOut, "implementer prompt prompts/implementer.md") || !strings.Contains(errOut, "names the input brief") {
+		t.Errorf("exit %d:\n%s", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".factory")); err == nil {
+		t.Error("a refused run created .factory/")
 	}
 }

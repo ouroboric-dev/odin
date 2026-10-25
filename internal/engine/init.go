@@ -59,6 +59,11 @@ func runInit(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Setup.CheckNeedsWith(runtime, leafRealms); err != nil {
 		return &nodeFailure{err}
 	}
+	// The realms of a fresh run enter here, after run start checked the prompts of the realms it had: their
+	// implementer prompts name only the inputs the loops declare (ruling R66).
+	if err := run.CheckRealmPrompts(r.Setup.Graph, leafRealms); err != nil {
+		return &nodeFailure{err}
+	}
 	if err := r.AddRealms(leavesPins(spec)); err != nil {
 		return &nodeFailure{err}
 	}
