@@ -245,6 +245,7 @@ func (s *Setup) prepareSkills(override *skills.Libraries) error {
 			if s.Libs.Private, err = havamal.OpenPrivate(dir); err != nil {
 				return err
 			}
+			s.privateDir = dir
 		}
 	}
 	var names []string

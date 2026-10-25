@@ -303,7 +303,8 @@ The experiment record (`ygg record`, `record.json`, `ygg.run-record/v1`) is the 
 task's size and findings and the harness's health; `ygg metrics --json` prints it, validated. The setup's hashes are
 the ones `run.json` keeps: the graph's and the realms', and each prompt's and skill's, which the run takes from the
 bytes it reads (`prompt_sha256`, `skill_sha256`), so a file changed later does not change a record; the record never
-reads the prompts again. The lines of a task come from `git diff --numstat` in its
+reads the prompts again. A run uses one set of instructions: a session whose prompt or skill no longer hashes as the
+run kept fails its node before it starts ("the prompt X changed during the run …; start a new run"). The lines of a task come from `git diff --numstat` in its
 leaf, from its loop's base to its merge's commit, with nothing checked out; blocked answers and notes come from the
 kept outputs, hash-checked and validated, never from prose. What it cannot read is a warning, not an error.
 

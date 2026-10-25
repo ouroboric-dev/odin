@@ -3,6 +3,7 @@ package run
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,14 +71,85 @@ func TestAPromptIsReadInsideItsPackAndItsHashKept(t *testing.T) {
 	if err != nil || r.State.PromptSHA256["prompts/build.md"] != sha(b) {
 		t.Errorf("ReadPrompt() = %v; prompt_sha256 = %v", err, r.State.PromptSHA256)
 	}
-	// A hash already kept stays: it is what the run started with.
+	// A hash already kept stays: it is what the run started with, and other bytes are refused (ruling R56).
 	r.State.PromptSHA256["prompts/build.md"] = strings.Repeat("0", 64)
-	if _, err := r.ReadPrompt("", "prompts/build.md"); err != nil || r.State.PromptSHA256["prompts/build.md"] != strings.Repeat("0", 64) {
-		t.Errorf("ReadPrompt() = %v, and replaced the kept hash: %v", err, r.State.PromptSHA256)
+	var ce *ChangedError
+	if _, err := r.ReadPrompt("", "prompts/build.md"); !errors.As(err, &ce) || r.State.PromptSHA256["prompts/build.md"] != strings.Repeat("0", 64) {
+		t.Errorf("ReadPrompt() = %v, and the kept hash is now %v", err, r.State.PromptSHA256)
 	}
 	for _, bad := range []string{"../graph.yaml", "/etc/passwd", "prompts/../../x.md"} {
 		if _, err := r.ReadPrompt("", bad); err == nil || !strings.Contains(err.Error(), "not inside") {
 			t.Errorf("ReadPrompt(%q) = %v, want a refusal", bad, err)
 		}
+	}
+}
+
+// A prompt whose bytes are not the ones the run kept is refused with what changed (ruling R56); a realm's prompt,
+// kept the first time it is read, is checked on every later read.
+func TestAPromptThatChangedDuringTheRunIsRefused(t *testing.T) {
+	project := treetest.Project(t, "repos/app")
+	cfg := writeConfig(t, t.TempDir(), scriptedRoles+fullCaps)
+	pack := t.TempDir()
+	if err := os.CopyFS(pack, os.DirFS(toy(t))); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Graph: pack})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	before, _ := os.ReadFile(filepath.Join(pack, "prompts", "plan.md"))
+	if err := os.WriteFile(filepath.Join(pack, "prompts", "plan.md"), []byte("Another plan prompt.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.ReadPrompt("", "prompts/plan.md")
+	var ce *ChangedError
+	want := "the prompt prompts/plan.md changed during the run (recorded sha256 " + sha(before)[:12] + "…, now " + sha([]byte("Another plan prompt.\n"))[:12] + "…); start a new run"
+	if !errors.As(err, &ce) || err.Error() != want {
+		t.Errorf("ReadPrompt() = %v, want %q", err, want)
+	}
+	// A prompt first read later (as a realm's is) is kept then, and checked from then on.
+	delete(r.State.PromptSHA256, "prompts/build.md")
+	if _, err := r.ReadPrompt("", "prompts/build.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pack, "prompts", "build.md"), []byte("Another build prompt.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ReadPrompt("", "prompts/build.md"); !errors.As(err, &ce) {
+		t.Errorf("ReadPrompt() of a changed prompt kept on its first read = %v, want a ChangedError", err)
+	}
+}
+
+// A private skill whose files changed during the run is refused when a session loads it (ruling R56).
+func TestASkillThatChangedDuringTheRunIsRefused(t *testing.T) {
+	project := treetest.Project(t, "repos/app")
+	private := t.TempDir()
+	skill := filepath.Join(private, "house-style", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: house-style\ndescription: How we write.\n---\nUse short words.\n"
+	if err := os.WriteFile(skill, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := writeConfig(t, t.TempDir(), scriptedRoles+fullCaps+"skills:\n  private_dir: "+private+"\n")
+	r, err := Start(ctx, Options{Project: project, Config: cfg, Graph: realmWithSkills(t, "house-style")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	text, err := r.LoadSkills([]string{"house-style"})
+	if err != nil || !strings.Contains(text, "Use short words.") {
+		t.Fatalf("LoadSkills() = %q, %v", text, err)
+	}
+	if err := os.WriteFile(skill, []byte(strings.Replace(body, "short", "long", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.LoadSkills([]string{"house-style"})
+	var ce *ChangedError
+	if !errors.As(err, &ce) || !strings.HasPrefix(err.Error(), "the skill house-style changed during the run (recorded sha256 ") ||
+		!strings.HasSuffix(err.Error(), "…); start a new run") {
+		t.Errorf("LoadSkills() of a changed skill = %v", err)
 	}
 }

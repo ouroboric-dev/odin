@@ -73,6 +73,7 @@ type Setup struct {
 	Mode         gungnir.Mode
 	Agents       map[string]gungnir.Agent // role: adapter, for every role the graph uses
 	Libs         skills.Libraries         // where the graph's skills come from
+	privateDir   string                   // the folder Libs.Private was opened from, which a session's skills are read from again
 	Skills       skills.Record            // every skill the graph names, with the set's hash
 	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
 	newSandbox   NewSandbox
