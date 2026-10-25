@@ -299,6 +299,12 @@ killed process to the next `run_resumed` is stopped time; neither is the factory
 grade time. A finding line says whether a check or a reviewer raised it (`ygg.finding.origin`), a dispute that could not
 be used is a `dispute_ignored` line, and every run records the build of ygg that wrote it (`ygg.factory.version`).
 
+The experiment record (`ygg record`, `record.json`, `ygg.run-record/v1`) is the same figures with the run's setup, each
+task's size and the harness's health; `ygg metrics --json` prints it, validated. Prompt hashes are read from the graph
+pack only while its files still hash as `run.json` recorded; the lines of a task come from `git diff --numstat` in its
+leaf, from its loop's base to its merge's commit, with nothing checked out; blocked answers and notes come from the
+kept outputs, hash-checked and validated, never from prose. What it cannot read is a warning, not an error.
+
 `ygg metrics --compare <runA> <runB>` lays two runs side by side: what differed in the setup, the metrics with the delta
 B minus A, and a verdict for success criterion 7 (the metrics that improved, the ones that got worse, and whether the hidden
 score held). Runs of another brief, task version, suite or mode are marked not comparable, with the reason, because

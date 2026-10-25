@@ -29,9 +29,40 @@ type record struct {
 	} `json:"roles"`
 	Realms map[string]struct {
 		Version string `json:"version"`
+		SHA256  string `json:"sha256"`
 	} `json:"realms"`
 	Features []schema.FeatureRecord `json:"features"`
-	Usage    struct {
+
+	// What the experiment record's setup reads.
+	Factory         string `json:"factory"`
+	GraphDir        string `json:"graph_dir"`
+	GraphPackSHA256 string `json:"graph_pack_sha256"`
+	ConfigPath      string `json:"config_path"`
+	Skills          struct {
+		Hash    string   `json:"hash"`
+		Skills  []string `json:"skills"`
+		Private []struct {
+			Name   string `json:"name"`
+			SHA256 string `json:"sha256"`
+		} `json:"private"`
+	} `json:"skills"`
+
+	// What the tasks' sizes and the harness read.
+	Root        string `json:"root"`
+	ProjectPath string `json:"project"`
+	Loops       map[string]*struct {
+		Base string `json:"base"`
+	} `json:"loops"`
+	Decisions []struct {
+		Gate      string           `json:"gate"`
+		Decisions schema.Decisions `json:"decisions"`
+	} `json:"decisions"`
+	Outputs map[string]struct {
+		Contract string `json:"contract"`
+		Path     string `json:"path"`
+		SHA256   string `json:"sha256"`
+	} `json:"outputs"`
+	Usage struct {
 		InTok  int64 `json:"in_tok"`
 		OutTok int64 `json:"out_tok"`
 		Turns  int64 `json:"turns"`
@@ -52,4 +83,60 @@ func loadRecord(dir string) (*record, error) {
 		return nil, fmt.Errorf("%s: schema %q is not a ygg run record", filepath.Join(dir, "run.json"), rec.Schema)
 	}
 	return &rec, nil
+}
+
+// RecordFile is the experiment record's file in the run folder.
+const RecordFile = "record.json"
+
+// Encode is r as the run's experiment record (ygg.run-record/v1): what ygg record writes and ygg metrics --json
+// prints. A record that does not validate is Odin's own error, and is never written.
+func Encode(r *Run) ([]byte, error) {
+	b, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	b = append(b, '\n')
+	if err := schema.Validate(schema.ContractRecord, b); err != nil {
+		return nil, fmt.Errorf("the record of run %s does not validate: %w", r.ID, err)
+	}
+	return b, nil
+}
+
+// WriteRecord rebuilds the experiment record of the run in dir from its ledger, run.json and kept files, and
+// writes it to dir/record.json atomically: a synced temporary file in dir, renamed over it. It returns the path.
+func WriteRecord(dir string) (string, error) {
+	r, err := Collect(dir)
+	if err != nil {
+		return "", err
+	}
+	b, err := Encode(r)
+	if err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dir, RecordFile+".tmp-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, RecordFile)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return "", err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return "", err
+	}
+	defer d.Close()
+	return path, d.Sync()
 }

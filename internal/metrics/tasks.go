@@ -13,6 +13,10 @@ type Task struct {
 	Status string `json:"status"`
 	Why    string `json:"why,omitempty"`
 	Usage  Usage  `json:"usage"`
+
+	Size     string `json:"size,omitempty"`     // the plan's estimate: S, M or L
+	Attempts int    `json:"attempts,omitempty"` // the loop attempts the task took
+	Lines    *Lines `json:"lines,omitempty"`    // what the task added, once it is done
 }
 
 // Group is the tasks of one leaf.

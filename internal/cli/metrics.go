@@ -46,7 +46,12 @@ func (c *command) metrics(args []string) int {
 	single := !strings.Contains(pos[0], "..")
 	switch {
 	case f.json && single:
-		return c.printJSON(runs[0])
+		// The experiment record: the same document ygg record writes.
+		b, err := metrics.Encode(runs[0])
+		if err != nil {
+			return c.refuse(err)
+		}
+		fmt.Fprint(c.out, string(b))
 	case f.json:
 		return c.printJSON(runs)
 	case single:
