@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -122,35 +123,43 @@ func seedRecordFiles(r *run.Run, n schema.Node) (string, error) {
 	if err := copyLedger(filepath.Join(r.Dir, "ledger.jsonl"), filepath.Join(ws, "ledger.jsonl"), grades); err != nil {
 		return "", fmt.Errorf("copying the ledger for %s: %w", n.ID, err)
 	}
-	copied, total, err := copyTranscripts(filepath.Join(r.Dir, "transcripts"), filepath.Join(ws, "transcripts"), maxRetroTranscripts, maxRetroTranscriptBytes)
+	c, err := copyTranscripts(filepath.Join(r.Dir, "transcripts"), filepath.Join(ws, "transcripts"), maxRetroTranscripts, maxRetroTranscriptBytes)
 	if err != nil {
 		return "", fmt.Errorf("copying the transcripts for %s: %w", n.ID, err)
 	}
-	return retroNote(copied, total), nil
+	return retroNote(c), nil
 }
 
+// transcriptCopy is how a copy of the transcripts went: the files it copied, the ones it skipped because each was
+// larger than what was left of the bytes, the ones it left out once the file count was reached, and the files the run
+// holds.
+type transcriptCopy struct{ copied, skipped, leftOut, total int }
+
 // retroNote is what the workspace note of the retrospective adds: where the ledger and the transcripts are, and,
-// when the copy stopped at its bound, that it holds a part of them.
-func retroNote(copied, total int) string {
+// when the copy met its bound, how much of the transcripts it holds.
+func retroNote(c transcriptCopy) string {
 	note := "- ledger.jsonl is a copy of the run's ledger, one event a line, up to this session: ledger:SEQ names a line by its seq. " +
-		"The lines of the grade keep its totals, and its own words are left out.\n"
+		"The lines of the grade keep its totals, and its own words are left out; the operator's judgements are left out.\n"
 	switch {
-	case total == 0:
+	case c.total == 0:
 		note += "- transcripts/ is empty: the run kept no transcript.\n"
-	case copied < total:
-		note += fmt.Sprintf("- transcripts/ holds %d of the run's %d transcript files, in name order: the copy stops at %d files or %d MiB, "+
-			"and the rest are not in this workspace. transcript:NAME names one.\n", copied, total, maxRetroTranscripts, maxRetroTranscriptBytes>>20)
+	case c.copied < c.total:
+		note += fmt.Sprintf("- transcripts/ holds %d of the run's %d transcript files, in name order: the copy holds at most %d files and %d MiB. "+
+			"%d skipped, each larger than what was left of the bytes, and %d left out after the last file the count allowed; "+
+			"they are not in this workspace. transcript:NAME names one.\n",
+			c.copied, c.total, maxRetroTranscripts, maxRetroTranscriptBytes>>20, c.skipped, c.leftOut)
 	default:
-		note += fmt.Sprintf("- transcripts/ holds all %d of the run's transcript files, as its sessions wrote them: transcript:NAME names one.\n", total)
+		note += fmt.Sprintf("- transcripts/ holds all %d of the run's transcript files, as its sessions wrote them: transcript:NAME names one.\n", c.total)
 	}
 	return note
 }
 
 // copyLedger copies the ledger at src to dst, a new file. The lines of the grade nodes (grades) lose their result
 // and note, the grade's own words, such as a refusal that names the suite's scenarios; the grade_* events carry
-// totals only and are copied as they are. The copy is for reading: its hash chain does not hold.
+// totals only and are copied as they are. The operator's judged lines, which hold a score, are left out. The copy is
+// for reading: its hash chain does not hold.
 func copyLedger(src, dst string, grades []string) error {
-	in, err := os.Open(src)
+	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return err
 	}
@@ -168,6 +177,9 @@ func copyLedger(src, dst string, grades []string) error {
 			out.Close()
 			return err
 		}
+		if line == nil {
+			continue
+		}
 		w.Write(line)
 		w.WriteByte('\n')
 	}
@@ -182,15 +194,19 @@ func copyLedger(src, dst string, grades []string) error {
 	return out.Close()
 }
 
-// ledgerLine is one line of the ledger as the retrospective's copy holds it.
+// ledgerLine is one line of the ledger as the retrospective's copy holds it; nil leaves it out.
 func ledgerLine(line []byte, grades []string) ([]byte, error) {
 	var head struct {
-		Node string `json:"ygg.node.id"`
+		Node string            `json:"ygg.node.id"`
+		Name gungnir.EventName `json:"event"`
 	}
 	if err := json.Unmarshal(line, &head); err != nil {
 		return nil, err
 	}
-	if !slices.Contains(grades, head.Node) {
+	switch {
+	case head.Name == gungnir.EventJudged:
+		return nil, nil
+	case !slices.Contains(grades, head.Node):
 		return line, nil
 	}
 	var fields map[string]json.RawMessage
@@ -202,45 +218,67 @@ func ledgerLine(line []byte, grades []string) ([]byte, error) {
 	return json.Marshal(fields)
 }
 
-// copyTranscripts copies the regular files of the folder src into dst, made new, in name order, and stops before the
-// file that would pass maxFiles files or maxBytes bytes. A link is never followed nor copied, and a file that grows
-// while it is read is cut at the size it had. It returns how many files it copied and how many src holds. A src that
-// is not there gives an empty dst.
-func copyTranscripts(src, dst string, maxFiles int, maxBytes int64) (copied, total int, err error) {
+// copyTranscripts copies the regular files of the folder src into dst, made new, in name order, until maxFiles are
+// copied: a file larger than what is left of maxBytes is skipped, and the copy goes on with the next. A src that is a
+// link, or not a folder, is refused; a link in it is never followed nor copied, and a file that grows while it is read
+// is cut at the size it had. A src that is not there gives an empty dst.
+func copyTranscripts(src, dst string, maxFiles int, maxBytes int64) (transcriptCopy, error) {
+	var c transcriptCopy
 	if err := os.Mkdir(dst, 0o755); err != nil {
-		return 0, 0, err
+		return c, err
 	}
-	entries, err := os.ReadDir(src)
-	if errors.Is(err, fs.ErrNotExist) {
-		return 0, 0, nil
-	} else if err != nil {
-		return 0, 0, err
+	st, err := os.Lstat(src)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return c, nil
+	case err != nil:
+		return c, err
+	case !st.IsDir():
+		return c, fmt.Errorf("%s is %s, not a folder of the run's own", src, describeMode(st.Mode()))
 	}
-	var size int64
-	full := false
+	dir, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return c, fmt.Errorf("%s is not a folder of the run's own: %w", src, err)
+	}
+	entries, err := dir.ReadDir(-1)
+	dir.Close()
+	if err != nil {
+		return c, err
+	}
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
+	left := maxBytes
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
 			continue
 		}
-		total++
-		if full {
+		c.total++
+		if c.copied >= maxFiles {
+			c.leftOut++
 			continue
 		}
 		info, err := e.Info()
 		if err != nil {
-			return copied, total, err
+			return c, err
 		}
-		if copied+1 > maxFiles || size+info.Size() > maxBytes {
-			full = true
+		if info.Size() > left {
+			c.skipped++
 			continue
 		}
 		if err := copyFile(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), info.Size()); err != nil {
-			return copied, total, err
+			return c, err
 		}
-		copied++
-		size += info.Size()
+		c.copied++
+		left -= info.Size()
 	}
-	return copied, total, nil
+	return c, nil
+}
+
+// describeMode names what a path is that should have been a folder.
+func describeMode(m fs.FileMode) string {
+	if m&fs.ModeSymlink != 0 {
+		return "a link"
+	}
+	return "a " + m.Type().String() + " file"
 }
 
 // copyFile copies at most n bytes of the regular file src to dst, a new file. Neither is opened through a link, and

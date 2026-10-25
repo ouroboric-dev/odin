@@ -29,7 +29,7 @@ type Outcome struct {
 	Status run.Status // done, stopped or failed
 	Gate   string     // stopped: the gate node waiting for a decision
 	Err    error      // failed: why
-	Warn   []string   // what the run couldn't clean up, such as a sandbox that wouldn't stop; doctor finds it
+	Warn   []string   // what Odin couldn't do and the operator can, each ending with its next step: a sandbox that wouldn't stop (ygg doctor), a record.json not written (ygg record)
 }
 
 // Advance runs nodes from the run's position until the graph ends, an approval point stops the
@@ -40,28 +40,28 @@ type Outcome struct {
 func Advance(ctx context.Context, r *run.Run) (out Outcome, err error) {
 	// Every sandbox this call started stops when it returns, whatever way it returns. A sandbox that
 	// won't stop stays recorded in run.json, and the next resume or ygg doctor stops it.
+	r.Warn = nil
 	defer func() {
+		out.Warn = append(out.Warn, r.Warn...)
+		r.Warn = nil
 		if derr := r.DownSandboxes(context.WithoutCancel(ctx)); derr != nil {
-			out.Warn = append(out.Warn, derr.Error())
+			out.Warn = append(out.Warn, derr.Error()+"; ygg doctor finds and stops what is left")
 		}
 		if err == nil {
-			out.Warn = append(out.Warn, writeRecord(r)...)
+			if err = r.Save(); err == nil { // the record reads run.json; a save that fails is Odin's own
+				if _, rerr := metrics.WriteRecord(r.Dir); rerr != nil {
+					out.Warn = append(out.Warn, recordWarning(r, rerr))
+				}
+			}
 		}
 	}()
 	return advance(ctx, r)
 }
 
-// writeRecord rebuilds the run's record.json from what the run saved. A record that can't be built does not change
-// how the run ended: it is a warning, and ygg record builds it again.
-func writeRecord(r *run.Run) []string {
-	err := r.Save()
-	if err == nil {
-		_, err = metrics.WriteRecord(r.Dir)
-	}
-	if err != nil {
-		return []string{fmt.Sprintf("record.json could not be written: %v (ygg record %s writes it)", err, r.State.ID)}
-	}
-	return nil
+// recordWarning is the warning of a record.json that could not be built or written. It does not change how the run
+// goes or ended, and ygg record builds it again.
+func recordWarning(r *run.Run, err error) string {
+	return fmt.Sprintf("record.json could not be written: %v; ygg record %s writes it", err, r.State.ID)
 }
 
 func advance(ctx context.Context, r *run.Run) (Outcome, error) {

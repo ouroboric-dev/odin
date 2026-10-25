@@ -439,3 +439,21 @@ func TestANoteIsOneDecision(t *testing.T) {
 		t.Errorf("run.json keeps %+v after a rejection with only a reason; want the design gate's note alone", got)
 	}
 }
+
+// A warning carries its own next step: a record.json that could not be written names ygg record, not ygg doctor.
+func TestAWarningNamesItsOwnNextStep(t *testing.T) {
+	dir, id, runDir := stoppedToy(t)
+	if err := os.RemoveAll(filepath.Join(runDir, "record.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(runDir, "record.json", "keep"), 0o755); err != nil { // no rename replaces it
+		t.Fatal(err)
+	}
+	_, _, errOut := ygg(t, "approve", id, "design-gate", "--project", dir)
+	if !strings.Contains(errOut, "ygg: warning: record.json could not be written") || !strings.Contains(errOut, "ygg record "+id) {
+		t.Errorf("stderr %q does not warn of the record with its next step", errOut)
+	}
+	if strings.Contains(errOut, "ygg doctor") {
+		t.Errorf("stderr %q sends the operator to ygg doctor for a record", errOut)
+	}
+}

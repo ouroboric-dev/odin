@@ -7,9 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ouroboric-dev/gleipnir/sandbox"
+	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
@@ -110,6 +114,10 @@ func TestTheRetroRunsAfterTheGradeAndSeesTotalsOnly(t *testing.T) {
 	if err := metrics.WriteJudgements(g.r.Dir, []schema.Judgement{judged}); err != nil {
 		t.Fatal(err)
 	}
+	// ygg score logs the score as a judged line too (cli/score.go).
+	if err := g.r.Log(gungnir.Event{Name: gungnir.EventJudged, Result: strconv.Itoa(judged.Score), Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
 	g.grader.Results = tasktest.Results(map[string]string{"a thing is private": "failed"})
 	if out := g.advance(t); out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v", out)
@@ -177,8 +185,14 @@ func TestTheRetroRunsAfterTheGradeAndSeesTotalsOnly(t *testing.T) {
 	if !strings.Contains(led, `"event":"grade_finished"`) || !strings.Contains(led, `"ygg.grade.fail_to_pass":"2/3"`) || !strings.Contains(led, `"event":"grade_refused"`) {
 		t.Errorf("the ledger's copy lacks the grade's totals:\n%s", led)
 	}
-	if strings.Count(led, "\n") != strings.Count(text[:started], "\n") {
-		t.Errorf("the ledger's copy has %d lines, want the %d written before the retro started", strings.Count(led, "\n"), strings.Count(text[:started], "\n"))
+	if !strings.Contains(text, `"event":"judged"`) {
+		t.Fatalf("the run's ledger has no judged line, so this test proves nothing:\n%s", text)
+	}
+	if strings.Contains(led, `"event":"judged"`) {
+		t.Errorf("the ledger's copy holds the operator's judgement:\n%s", led)
+	}
+	if want := strings.Count(text[:started], "\n") - 1; strings.Count(led, "\n") != want {
+		t.Errorf("the ledger's copy has %d lines, want the %d written before the retro started, but the judged one", strings.Count(led, "\n"), want)
 	}
 	prompt := seen["the prompt"]
 	for _, want := range []string{"transcripts/", "ledger.jsonl"} {
@@ -279,8 +293,8 @@ func TestTheTranscriptsCopyStopsAtTheBound(t *testing.T) {
 		t.Errorf("the bounds are %d files and %d bytes, want 2000 and 64 MiB", maxRetroTranscripts, maxRetroTranscriptBytes)
 	}
 	src := t.TempDir()
-	for _, name := range []string{"a-1.json", "b-1.json", "c-1.json", "d-1.json", "e-1.json"} {
-		if err := os.WriteFile(filepath.Join(src, name), []byte("0123456789"), 0o644); err != nil {
+	for name, size := range map[string]int{"a-1.json": 10, "b-1.json": 10, "c-1.json": 30, "d-1.json": 10, "e-1.json": 10} {
+		if err := os.WriteFile(filepath.Join(src, name), []byte(strings.Repeat("x", size)), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -293,40 +307,83 @@ func TestTheTranscriptsCopyStopsAtTheBound(t *testing.T) {
 		files int
 		bytes int64
 		want  []string
+		count transcriptCopy
 	}{
-		"files": {3, 1 << 20, []string{"a-1.json", "b-1.json", "c-1.json"}},
-		"bytes": {100, 25, []string{"a-1.json", "b-1.json"}},
-		"all":   {100, 1 << 20, []string{"a-1.json", "b-1.json", "c-1.json", "d-1.json", "e-1.json"}},
+		// The count runs out after three files: the other two are left out.
+		"files": {3, 1 << 20, []string{"a-1.json", "b-1.json", "c-1.json"}, transcriptCopy{copied: 3, leftOut: 2, total: 5}},
+		// c is larger than the 15 bytes left and is skipped; d still fits, and then e does not.
+		"bytes": {100, 35, []string{"a-1.json", "b-1.json", "d-1.json"}, transcriptCopy{copied: 3, skipped: 2, total: 5}},
+		"all":   {100, 1 << 20, []string{"a-1.json", "b-1.json", "c-1.json", "d-1.json", "e-1.json"}, transcriptCopy{copied: 5, total: 5}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dst := filepath.Join(t.TempDir(), "transcripts")
-			copied, total, err := copyTranscripts(src, dst, c.files, c.bytes)
+			got, err := copyTranscripts(src, dst, c.files, c.bytes)
 			if err != nil {
 				t.Fatal(err)
 			}
 			entries, _ := os.ReadDir(dst)
-			var got []string
+			var names []string
 			for _, e := range entries {
-				got = append(got, e.Name())
+				names = append(names, e.Name())
 			}
-			if copied != len(c.want) || total != 5 || !reflect.DeepEqual(got, c.want) {
-				t.Errorf("copied %d of %d: %v; want %v of 5", copied, total, got, c.want)
+			if got != c.count || !reflect.DeepEqual(names, c.want) {
+				t.Errorf("copied %+v: %v; want %+v: %v", got, names, c.count, c.want)
 			}
 		})
 	}
 	// A run with no transcripts gives an empty folder.
 	dst := filepath.Join(t.TempDir(), "transcripts")
-	if copied, total, err := copyTranscripts(filepath.Join(src, "none"), dst, 10, 100); err != nil || copied != 0 || total != 0 {
-		t.Errorf("copyTranscripts(no folder) = %d, %d, %v", copied, total, err)
+	if got, err := copyTranscripts(filepath.Join(src, "none"), dst, 10, 100); err != nil || got != (transcriptCopy{}) {
+		t.Errorf("copyTranscripts(no folder) = %+v, %v", got, err)
 	}
 	if st, err := os.Stat(dst); err != nil || !st.IsDir() {
 		t.Errorf("no transcripts/ folder: %v", err)
 	}
-	// The prompt says when the copy is a part.
-	if note := retroNote(3, 5); !strings.Contains(note, "3 of the run's 5 transcript files") || !strings.Contains(note, "2000 files or 64 MiB") {
-		t.Errorf("retroNote(3, 5) = %q", note)
+	// A transcripts folder that is a link is never followed: the copy is refused, and says why.
+	link := filepath.Join(t.TempDir(), "transcripts")
+	if err := os.Symlink(src, link); err != nil {
+		t.Fatal(err)
 	}
-	if note := retroNote(5, 5); !strings.Contains(note, "all 5 of the run's transcript files") || strings.Contains(note, "the copy stops") {
-		t.Errorf("retroNote(5, 5) = %q", note)
+	dst = filepath.Join(t.TempDir(), "transcripts")
+	if got, err := copyTranscripts(link, dst, 10, 1<<20); err == nil || !strings.Contains(err.Error(), "is a link, not a folder of the run's own") || got.copied != 0 {
+		t.Errorf("copyTranscripts(a link) = %+v, %v; want it refused", got, err)
+	}
+	if entries, _ := os.ReadDir(dst); len(entries) != 0 {
+		t.Errorf("a linked folder's files were copied: %v", entries)
+	}
+	// The prompt says when the copy is a part, and how much of it was skipped or left out.
+	if note := retroNote(transcriptCopy{copied: 3, skipped: 1, leftOut: 1, total: 5}); !strings.Contains(note, "3 of the run's 5 transcript files") ||
+		!strings.Contains(note, "1 skipped") || !strings.Contains(note, "1 left out") || !strings.Contains(note, "2000 files and 64 MiB") {
+		t.Errorf("retroNote(3 of 5) = %q", note)
+	}
+	if note := retroNote(transcriptCopy{copied: 5, total: 5}); !strings.Contains(note, "all 5 of the run's transcript files") || strings.Contains(note, "skipped") {
+		t.Errorf("retroNote(5 of 5) = %q", note)
+	}
+}
+
+// A judgements.json that can't be read, or a record.json that can't be written, does not stop the retrospective:
+// its view of the record stands without them, and the operator is warned.
+func TestTheRetroRunsWhenTheFullRecordCannotBeWritten(t *testing.T) {
+	g := startRetro(t, retroScript, tasktest.Results(nil))
+	g.grader.Before = func(sandbox.GradeSpec) {
+		// The judgement breaks its contract (a score of 11), and record.json is a folder no rename replaces.
+		bad := `[{"run": "` + g.r.State.ID + `", "score": 11, "well": "the operator liked it", "wrong": "x", "time": "2026-10-25T10:00:00Z"}]`
+		os.WriteFile(filepath.Join(g.r.Dir, metrics.JudgementsFile), []byte(bad), 0o644)
+		os.RemoveAll(filepath.Join(g.r.Dir, metrics.RecordFile))
+		os.MkdirAll(filepath.Join(g.r.Dir, metrics.RecordFile, "keep"), 0o755)
+	}
+	out := g.advance(t)
+	if out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, want the retro to run", out)
+	}
+	if _, ok := g.r.State.Outputs["retro"]; !ok {
+		t.Error("the retro kept no output")
+	}
+	warned := strings.Join(out.Warn, "\n")
+	if !strings.Contains(warned, "record.json could not be written") || !strings.Contains(warned, "ygg record "+g.r.State.ID) {
+		t.Errorf("Warn = %q; want the record's warning with its next step", out.Warn)
+	}
+	if strings.Contains(promptOf(t, g.r, "retro-1"), "the operator liked it") || strings.Contains(recordSection(t, g.r), "judgements") {
+		t.Errorf("the retro saw the judgements:\n%s", recordSection(t, g.r))
 	}
 }

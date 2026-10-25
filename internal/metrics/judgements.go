@@ -53,12 +53,15 @@ func WriteJudgements(dir string, js []schema.Judgement) error {
 	return writeAtomic(dir, JudgementsFile, append(b, '\n'))
 }
 
+// judgementsLeftOut starts the warning of a judgements.json that can't be read; the retrospective's view leaves it out.
+const judgementsLeftOut = "the judgements are left out: "
+
 // judgements fills the record with the operator's judgements. A file that can't be read is a warning: the numbers
 // stand without it.
 func (r *Run) judgements(dir string) {
 	js, err := ReadJudgements(dir)
 	if err != nil {
-		r.Warnings = append(r.Warnings, fmt.Sprintf("the judgements are left out: %v", err))
+		r.Warnings = append(r.Warnings, fmt.Sprintf("%s%v", judgementsLeftOut, err))
 		return
 	}
 	r.Judgements = js

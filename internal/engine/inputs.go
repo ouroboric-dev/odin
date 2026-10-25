@@ -87,16 +87,21 @@ func inputBody(r *run.Run, n schema.Node, who, name string, extra map[string]str
 	return renderContract(c, v)
 }
 
-// recordBody is the section of the record input. Odin writes the run's record.json first (ruling R54), as ygg record
-// builds it, and renders the view of it that the retrospective has (metrics.Run.Objective): no judgement, no answer
-// of its own, and the hidden suite's score as its totals only. Only a node after the grade may declare the input.
+// recordBody is the section of the record input: the view of the run's record that the retrospective has
+// (metrics.Run.Objective), with no judgement, no answer of its own, and the hidden suite's score as its totals only.
+// Odin writes the whole record to record.json first (ruling R54), as far as it can: a record that does not validate
+// or can't be written is a warning for the operator, and the view stands without it. Only a node after the grade may
+// declare the input.
 func recordBody(r *run.Run, who string) (string, error) {
 	if err := r.Save(); err != nil { // the record reads run.json, which must hold the ledger's last line
 		return "", err
 	}
-	rec, err := metrics.Rebuild(r.Dir)
+	rec, err := metrics.Collect(r.Dir)
 	if err != nil {
 		return "", &nodeFailure{fmt.Errorf("node %s needs %s: %w", who, schema.SourceRecord, err)}
+	}
+	if _, err := metrics.Write(r.Dir, rec); err != nil {
+		r.Warn = append(r.Warn, recordWarning(r, err))
 	}
 	b, err := metrics.Encode(rec.Objective())
 	if err != nil {

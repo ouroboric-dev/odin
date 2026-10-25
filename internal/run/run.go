@@ -683,6 +683,7 @@ type Run struct {
 	changes  []gungnir.Event // a mode or config switch Open found, not yet in the ledger
 	Saved    []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
 	SetAside []string        // the notes of Saved from the set-aside of a session whose spend the journal couldn't take, for its gate (review I4)
+	Warn     []string        // what this process could not do and the operator can, each with its next step; the engine's Advance hands them on
 	Sandbox  gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
 	Grader   Grader          // runs the hidden suite; nil unless the config has a grader and a sandbox section
 	Releaser Releaser        // builds the releases of the export; nil adds none
