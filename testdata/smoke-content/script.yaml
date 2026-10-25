@@ -1,132 +1,66 @@
 # The scripted agents' answers for the content smoke run (v0-H15): a one-feature brief (the gallery's
 # version) built in two leaves, with real code and real tests, so that every rung of the realms' check ladders
-# and the acceptance run have something real to judge. The planners write the documents the prompts ask
-# for; the implementers write what a real implementer would, with the commands a real one would run.
+# and the acceptance run have something real to judge. Every stage answers with its typed contract (change
+# typed-boundaries): the planners' documents, the reviews and the implementers' summaries are each session's whole
+# final answer, which Odin validates, keeps and publishes; the implementers also write what a real implementer
+# would, with the commands a real one would run. The run is given brief.md (ygg-smoke-realms.sh --brief).
 steps:
   design:
-    - actions:
-        - write:
-            path: out/1-product/design/2026-10-17-version.md
-            content: |
-              ---
-              title: Gallery version design
-              status: draft
-              date: 2026-10-17
-              related: []
-              ---
-              # Gallery version design
-
-              ## Summary
-
-              The gallery tells anyone who asks which version is running, and its web page shows it.
-      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
+    - result:
+        status: ok
+        summary: wrote the design
+        usage: { in: 1000, out: 100, turns: 2 }
+        output: |
+          {"title": "Gallery version", "slug": "version",
+           "summary": "The gallery tells anyone who asks which version is running, and its web page shows it.",
+           "goals": "A person or a program can ask the server its version; the home page shows it.",
+           "non_goals": "No login, no galleries, no other pages.",
+           "success_criteria": "GET /version answers the version, and the home page shows API version: 0.1.0.",
+           "context": "The gallery has an API and a web app; the web app already shows whether the API is up.",
+           "product_at_user_level": "A person opens the home page and reads the version of the API below the health line.",
+           "decisions": [], "open_questions": []}
   spec:
-    - actions:
-        - write:
-            path: out/2-engineering/specs/2026-10-17-version.md
-            content: |
-              ---
-              title: Gallery version spec
-              status: draft
-              date: 2026-10-17
-              related: [../../1-product/design/2026-10-17-version.md]
-              ---
-              # Gallery version spec
-
-              ## Summary
-
-              `GET /version` answers `{"version": "0.1.0"}`; the home page shows `API version: 0.1.0`.
-
-              ## Deviations from the design doc
-
-              None.
-        - write:
-            path: out/leaves.yaml
-            content: |
-              runtime:
-                realm: niflheim-local
-                realm_version: 0.1.0
-              leaves:
-                repos/api:
-                  realm: helheim-go
-                  realm_version: 0.1.0
-                  description: The gallery's API.
-                repos/web:
-                  realm: midgard-react
-                  realm_version: 0.1.0
-                  description: The gallery's web app.
-                  consumes: [repos/api]
-      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
+    - result:
+        status: ok
+        summary: wrote the spec and named the leaves
+        usage: { in: 1000, out: 100, turns: 2 }
+        output: |
+          {"title": "Gallery version", "slug": "version",
+           "summary": "GET /version answers {\"version\": \"0.1.0\"}; the home page shows API version: 0.1.0.",
+           "architecture": "repos/api serves /version; repos/web reads it through its generated API client.",
+           "interfaces": "GET /version answers 200 with {\"version\": string}; any other method answers 405.",
+           "data_model": "None: the version is a constant of the API.",
+           "acceptance_criteria": "GET /version answers 200 with the JSON {\"version\": \"0.1.0\"}; the home page shows API version: 0.1.0 below the health line.",
+           "security": "The route reads nothing and needs no login.",
+           "testing": "A Go test of the handler, a component test of the badge, and the end-to-end smoke test.",
+           "decisions": [], "deviations": [],
+           "leaves": {"runtime": {"realm": "niflheim-local", "realm_version": "0.1.0"},
+                      "leaves": {"repos/api": {"realm": "helheim-go", "realm_version": "0.1.0", "description": "The gallery's API."},
+                                 "repos/web": {"realm": "midgard-react", "realm_version": "0.1.0", "description": "The gallery's web app.", "consumes": ["repos/api"]}}}}
   conformance:
-    - actions: [ { write: { path: out/conformance.json, content: '{"deviation": false}' } } ]
-      result: { status: ok, summary: the spec stays inside the design, usage: { in: 500, out: 50, turns: 1 }, output: '{"deviation": false}' }
+    - result: { status: ok, summary: the spec stays inside the design, usage: { in: 500, out: 50, turns: 1 }, output: '{"deviation": false}' }
   plan:
-    - actions:
-        - write:
-            path: out/2-engineering/plans/2026-10-17-version/plan.md
-            content: |
-              ---
-              title: Gallery version plan
-              status: draft
-              date: 2026-10-17
-              related: [../../specs/2026-10-17-version.md]
-              ---
-              # Gallery version plan
-
-              ## Order
-
-              | Task | Leaf | Size | Depends on |
-              |---|---|---|---|
-              | version-T1 | repos/api | S | nothing |
-              | version-T2 | repos/web | S | version-T1 |
-        - write:
-            path: out/2-engineering/plans/2026-10-17-version/tasks.md
-            content: |
-              ---
-              title: Gallery version tasks
-              status: draft
-              date: 2026-10-17
-              related: [plan.md]
-              ---
-              # Tasks
-
-              ## version-T1: the API says its version
-
-              - **Acceptance criteria:**
-                - [ ] `GET /version` answers 200 with the JSON `{"version": "0.1.0"}`
-                - [ ] any other method on `/version` answers 405
-                - [ ] `openapi.yaml` describes `/version`
-              - **Named test:** internal/httpapi/version_test.go TestVersionIsServed
-              - **Layer:** repos/api
-              - **Size:** S
-              - **Depends on:** nothing
-
-              ## version-T2: the home page shows the version
-
-              - **Acceptance criteria:**
-                - [ ] the home page shows `API version: 0.1.0` below the health line
-                - [ ] the web app's copy of the contract has `/version`, exactly as the API describes it
-              - **Named test:** src/version.test.tsx
-              - **Layer:** repos/web
-              - **Size:** S
-              - **Depends on:** version-T1
-      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 }, output: '{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}' }
+    - result:
+        status: ok
+        summary: wrote the plan
+        usage: { in: 1000, out: 100, turns: 2 }
+        output: |
+          {"title": "Gallery version", "slug": "version", "goal": "The API says its version and the home page shows it.",
+           "decisions": [], "risks": [],
+           "tasks": [
+            {"id": "version-T001", "title": "The API says its version",
+             "criteria": ["GET /version answers 200 with the JSON {\"version\": \"0.1.0\"}.", "Any other method on /version answers 405.", "openapi.yaml describes /version."],
+             "named_test": "internal/httpapi/version_test.go TestVersionIsServed", "layer": "repos/api", "size": "S", "depends_on": [],
+             "text": "Add the route GET /version to the API. It answers 200 with the JSON {\"version\": \"0.1.0\"}; any other method answers 405. Describe it in openapi.yaml.",
+             "contract": "openapi: 3.1.0\ninfo: { title: Gallery API, version: 0.1.0 }\npaths:\n  /version:\n    get:\n      operationId: getVersion\n      responses:\n        \"200\":\n          description: The server's version.\n"},
+            {"id": "version-T002", "title": "The home page shows the version",
+             "criteria": ["The home page shows API version: 0.1.0 below the health line.", "The web app's copy of the contract has /version, exactly as the API describes it."],
+             "named_test": "src/version.test.tsx", "layer": "repos/web", "size": "S", "depends_on": ["version-T001"],
+             "text": "Show the line API version: 0.1.0 on the home page, below the health line, read from GET /version. Copy /version into contracts/api.openapi.yaml as the API describes it.",
+             "contract": "openapi: 3.1.0\ninfo: { title: Gallery API, version: 0.1.0 }\npaths:\n  /version:\n    get:\n      operationId: getVersion\n      responses:\n        \"200\":\n          description: The server's version.\n"}]}
   reuse-review:
-    - actions:
-        - write:
-            path: out/2-engineering/reviews/2026-10-17-version-reuse-review.md
-            content: |
-              ---
-              title: Gallery version reuse review
-              status: draft
-              date: 2026-10-17
-              related: [../plans/2026-10-17-version/plan.md]
-              ---
-              ## Verdict
-
-              Nothing to remove.
-      result: { status: ok, summary: nothing to remove, usage: { in: 500, out: 50, turns: 1 }, output: '{"summary": "done"}' }
-  version-t1-implement:
+    - result: { status: ok, summary: nothing to remove, usage: { in: 500, out: 50, turns: 1 }, output: '{"verdict": "Nothing to remove.", "items": []}' }
+  version-t001-implement:
     - actions:
         - write:
             path: internal/httpapi/version_test.go
@@ -202,7 +136,7 @@ steps:
                                     example: "0.1.0"
                 EOF
       result: { status: ok, summary: the API serves its version, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
-  version-t2-implement:
+  version-t002-implement:
     - actions:
         - write:
             path: src/version.test.tsx
@@ -296,15 +230,15 @@ steps:
                 });
                 EOF
       result: { status: ok, summary: the home page shows the version, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
-  version-t1-implement-spec-compliance:
-    - result: { status: ok, report: [] }
-  version-t1-implement-simplicity:
-    - result: { status: ok, report: [] }
-  version-t1-implement-quality:
-    - result: { status: ok, report: [] }
-  version-t2-implement-spec-compliance:
-    - result: { status: ok, report: [] }
-  version-t2-implement-simplicity:
-    - result: { status: ok, report: [] }
-  version-t2-implement-quality:
-    - result: { status: ok, report: [] }
+  version-t001-implement-spec-compliance:
+    - result: { status: ok, output: '{"findings": []}' }
+  version-t001-implement-simplicity:
+    - result: { status: ok, output: '{"findings": []}' }
+  version-t001-implement-quality:
+    - result: { status: ok, output: '{"findings": []}' }
+  version-t002-implement-spec-compliance:
+    - result: { status: ok, output: '{"findings": []}' }
+  version-t002-implement-simplicity:
+    - result: { status: ok, output: '{"findings": []}' }
+  version-t002-implement-quality:
+    - result: { status: ok, output: '{"findings": []}' }
