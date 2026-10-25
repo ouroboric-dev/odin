@@ -98,9 +98,10 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   ends its attempt before any check or reviewer, and the loop escalates as `implementer-blocked` with the
   reason; a reviewer that answers `blocked` twice in a row escalates as `reviewer-blocked`. Each reason has its
   own words in the gate file. A rejection gives the loop its attempts again, with the reason as the implementer's
-  `rejection`; for a blocked reviewer, the reason is that reviewer's `rejection`, and the checks and the reviewer
-  run again on the same work. A loop and each of its reviewers must declare `rejection`. An approval accepts the
-  work as it is. A reviewer whose answer can't be used twice (`reviewer-unreadable`) takes a rejection only.
+  `rejection`; for a blocked reviewer or one whose answer can't be used twice (`reviewer-unreadable`), the reason is
+  that reviewer's `rejection`, and the checks and the reviewer run again on the same work. A loop and each of its
+  reviewers must declare `rejection`. An approval accepts the work as it is; `reviewer-unreadable` takes a rejection
+  only.
 - Puts the task's diff in every task reviewer's prompt (change review-diff). A read-only reviewer has no shell, so
   it cannot run `git diff`. Odin records the leaf's commit in the loop's record (`LoopRecord.Base`) when the loop
   starts, keeps it across resumes (a state without it records the leaf's commit when the loop next runs), and

@@ -157,7 +157,7 @@ type CheckView struct {
 }
 
 // Escalation is why a loop gave up (spec §7.3): see the Reason constants of Jormungandr. Reviewer is the reviewer
-// that was blocked, for reviewer-blocked: a person's rejection answers it (ruling R52).
+// that could not answer, for reviewer-blocked and reviewer-unreadable: a person's rejection answers it (ruling R52).
 type Escalation struct {
 	Reason   string `json:"reason"`
 	Detail   string `json:"detail"`

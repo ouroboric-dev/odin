@@ -27,12 +27,24 @@ func TestTheContentSmokeFilesLoad(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &sc); err != nil {
 		t.Fatal(err)
 	}
+	// The sessions the software graph runs for the script's plan, each with its contract: every one has a scripted
+	// answer, and the script answers for no other.
+	plan, err := schema.Decode[schema.Plan](schema.ContractPlan, []byte(smokeContentOutput(t, sc, "plan")))
+	if err != nil {
+		t.Fatalf("the plan: %v", err)
+	}
+	sessions := smokeContentSessions(plan)
+	for key := range sessions {
+		if len(sc.Steps[key]) == 0 {
+			t.Errorf("script.yaml has no answer for the session %s", key)
+		}
+	}
 	// Every scripted session answers with a document of the contract its node declares in the software graph
 	// (change typed-boundaries): the whole final answer, which Odin validates as the real run would.
 	for key, steps := range sc.Steps {
-		c := smokeContentContract(key)
-		if c == "" {
-			t.Errorf("script.yaml answers for %s, which is no session of the software graph", key)
+		c, ok := sessions[key]
+		if !ok {
+			t.Errorf("script.yaml answers for %s, which is no session of the software graph for this plan", key)
 			continue
 		}
 		for i, st := range steps {
@@ -59,22 +71,12 @@ func TestTheContentSmokeFilesLoad(t *testing.T) {
 			t.Errorf("the spec's leaf %s is %+v, want %s 0.1.0", leaf, l, realm)
 		}
 	}
-	plan, err := schema.Decode[schema.Plan](schema.ContractPlan, []byte(smokeContentOutput(t, sc, "plan")))
-	if err != nil {
-		t.Fatalf("the plan: %v", err)
-	}
 	if err := schema.CheckReady(schema.FeaturesFromPlan(plan), []string{"repos/api", "repos/web"}); err != nil {
 		t.Errorf("the plan is not ready: %v", err)
 	}
 	for _, task := range plan.Tasks {
 		if task.Text == "" || task.Contract == "" {
 			t.Errorf("task %s has no text or no contract", task.ID)
-		}
-		key := strings.ToLower(task.ID) + "-implement"
-		for _, s := range []string{key, key + "-spec-compliance", key + "-simplicity", key + "-quality"} {
-			if len(sc.Steps[s]) == 0 {
-				t.Errorf("script.yaml has no answer for the session %s of task %s", s, task.ID)
-			}
 		}
 	}
 	brief, err := os.ReadFile(filepath.Join(dir, "brief.md"))
@@ -95,23 +97,22 @@ func TestTheContentSmokeFilesLoad(t *testing.T) {
 	}
 }
 
-// smokeContentContract is the contract of the session key in the software graph of Voluspa: its stages by node id,
-// and a task's implementer and the loop's three reviewers by their keys (<task>-implement[-<reviewer>]).
-func smokeContentContract(key string) schema.Contract {
-	stages := map[string]schema.Contract{"design": schema.ContractDesign, "spec": schema.ContractSpec, "conformance": schema.ContractConformance,
+// smokeContentSessions are the sessions the software graph of Voluspa runs for plan, by key, each with the contract
+// its node declares: the five stages by node id, and for each task its implementer (<task>-implement) and the loop's
+// three reviewers (<task>-implement-<reviewer>). It mirrors voluspa's software/graph.yaml by hand, so that this test
+// needs nothing beside odin; a drift from the graph fails the real content smoke run and the real-realms test in the
+// umbrella (TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents), which run the graph itself.
+func smokeContentSessions(plan schema.Plan) map[string]schema.Contract {
+	sessions := map[string]schema.Contract{"design": schema.ContractDesign, "spec": schema.ContractSpec, "conformance": schema.ContractConformance,
 		"plan": schema.ContractPlan, "reuse-review": schema.ContractReuseReview}
-	if c, ok := stages[key]; ok {
-		return c
-	}
-	for _, rv := range []string{"spec-compliance", "simplicity", "quality"} {
-		if strings.HasSuffix(key, "-implement-"+rv) {
-			return schema.ContractReview
+	for _, task := range plan.Tasks {
+		key := strings.ToLower(task.ID) + "-implement"
+		sessions[key] = schema.ContractImplement
+		for _, rv := range []string{"spec-compliance", "simplicity", "quality"} {
+			sessions[key+"-"+rv] = schema.ContractReview
 		}
 	}
-	if strings.HasSuffix(key, "-implement") {
-		return schema.ContractImplement
-	}
-	return ""
+	return sessions
 }
 
 // smokeContentOutput is the output of the first attempt of the session key.

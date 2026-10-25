@@ -295,7 +295,7 @@ func TestARunFromBeforeTypedBoundariesStaysReadable(t *testing.T) {
 		t.Errorf("metrics: exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
 	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
-	if want := "WARN  run " + id + ": started before typed boundaries"; !strings.Contains(out, want) || strings.Contains(out, "ERROR  run "+id) {
+	if want := "WARN  run " + id + ": started before typed boundaries"; !strings.Contains(out, want) || strings.Contains(out, "ERROR run "+id+":") {
 		t.Errorf("doctor: exit %d; want %q and no error for the run:\n%s", code, want, out)
 	}
 	before, _ := os.ReadFile(filepath.Join(runDir, "ledger.jsonl"))

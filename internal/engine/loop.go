@@ -59,8 +59,8 @@ func runLoop(ctx context.Context, r *run.Run, n schema.Node) error {
 	// the rest would go on; a linear graph has no rest, so the run stops here in every mode, and the
 	// ledger says "blocked" for unattended runs (Phase 4, decision 7).
 	rec.Escalation = &run.Escalation{Reason: out.Reason, Detail: out.Detail}
-	if out.Reason == jormungandr.ReasonReviewerBlocked {
-		rec.Escalation.Reviewer = steps.blocked
+	if out.Reason == jormungandr.ReasonReviewerBlocked || out.Reason == jormungandr.ReasonUnreadable {
+		rec.Escalation.Reviewer = steps.asked // the loop asks one reviewer until it answers or the loop escalates
 	}
 	result := "stopped"
 	if s.Mode == gungnir.ModeUnattended {
@@ -85,10 +85,10 @@ func loopConfig(n schema.Node) jormungandr.Config {
 // record in run.json: its state, the leaf's commit when it started (the task's diff, which the reviewers read,
 // starts there), and how its checks last ended (the sessions' check_results).
 type loopSteps struct {
-	r       *run.Run
-	n       schema.Node
-	rec     *run.LoopRecord
-	blocked string // the reviewer whose last answer was blocked: a reviewer-blocked escalation names it
+	r     *run.Run
+	n     schema.Node
+	rec   *run.LoopRecord
+	asked string // the reviewer asked last: a reviewer-blocked or reviewer-unreadable escalation names it
 }
 
 var _ jormungandr.Steps = (*loopSteps)(nil)
@@ -221,6 +221,7 @@ func (l *loopSteps) keepCheck(attempt int, v run.CheckView) {
 // policy-violation.
 func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, open []gungnir.Finding, _ []string) (schema.Review, error) {
 	r, n := l.r, l.n
+	l.asked = reviewer
 	var rv schema.Reviewer
 	for _, c := range n.Reviewers {
 		if c.ID == reviewer {
@@ -262,9 +263,6 @@ func (l *loopSteps) Review(ctx context.Context, attempt int, reviewer string, op
 	}
 	if err != nil {
 		return schema.Review{}, err
-	}
-	if report.Blocked != nil {
-		l.blocked = reviewer
 	}
 	ev.Name, ev.Result = gungnir.EventNodeFinished, res.Summary
 	if err := r.Log(ev); err != nil {

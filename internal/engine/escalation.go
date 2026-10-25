@@ -66,7 +66,7 @@ func stopEscalation(r *run.Run, n schema.Node, e *escalation) (Outcome, error) {
 func decideText(id string, n schema.Node, reason string, esc *run.Escalation) string {
 	reject := fmt.Sprintf("    ygg reject %s %s --reason \"...\" | --decisions <file>\n\n", id, n.ID)
 	approve := fmt.Sprintf("\n    ygg approve %s %s [--note \"...\" | --decisions <file>]\n\n", id, n.ID)
-	again := fmt.Sprintf("The reason goes to the implementer, and the loop gets %d more attempts, with the findings above.\n", n.Attempts)
+	again := fmt.Sprintf("The reason goes to the implementer's next attempt, as its rejection input, and the loop gets %d more attempts, with the findings above.\n", n.Attempts)
 	switch reason {
 	case jormungandr.ReasonDisputed:
 		return reject + again + approve + "The implementer is right: the work goes on as it is, and the reviewer's claim above does not stop it. " +
@@ -75,7 +75,7 @@ func decideText(id string, n schema.Node, reason string, esc *run.Escalation) st
 		return reject + again + approve + "The work goes on as it is. The findings stay open in the ledger: only a check or a reviewer can close one.\n"
 	case jormungandr.ReasonBlocked:
 		return "The implementer answered that it could not do the work, for the reason above; no check or reviewer judged the attempt.\n\n" +
-			reject + "The reason is the answer to what it lacked: it goes to the implementer, and the loop gets " + fmt.Sprint(n.Attempts) +
+			reject + "The reason is the answer to what it lacked: it goes to the implementer's next attempt, and the loop gets " + fmt.Sprint(n.Attempts) +
 			" more attempts.\n" + approve + "The work goes on as the blocked attempt left it, unjudged. The findings stay open in the ledger: " +
 			"only a check or a reviewer can close one.\n"
 	case jormungandr.ReasonReviewerBlocked:
@@ -84,14 +84,16 @@ func decideText(id string, n schema.Node, reason string, esc *run.Escalation) st
 			mdsafe.Line(blockedReviewer(esc)) + ", as its rejection input: it answers what the reviewer lacked.\n" + approve + "The work goes on as it is, without that reviewer's report. The findings stay open " +
 			"in the ledger: only a check or a reviewer can close one.\n"
 	}
-	return reject + "The checks and the reviewer run again on the same work.\n\nApproving is not offered: a reviewer whose answer can't be read has " +
+	return reject + "The checks and the reviewer run again on the same work. The reason goes to the reviewer " + mdsafe.Line(blockedReviewer(esc)) +
+		", as its rejection input.\n\nApproving is not offered: a reviewer whose answer can't be read has " +
 		"not approved anything. Fix the reviewer, its role or its prompt, and then reject, to ask it again.\n"
 }
 
-// blockedReviewer is the reviewer a reviewer-blocked escalation names, or "that was blocked" for a record without one.
+// blockedReviewer is the reviewer a reviewer-blocked or reviewer-unreadable escalation names, or "that could not
+// answer" for a record without one.
 func blockedReviewer(esc *run.Escalation) string {
 	if esc == nil || esc.Reviewer == "" {
-		return "that was blocked"
+		return "that could not answer"
 	}
 	return esc.Reviewer
 }

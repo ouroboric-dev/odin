@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -338,5 +339,57 @@ func TestAFindingCannotForgeASectionOfTheEscalationFile(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "- spec-1 (major, from spec) at build.txt:1\n  wrong\n") {
 		t.Errorf("the gate file lacks the finding:\n%s", b)
+	}
+}
+
+// Ruling R52 (amended): a person's rejection of an unreadable reviewer answers that reviewer too: its re-run's
+// rejection input holds the reason, and the implementer's next attempt does not. The gate file says so.
+func TestARejectionOfAnUnreadableReviewerGoesToThatReviewer(t *testing.T) {
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done v2") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"  build-spec:\n    - result: { status: ok, output: \"LGTM, ship it\" }\n    - result: { status: ok, output: \"Looks fine to me.\" }\n" +
+		"    - result: { status: ok, output: \"Still fine.\" }\n    - result: { status: ok, output: \"Fine.\" }\n" +
+		"    - result: { status: ok, report: [ " + majorFinding + " ] }\n" +
+		"    - result: { status: ok, report: [ " + fixedFinding("build.txt:1 now says what the brief asks; check unit passed") + " ] }\n"
+	r := startReview(t, "key-points", script)
+	if out, _ := Advance(context.Background(), r); out.Status != run.StatusStopped || r.State.Loops["build"].Escalation.Reason != jormungandr.ReasonUnreadable {
+		t.Fatalf("Advance() = %+v; want a stop for an unreadable reviewer", out)
+	}
+	gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "build-1.md"))
+	if want := "The reason goes to the reviewer spec, as its rejection input"; !strings.Contains(string(gate), want) {
+		t.Errorf("the gate file lacks %q:\n%s", want, gate)
+	}
+	const reason = "Answer with a JSON review."
+	if err := Reject(context.Background(), r, "build", Reason(reason)); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v; want done", out, err)
+	}
+	if p := promptOf(t, r, "build-spec-5"); !strings.Contains(p, "## Input: rejection\n\nA person sent the last attempt back at an approval point, and this is why:\n\n"+reason) {
+		t.Errorf("the reviewer's re-run lacks the person's reason:\n%s", p)
+	}
+	if p := promptOf(t, r, "build-2"); strings.Contains(p, reason) {
+		t.Errorf("the implementer's next attempt holds the reason meant for the reviewer:\n%s", p)
+	}
+	if len(r.State.Reasons) != 0 {
+		t.Errorf("reasons after the loop passed = %v; want none", r.State.Reasons)
+	}
+}
+
+// Each escalation's Decide section says who gets a rejection's reason: the reviewer that could not answer, or the
+// implementer's next attempt.
+func TestEachDecideTextSaysWhoGetsTheReason(t *testing.T) {
+	n := schema.Node{ID: "build", Attempts: 3}
+	for reason, want := range map[string]string{
+		jormungandr.ReasonExhausted:       "The reason goes to the implementer's next attempt",
+		jormungandr.ReasonDisputed:        "The reason goes to the implementer's next attempt",
+		jormungandr.ReasonBlocked:         "it goes to the implementer's next attempt",
+		jormungandr.ReasonReviewerBlocked: "The reason goes to the reviewer spec, as its rejection input",
+		jormungandr.ReasonUnreadable:      "The reason goes to the reviewer spec, as its rejection input",
+	} {
+		if got := decideText("r", n, reason, &run.Escalation{Reason: reason, Reviewer: "spec"}); !strings.Contains(got, want) {
+			t.Errorf("%s: the Decide text lacks %q:\n%s", reason, want, got)
+		}
 	}
 }

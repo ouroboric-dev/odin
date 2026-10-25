@@ -431,10 +431,11 @@ func Reject(ctx context.Context, r *run.Run, gateID string, d schema.Decisions) 
 	return r.Save()
 }
 
-// loopRejectionKey is the session a person's rejection of loop n's escalation e goes to: the blocked reviewer's, for
-// reviewer-blocked, as the person answered its block (ruling R52); the implementer's, under the loop's id, otherwise.
+// loopRejectionKey is the session a person's rejection of loop n's escalation e goes to: the reviewer's, for
+// reviewer-blocked and reviewer-unreadable, as the person answered the reviewer that could not answer (ruling R52,
+// amended); the implementer's, under the loop's id, otherwise.
 func loopRejectionKey(n schema.Node, e *run.Escalation) string {
-	if e != nil && e.Reason == jormungandr.ReasonReviewerBlocked && e.Reviewer != "" {
+	if e != nil && (e.Reason == jormungandr.ReasonReviewerBlocked || e.Reason == jormungandr.ReasonUnreadable) && e.Reviewer != "" {
 		return n.SessionKey(schema.Reviewer{ID: e.Reviewer})
 	}
 	return n.ID
