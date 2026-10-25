@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ouroboric-dev/gleipnir/skills"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -92,5 +93,50 @@ func TestARunThatKeptNoPromptHashesSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(r.Warnings, "\n"), "keeps no hash of its prompts") {
 		t.Errorf("warnings = %v", r.Warnings)
+	}
+}
+
+// A run started before run.json kept the hashes, and resumed by a build that keeps them, has the hashes of what it
+// read after the resume only. The record names each prompt of the graph's nodes and each skill with none.
+func TestARunWithPartialHashesNamesWhatHasNone(t *testing.T) {
+	f := setupFake(t)
+	toy, err := filepath.Abs("../../testdata/toy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := os.ReadFile(filepath.Join(toy, "graph.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.State.GraphDir, f.State.GraphSHA256 = toy, sum(graph)
+	f.State.PromptSHA256 = map[string]string{"prompts/design.md": strings.Repeat("1", 64), "prompts/build.md": strings.Repeat("2", 64)}
+	f.State.Skills = skills.Record{Skills: []string{"house-style", "ponytail-review", "tdd"}}
+	r := mustCollect(t, f.done())
+	warned := strings.Join(r.Warnings, "\n")
+	for _, want := range []string{"prompts/plan.md", "prompts/spec.md", "the skill tdd", "partial"} {
+		if !strings.Contains(warned, want) {
+			t.Errorf("warnings %q do not name %q", r.Warnings, want)
+		}
+	}
+	for _, kept := range []string{"prompts/design.md", "prompts/build.md", "house-style", "ponytail-review"} {
+		if strings.Contains(warned, kept) {
+			t.Errorf("warnings %q name %s, which has its hash", r.Warnings, kept)
+		}
+	}
+
+	// Every prompt and skill has its hash: no warning.
+	f.State.PromptSHA256["prompts/plan.md"], f.State.PromptSHA256["prompts/spec.md"] = strings.Repeat("3", 64), strings.Repeat("4", 64)
+	f.State.SkillSHA256["tdd"] = strings.Repeat("5", 64)
+	if r := mustCollect(t, f.done()); len(r.Warnings) != 0 {
+		t.Errorf("warnings = %v; want none, every hash is kept", r.Warnings)
+	}
+
+	// A graph.yaml that is not the one the run read cannot say what its prompts were: only the skills are named.
+	delete(f.State.PromptSHA256, "prompts/plan.md")
+	delete(f.State.SkillSHA256, "tdd")
+	f.State.GraphSHA256 = strings.Repeat("0", 64)
+	warned = strings.Join(mustCollect(t, f.done()).Warnings, "\n")
+	if strings.Contains(warned, "prompts/plan.md") || !strings.Contains(warned, "the skill tdd") {
+		t.Errorf("warnings %q; want the skill named and no prompt of a graph that changed", warned)
 	}
 }

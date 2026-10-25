@@ -37,9 +37,13 @@ type record struct {
 	Factory         string            `json:"factory"`
 	GraphDir        string            `json:"graph_dir"`
 	GraphPackSHA256 string            `json:"graph_pack_sha256"`
+	GraphSHA256     string            `json:"graph_sha256"`
 	ConfigPath      string            `json:"config_path"`
 	PromptSHA256    map[string]string `json:"prompt_sha256"`
 	SkillSHA256     map[string]string `json:"skill_sha256"`
+	Skills          struct {
+		Skills []string `json:"skills"`
+	} `json:"skills"`
 
 	// What the tasks' sizes and the harness read.
 	Root        string `json:"root"`

@@ -58,6 +58,8 @@ size, attempts, findings by source and severity, and the lines it added (written
 `git diff --numstat` in its leaf), and the harness's health: the outputs refused and
 repaired by role and model, every `blocked` answer and note from the kept outputs, and the design's open questions that
 no person answered. It is rebuilt from the ledger, `run.json` and the kept files, so it can be written again at any time.
+A run that another ygg process is advancing has its record printed instead, and not written: that process writes
+`record.json` when it stops.
 Odin writes it too whenever a run ends (done, failed or stopped) and before a retrospective runs, and it holds the
 retrospective's answer (`ygg.retro/v1`) once that node has given one.
 
@@ -66,7 +68,10 @@ of one task of its plan (`ygg.judgement/v1`): a score from 0 to 10, and 1 to 163
 what went wrong. Give it at any time, a run that stopped included. A new judgement replaces the last one of the same run
 or task in `judgements.json`; the ledger keeps each as a `judged` line (`ygg.result` is the score, `ygg.task.id` the
 task); `record.json` is rebuilt with the judgements. A task the plan does not have is refused, and so is a run that
-another ygg process is advancing, because that process owns the ledger.
+another ygg process is advancing, because that process owns the ledger. A judgement the ledger took but
+`judgements.json` could not is exit 1, and says so: scoring again would log it twice. The score of a run started
+before typed boundaries changes nothing in its `run.json` but the ledger's anchor, so it stays a run `ygg resume`
+refuses.
 
 `ygg metrics --compare <runA> <runB>` prints what differed between two runs of one project (the factory build, the
 config hash, the agent and model of each role, the realm versions, the mode, the graph) and the deltas, B minus A.

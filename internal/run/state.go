@@ -218,6 +218,11 @@ func (s *State) Save(dir string) error {
 	if err != nil {
 		return err
 	}
+	return writeState(dir, data)
+}
+
+// writeState writes data and a newline as dir/run.json atomically, as Save does.
+func writeState(dir string, data []byte) error {
 	tmp, err := os.CreateTemp(dir, "run.json.tmp-*")
 	if err != nil {
 		return err

@@ -1,8 +1,11 @@
 package metrics
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,5 +38,32 @@ func TestTheRecordHoldsTheJudgementsInTheFile(t *testing.T) {
 	r = mustCollect(t, dir)
 	if len(r.Judgements) != 0 || !strings.Contains(strings.Join(r.Warnings, "\n"), "judgements") {
 		t.Errorf("judgements = %+v, warnings = %v; want none, and a warning", r.Judgements, r.Warnings)
+	}
+}
+
+// Every field of the record is in the retrospective's view or out of it on purpose (Objective): a field added to Run
+// later fails here until it is put in one of the two lists.
+func TestEveryFieldOfTheRecordIsInOrOutOfTheRetrosView(t *testing.T) {
+	in := []string{"ID", "Status", "Mode", "Graph", "GraphVersion", "Factory", "ConfigSHA256", "BriefSHA256", "Roles", "Realms", "Time",
+		"Usage", "ByRole", "Tasks", "Leaves", "BlockedTasks", "Retries",
+		"Warnings", // without the warning about the judgements
+		"Loops", "Review", "Findings", "Interventions",
+		"Grade", // the score's totals only
+		"Routing", "Setup", "Harness"}
+	out := []string{"Retro", "Judgements"}
+	for _, f := range reflect.VisibleFields(reflect.TypeFor[Run]()) {
+		switch {
+		case slices.Contains(in, f.Name) && slices.Contains(out, f.Name):
+			t.Errorf("Run.%s is in both lists", f.Name)
+		case !slices.Contains(in, f.Name) && !slices.Contains(out, f.Name):
+			t.Errorf("Run.%s is in neither list: say whether the retrospective sees it, and make Objective agree", f.Name)
+		}
+	}
+	r := &Run{Retro: json.RawMessage(`{"went_well": []}`), Judgements: []schema.Judgement{{Score: 5}}}
+	o := reflect.ValueOf(*r.Objective())
+	for _, name := range out {
+		if !o.FieldByName(name).IsZero() {
+			t.Errorf("Objective keeps Run.%s", name)
+		}
 	}
 }

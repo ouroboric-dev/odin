@@ -250,27 +250,10 @@ func TestAResumeOfARunLedByARealmExitsTwoWithTheWayOn(t *testing.T) {
 // fixture is that shape, written here by hand: status, report and metrics read it, doctor warns, and resume refuses it
 // with the change's message.
 func TestARunFromBeforeTypedBoundariesStaysReadable(t *testing.T) {
-	dir, config := project(t, "script.yaml", "")
-	if code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t), "--mode", "step-by-step"); code != ExitStopped {
-		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
-	}
-	id := runID(t, dir)
-	runDir := filepath.Join(dir, ".factory", "runs", id)
+	dir, config, id, runDir := preTyped(t)
 	file := filepath.Join(runDir, "run.json")
 	b, err := os.ReadFile(file)
 	if err != nil {
-		t.Fatal(err)
-	}
-	var state map[string]any
-	if err := json.Unmarshal(b, &state); err != nil {
-		t.Fatal(err)
-	}
-	delete(state, "outputs")
-	state["decisions"] = []map[string]string{{"gate": "design-gate", "note": "Guests may download photos."}, {"gate": "design-gate", "note": "No SMS."}}
-	if b, err = json.Marshal(state); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(file, b, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -308,6 +291,86 @@ func TestARunFromBeforeTypedBoundariesStaysReadable(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(file); string(after) != string(b) {
 		t.Error("a read of the run rewrote its run.json")
+	}
+}
+
+// preTyped stops the toy graph at its first gate and gives its run.json the shape of a run started before typed
+// boundaries, written here by hand: each gate's note as {gate, note}, and no outputs (ruling R49).
+func preTyped(t *testing.T) (dir, config, id, runDir string) {
+	t.Helper()
+	dir, config = project(t, "script.yaml", "")
+	if code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", toyRealm(t), "--mode", "step-by-step"); code != ExitStopped {
+		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
+	}
+	id = runID(t, dir)
+	runDir = filepath.Join(dir, ".factory", "runs", id)
+	file := filepath.Join(runDir, "run.json")
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(b, &state); err != nil {
+		t.Fatal(err)
+	}
+	delete(state, "outputs")
+	state["decisions"] = []map[string]string{{"gate": "design-gate", "note": "Guests may download photos."}, {"gate": "design-gate", "note": "No SMS."}}
+	if b, err = json.Marshal(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir, config, id, runDir
+}
+
+// A judgement of a run from before typed boundaries changes nothing in its run.json but the ledger's anchor: the
+// run still reads as one from before typed boundaries, so resume still refuses it and doctor still warns.
+func TestAScoreKeepsARunFromBeforeTypedBoundariesAsItWas(t *testing.T) {
+	dir, config, id, runDir := preTyped(t)
+	file := filepath.Join(runDir, "run.json")
+	before := map[string]json.RawMessage{}
+	if b, err := os.ReadFile(file); err != nil || json.Unmarshal(b, &before) != nil {
+		t.Fatalf("run.json: %v", err)
+	}
+	if code, _, errOut := ygg(t, "score", id, "--project", dir, "--score", "5", "--well", "a", "--wrong", "b"); code != ExitDone {
+		t.Fatalf("score: exit %d, %s", code, errOut)
+	}
+	if n := len(judgedLines(t, runDir)); n != 1 { // the chain verifies against the new anchor
+		t.Errorf("%d judged lines, want 1", n)
+	}
+	after := map[string]json.RawMessage{}
+	if b, err := os.ReadFile(file); err != nil || json.Unmarshal(b, &after) != nil {
+		t.Fatalf("run.json after the score: %v", err)
+	}
+	if _, ok := after["outputs"]; ok {
+		t.Error("the score gave the run outputs: it no longer reads as one from before typed boundaries")
+	}
+	var notes []map[string]string
+	if err := json.Unmarshal(after["decisions"], &notes); err != nil || len(notes) != 2 || notes[0]["note"] != "Guests may download photos." || notes[1]["gate"] != "design-gate" {
+		t.Errorf("decisions = %s (%v); want the old {gate, note} shape", after["decisions"], err)
+	}
+	if string(after["ledger"]) == string(before["ledger"]) {
+		t.Error("the ledger's anchor did not move")
+	}
+	for k, v := range before {
+		var x, y any
+		_ = json.Unmarshal(v, &x)
+		_ = json.Unmarshal(after[k], &y)
+		if k != "ledger" && !reflect.DeepEqual(x, y) {
+			t.Errorf("run.json %s changed: %s, was %s", k, after[k], v)
+		}
+	}
+	if len(after) != len(before) {
+		t.Errorf("run.json has %d fields after the score, %d before", len(after), len(before))
+	}
+	code, out, errOut := ygg(t, "resume", id, "--project", dir)
+	if code != ExitRefused || !strings.Contains(errOut, "run "+id+" was started before typed boundaries; start a new run") {
+		t.Errorf("resume: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	_, out, _ = ygg(t, "doctor", "--project", dir, "--config", config)
+	if want := "WARN  run " + id + ": started before typed boundaries"; !strings.Contains(out, want) {
+		t.Errorf("doctor: want %q:\n%s", want, out)
 	}
 }
 

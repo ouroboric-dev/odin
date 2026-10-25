@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/run"
 )
 
 // RoleSetup is one role's agent, model, CLI version and reasoning.
@@ -101,11 +104,53 @@ func (r *Run) reasoning(state *record) map[string]string {
 
 // fingerprints copies the hashes of the prompts and skills that run.json kept when the run started, from the bytes
 // the run read (ruling R55). The record never reads the files again: they may have changed since. A run from before
-// run.json kept them has none, and the record says so.
+// run.json kept them has none, and the record says so. One that a build keeping them resumed has the hashes of what
+// it read after the resume only, and the record names each prompt and skill with none.
 func (r *Run) fingerprints(state *record, s *Setup) {
 	maps.Copy(s.Prompts, state.PromptSHA256)
 	maps.Copy(s.Skills, state.SkillSHA256)
 	if state.GraphDir != "" && len(state.PromptSHA256) == 0 {
 		r.Warnings = append(r.Warnings, "the record has no prompt or skill hashes: run.json keeps no hash of its prompts, so the run started before ygg kept them")
+		return
 	}
+	var missing []string
+	for _, p := range packPrompts(state) {
+		if state.PromptSHA256[p] == "" {
+			missing = append(missing, "the prompt "+p)
+		}
+	}
+	for _, name := range state.Skills.Skills {
+		if state.SkillSHA256[name] == "" {
+			missing = append(missing, "the skill "+name)
+		}
+	}
+	if len(missing) > 0 {
+		r.Warnings = append(r.Warnings, fmt.Sprintf("the record's prompt and skill hashes are partial: run.json keeps none for %s, so the run started before ygg kept them and only what it read after a resume has one", strings.Join(missing, ", ")))
+	}
+}
+
+// packPrompts are the prompts the run's graph gives its sessions, read from the graph.yaml of its pack only while
+// that file is the one the run read (its sha256 in run.json). A graph that is gone or changed cannot say what they
+// were, and gives none.
+func packPrompts(state *record) []string {
+	if state.GraphDir == "" || state.GraphSHA256 == "" {
+		return nil
+	}
+	p, err := schema.LoadPack(state.GraphDir)
+	if err != nil || p.Graph == "" {
+		return nil
+	}
+	file := filepath.Join(state.GraphDir, p.Graph)
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	if got := sha256.Sum256(data); hex.EncodeToString(got[:]) != state.GraphSHA256 {
+		return nil
+	}
+	g, err := schema.ParseGraph(file, data)
+	if err != nil {
+		return nil
+	}
+	return run.PackPrompts(g)
 }

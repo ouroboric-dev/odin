@@ -20,6 +20,9 @@ import (
 // scoreClock is the clock of ygg score, which a test replaces.
 var scoreClock = time.Now
 
+// writeJudgements writes judgements.json for ygg score; a test replaces it with one that fails.
+var writeJudgements = metrics.WriteJudgements
+
 // score runs ygg score: the operator's judgement of a run, or with --task of one of its tasks, as a score from 0 to
 // 10 and what went well and what went wrong (ygg.judgement/v1). The new judgement replaces the last one of the run
 // or the task in judgements.json, the ledger keeps each as a judged line, and record.json is rebuilt with it. It can
@@ -94,8 +97,10 @@ func (c *command) score(args []string) int {
 	} else {
 		old = append(old, j)
 	}
-	if err := metrics.WriteJudgements(dir, old); err != nil {
-		return c.refuse(err)
+	if err := writeJudgements(dir, old); err != nil {
+		// The ledger holds the judgement already: running score again would log it twice.
+		fmt.Fprintf(c.err, "ygg: the judgement is in the ledger, but judgements.json could not be written: %v\nRunning ygg score again would log it twice.\n", err)
+		return ExitFailed
 	}
 	path, err := metrics.WriteRecord(dir)
 	if err != nil {

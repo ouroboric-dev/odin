@@ -308,9 +308,12 @@ bytes it reads (`prompt_sha256`, `skill_sha256`), so a file changed later does n
 reads the prompts again. A run uses one set of instructions: a session whose prompt or skill no longer hashes as the
 run kept fails its node before it starts ("the prompt X changed during the run …; start a new run"). The lines of a task come from `git diff --numstat` in its
 leaf, from its loop's base to its merge's commit, with nothing checked out; blocked answers and notes come from the
-kept outputs, hash-checked and validated, never from prose. What it cannot read is a warning, not an error.
+kept outputs, hash-checked and validated, never from prose. What it cannot read is a warning, not an error. A run
+started before `run.json` kept the hashes and resumed by a build that keeps them has the hashes of what it read after
+the resume only: the record names each prompt of the graph's nodes and each skill with none.
 The engine writes `record.json` whenever a run ends, done, failed or stopped, and before a node that reads the `record`
-input. A record that cannot be built or written is a warning of the outcome that names `ygg record`, never a failure.
+input. A record that cannot be built or written is a warning of the outcome that names `ygg record`, never a failure,
+and the outcome gives it once at most: the record written at the end stands for any written before.
 
 The retrospective is an ordinary agent node after the grade: a scratch node that declares the input `record` and returns
 `ygg.retro/v1`, with its own role, `retrospective`, in `factory.yaml`. A run that fails before it, the grade included,

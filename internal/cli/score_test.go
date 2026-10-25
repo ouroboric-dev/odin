@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,5 +235,26 @@ func TestAJudgementIsKeptWhenTheRecordCannotBeRebuilt(t *testing.T) {
 	}
 	if n := len(judgedLines(t, runDir)); n != 1 {
 		t.Errorf("%d judged lines after the retry, want 1", n)
+	}
+}
+
+// A judgement the ledger took, whose judgements.json then could not be written, is not refused: the ledger holds it,
+// and the command says so, and that a second score would log it twice.
+func TestAJudgementInTheLedgerOnlyIsAFailureNotARefusal(t *testing.T) {
+	dir, id, runDir := scored(t)
+	was := writeJudgements
+	writeJudgements = func(string, []schema.Judgement) error { return errors.New("disk full") }
+	t.Cleanup(func() { writeJudgements = was })
+	code, _, errOut := ygg(t, "score", id, "--project", dir, "--score", "4", "--well", "a", "--wrong", "b")
+	if code != ExitFailed {
+		t.Errorf("exit %d, want %d: the ledger holds the judgement", code, ExitFailed)
+	}
+	for _, want := range []string{"the judgement is in the ledger", "judgements.json could not be written: disk full", "ygg score again would log it twice"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr %q does not say %q", errOut, want)
+		}
+	}
+	if n := len(judgedLines(t, runDir)); n != 1 {
+		t.Errorf("%d judged lines, want 1", n)
 	}
 }

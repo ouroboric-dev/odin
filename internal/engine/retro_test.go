@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -383,7 +384,30 @@ func TestTheRetroRunsWhenTheFullRecordCannotBeWritten(t *testing.T) {
 	if !strings.Contains(warned, "record.json could not be written") || !strings.Contains(warned, "ygg record "+g.r.State.ID) {
 		t.Errorf("Warn = %q; want the record's warning with its next step", out.Warn)
 	}
+	// The write before the retro and the one at the end both failed: the operator is told once.
+	if n := strings.Count(warned, "record.json could not be written"); n != 1 {
+		t.Errorf("Warn = %q; the record's warning is given %d times, want once", out.Warn, n)
+	}
 	if strings.Contains(promptOf(t, g.r, "retro-1"), "the operator liked it") || strings.Contains(recordSection(t, g.r), "judgements") {
 		t.Errorf("the retro saw the judgements:\n%s", recordSection(t, g.r))
+	}
+}
+
+// The record the end of a run writes stands for any written before it: their warnings go when it is written, and
+// one warning is left when it fails, or when it is not tried because Odin itself failed.
+func TestTheEndOfARunLeavesOneRecordWarningAtMost(t *testing.T) {
+	early := []string{"a sandbox would not stop", recordWarned + "early; ygg record x writes it", recordWarned + "retry; ygg record x writes it"}
+	for name, c := range map[string]struct {
+		tried bool
+		final string
+		want  []string
+	}{
+		"written at the end": {tried: true, want: []string{"a sandbox would not stop"}},
+		"failed at the end":  {tried: true, final: recordWarned + "end; ygg record x writes it", want: []string{"a sandbox would not stop", recordWarned + "end; ygg record x writes it"}},
+		"not tried":          {want: []string{"a sandbox would not stop", recordWarned + "retry; ygg record x writes it"}},
+	} {
+		if got := settleRecordWarnings(slices.Clone(early), c.tried, c.final); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %q, want %q", name, got, c.want)
+		}
 	}
 }

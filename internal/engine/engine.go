@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -47,21 +48,48 @@ func Advance(ctx context.Context, r *run.Run) (out Outcome, err error) {
 		if derr := r.DownSandboxes(context.WithoutCancel(ctx)); derr != nil {
 			out.Warn = append(out.Warn, derr.Error()+"; ygg doctor finds and stops what is left")
 		}
+		tried, final := false, ""
 		if err == nil {
 			if err = r.Save(); err == nil { // the record reads run.json; a save that fails is Odin's own
+				tried = true
 				if _, rerr := metrics.WriteRecord(r.Dir); rerr != nil {
-					out.Warn = append(out.Warn, recordWarning(r, rerr))
+					final = recordWarning(r, rerr)
 				}
 			}
 		}
+		out.Warn = settleRecordWarnings(out.Warn, tried, final)
 	}()
 	return advance(ctx, r)
 }
 
+// recordWarned begins every warning of a record.json not written.
+const recordWarned = "record.json could not be written: "
+
 // recordWarning is the warning of a record.json that could not be built or written. It does not change how the run
 // goes or ended, and ygg record builds it again.
 func recordWarning(r *run.Run, err error) string {
-	return fmt.Sprintf("record.json could not be written: %v; ygg record %s writes it", err, r.State.ID)
+	return fmt.Sprintf(recordWarned+"%v; ygg record %s writes it", err, r.State.ID)
+}
+
+// settleRecordWarnings leaves one record warning at most in warn, at the end of a run: the record written there
+// stands for any written before it (before the retro, and again on its retry). One that the end tried and wrote
+// leaves none; one it tried and could not write leaves its own, final; one it did not try leaves the last given.
+func settleRecordWarnings(warn []string, tried bool, final string) []string {
+	last := ""
+	warn = slices.DeleteFunc(warn, func(w string) bool {
+		if strings.HasPrefix(w, recordWarned) {
+			last = w
+			return true
+		}
+		return false
+	})
+	if tried {
+		last = final
+	}
+	if last != "" {
+		warn = append(warn, last)
+	}
+	return warn
 }
 
 func advance(ctx context.Context, r *run.Run) (Outcome, error) {

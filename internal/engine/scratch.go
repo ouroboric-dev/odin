@@ -275,7 +275,10 @@ func copyTranscripts(src, dst string, maxFiles int, maxBytes int64) (transcriptC
 
 // describeMode names what a path is that should have been a folder.
 func describeMode(m fs.FileMode) string {
-	if m&fs.ModeSymlink != 0 {
+	switch {
+	case m.IsRegular():
+		return "a regular file"
+	case m&fs.ModeSymlink != 0:
 		return "a link"
 	}
 	return "a " + m.Type().String() + " file"

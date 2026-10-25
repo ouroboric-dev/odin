@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/havamal"
@@ -51,28 +52,12 @@ func (s *Setup) readPrompt(realm, file string) ([]byte, error) {
 // it, and every reviewer's) and of every skill the run may load, as the run reads them when it starts.
 func fingerprints(setup *Setup) (prompts, skillHashes map[string]string, err error) {
 	prompts = map[string]string{}
-	add := func(file string) error {
-		if file == "" || prompts[file] != "" {
-			return nil
-		}
+	for _, file := range PackPrompts(setup.Graph) {
 		b, err := setup.readPrompt("", file)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		prompts[file] = sum(b)
-		return nil
-	}
-	for _, n := range setup.Graph.All() {
-		if n.RealmFrom != schema.RealmLeaf {
-			if err := add(n.Prompt); err != nil {
-				return nil, nil, err
-			}
-		}
-		for _, rv := range n.Reviewers {
-			if err := add(rv.Prompt); err != nil {
-				return nil, nil, err
-			}
-		}
 	}
 	skillHashes = map[string]string{}
 	if len(setup.Skills.Skills) > 0 {
@@ -85,6 +70,27 @@ func fingerprints(setup *Setup) (prompts, skillHashes map[string]string, err err
 		}
 	}
 	return prompts, skillHashes, nil
+}
+
+// PackPrompts are the prompts the graph pack gives the sessions of g, by their path in the pack: a node's own, where
+// the pack supplies it, and every reviewer's, each once, in the graph's order. A run keeps the hash of each when it
+// starts.
+func PackPrompts(g *schema.Graph) []string {
+	var out []string
+	add := func(file string) {
+		if file != "" && !slices.Contains(out, file) {
+			out = append(out, file)
+		}
+	}
+	for _, n := range g.All() {
+		if n.RealmFrom != schema.RealmLeaf {
+			add(n.Prompt)
+		}
+		for _, rv := range n.Reviewers {
+			add(rv.Prompt)
+		}
+	}
+	return out
 }
 
 // ChangedError is a prompt or a skill whose bytes are not the ones the run kept the hash of (ruling R56): a run uses

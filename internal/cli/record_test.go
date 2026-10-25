@@ -72,6 +72,40 @@ func TestRecordJSONValidates(t *testing.T) {
 	}
 }
 
+// A run that another ygg process is advancing gets its record printed, not written: that process writes record.json
+// when it stops, and a write here could land between its rebuild and its rename.
+func TestTheRecordOfARunInUseIsPrintedNotWritten(t *testing.T) {
+	dir, config := project(t, "script.yaml", "mode: key-points\n")
+	id, _ := walk(t, dir, config)
+	runDir := run.Dir(dir, id)
+	path := filepath.Join(runDir, "record.json")
+	written, err := os.ReadFile(path) // the record the run wrote when it ended
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := run.Lock(runDir) // a ygg process is advancing the run
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := ygg(t, "record", id, "--project", dir)
+	if code != ExitDone || !strings.Contains(errOut, "run "+id+" is in use; its record.json is written when it stops") {
+		t.Errorf("exit %d, stderr %q; want 0 and that the run is in use", code, errOut)
+	}
+	if out != string(written) {
+		t.Errorf("stdout is not the run's record:\n%s", out)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("record.json was written while the run was in use: %v", err)
+	}
+	unlock()
+	if code, out, errOut := ygg(t, "record", id, "--project", dir); code != ExitDone || out != path+"\n" || errOut != "" {
+		t.Errorf("after the lock is gone: exit %d, %q, %q; want 0 and the path", code, out, errOut)
+	}
+}
+
 func TestRecordTakesOneRun(t *testing.T) {
 	dir, _ := project(t, "script.yaml", "")
 	for name, args := range map[string][]string{
