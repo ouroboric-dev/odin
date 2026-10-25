@@ -194,8 +194,13 @@ func (l *loopSteps) Check(ctx context.Context, attempt int, name string) (jormun
 	l.checks[attempt] = append(l.checks[attempt], checkView{Check: name, Passed: res.Passed})
 	out := jormungandr.CheckOutcome{Passed: res.Passed, Check: name,
 		Proof: fmt.Sprintf("check %s ran in attempt %d and passed (%s)", name, attempt, filepath.ToSlash(rel))}
-	if f, failed := res.Finding(filepath.ToSlash(rel) + ":1"); failed {
-		out.Findings = []gungnir.Finding{f}
+	// Until the ladder's checks are typed (typed-T20), a failing check is the one finding check-<name>-result, at the
+	// log, named from the run folder as before.
+	for _, f := range res.Findings() {
+		if f.Location == res.Log+":1" {
+			f.Location = filepath.ToSlash(rel) + ":1"
+		}
+		out.Findings = append(out.Findings, f)
 	}
 	return out, nil
 }

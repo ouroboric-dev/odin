@@ -72,15 +72,15 @@ func TestAFailingCheckGoesBackToTheNextAttemptAsAFinding(t *testing.T) {
 	if !strings.Contains(first, "## Input: open_findings\n\nNone.\n") {
 		t.Errorf("the first attempt was told of findings:\n%s", first)
 	}
-	for _, want := range []string{"## Input: open_findings\n\nThe checks and reviewers found these problems", `"id": "check-unit"`, `"severity": "blocker"`, `"source": "unit"`,
-		`"location": "logs/build-1-unit.log:1"`, "check unit failed: exit status 1", "Do not say any of them is fixed",
+	for _, want := range []string{"## Input: open_findings\n\nThe checks and reviewers found these problems", `"id": "check-unit-result"`, `"severity": "blocker"`, `"source": "unit"`,
+		`"location": "logs/build-1-unit.log:1"`, "check unit (exit status 1): the check failed", "Do not say any of them is fixed",
 		"## Input: check_results", `"check": "unit"`, `"passed": false`} {
 		if !strings.Contains(second, want) {
 			t.Errorf("the second attempt's prompt lacks %q:\n%s", want, second)
 		}
 	}
 	text := ledgerText(t, r)
-	for _, want := range []string{`"event":"finding_raised"`, `"ygg.finding.id":"check-unit"`, `"ygg.finding.severity":"blocker"`,
+	for _, want := range []string{`"event":"finding_raised"`, `"ygg.finding.id":"check-unit-result"`, `"ygg.finding.severity":"blocker"`,
 		`"event":"finding_closed"`, `"ygg.finding.attempts":2`, "unit: exit status 1", "unit: exit 0"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the ledger lacks %s:\n%s", want, text)

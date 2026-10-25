@@ -49,7 +49,7 @@ func TestALoopThatRunsOutOfAttemptsStopsTheRunForAPersonInEveryMode(t *testing.T
 			t.Errorf("%s: the ledger lacks an escalation that is %s:\n%s", mode, want, text)
 		}
 		gate, _ := os.ReadFile(filepath.Join(r.Dir, "gates", "build-3.md"))
-		for _, want := range []string{"Escalation at loop build", "3 attempts ended with 1 blocking finding(s) open", "- check-unit (blocker, from unit)", "ygg reject " + r.State.ID + " build --reason", "ygg approve " + r.State.ID + " build"} {
+		for _, want := range []string{"Escalation at loop build", "3 attempts ended with 1 blocking finding(s) open", "- check-unit-result (blocker, from unit)", "ygg reject " + r.State.ID + " build --reason", "ygg approve " + r.State.ID + " build"} {
 			if !strings.Contains(string(gate), want) {
 				t.Errorf("%s: the gate file lacks %q:\n%s", mode, want, gate)
 			}
@@ -79,7 +79,7 @@ func TestRejectingAnEscalatedLoopGivesItAFullSetOfAttemptsWithTheOperatorsGuidan
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v; want done after the rejection", out, err)
 	}
-	if got := promptOf(t, r, "build-4"); !strings.Contains(got, "## Input: rejection\n\nA person sent the last attempt back") || !strings.Contains(got, "in lower case") || !strings.Contains(got, `"id": "check-unit"`) {
+	if got := promptOf(t, r, "build-4"); !strings.Contains(got, "## Input: rejection\n\nA person sent the last attempt back") || !strings.Contains(got, "in lower case") || !strings.Contains(got, `"id": "check-unit-result"`) {
 		t.Errorf("the fourth attempt was told:\n%s", got)
 	}
 	text := ledgerText(t, r)
@@ -103,7 +103,7 @@ func TestApprovingAnExhaustedLoopGoesOnWithTheFindingsOpen(t *testing.T) {
 	if got := r.State.Summaries["build"]; !strings.Contains(got, "accepted by the operator") || !strings.Contains(got, "1 finding(s) open") {
 		t.Errorf("summary = %q", got)
 	}
-	if f := r.State.Loops["build"].State.Book.Records["check-unit"]; f == nil || f.Status != gungnir.FindingOpen {
+	if f := r.State.Loops["build"].State.Book.Records["check-unit-result"]; f == nil || f.Status != gungnir.FindingOpen {
 		t.Errorf("record = %+v; an approval closes nothing", f)
 	}
 	if text := ledgerText(t, r); strings.Contains(text, `"event":"finding_closed"`) || !strings.Contains(text, "the check is too strict") {

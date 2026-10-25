@@ -42,7 +42,7 @@ func TestACheckFindingHasTheOriginCheck(t *testing.T) {
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if text := ledgerText(t, r); !strings.Contains(text, `"ygg.finding.id":"check-unit"`) || !strings.Contains(text, `"ygg.finding.origin":"check"`) {
+	if text := ledgerText(t, r); !strings.Contains(text, `"ygg.finding.id":"check-unit-result"`) || !strings.Contains(text, `"ygg.finding.origin":"check"`) {
 		t.Errorf("the check finding names no origin:\n%s", text)
 	}
 }
