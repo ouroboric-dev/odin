@@ -16,6 +16,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/leaf"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -34,7 +35,8 @@ type Outcome struct {
 // Advance runs nodes from the run's position until the graph ends, an approval point stops the
 // run, or a node fails. It saves run.json after every node. Every node is safe to re-run: resume
 // starts the interrupted node again from scratch (spec §4.3). The returned error is for failures
-// of Odin itself (disk, ledger); a failing node is an Outcome.
+// of Odin itself (disk, ledger); a failing node is an Outcome. Whichever way the run ends, done,
+// failed or stopped, its folder then holds its record.json (ruling R54).
 func Advance(ctx context.Context, r *run.Run) (out Outcome, err error) {
 	// Every sandbox this call started stops when it returns, whatever way it returns. A sandbox that
 	// won't stop stays recorded in run.json, and the next resume or ygg doctor stops it.
@@ -42,8 +44,24 @@ func Advance(ctx context.Context, r *run.Run) (out Outcome, err error) {
 		if derr := r.DownSandboxes(context.WithoutCancel(ctx)); derr != nil {
 			out.Warn = append(out.Warn, derr.Error())
 		}
+		if err == nil {
+			out.Warn = append(out.Warn, writeRecord(r)...)
+		}
 	}()
 	return advance(ctx, r)
+}
+
+// writeRecord rebuilds the run's record.json from what the run saved. A record that can't be built does not change
+// how the run ended: it is a warning, and ygg record builds it again.
+func writeRecord(r *run.Run) []string {
+	err := r.Save()
+	if err == nil {
+		_, err = metrics.WriteRecord(r.Dir)
+	}
+	if err != nil {
+		return []string{fmt.Sprintf("record.json could not be written: %v (ygg record %s writes it)", err, r.State.ID)}
+	}
+	return nil
 }
 
 func advance(ctx context.Context, r *run.Run) (Outcome, error) {

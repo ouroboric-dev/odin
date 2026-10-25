@@ -1,11 +1,17 @@
 package engine
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"syscall"
 	"time"
 
 	"github.com/ouroboric-dev/gungnir"
@@ -93,4 +99,170 @@ func emptyDir(dir string) error {
 		}
 	}
 	return nil
+}
+
+// The retrospective's copy of the transcripts stops at whichever bound it meets first.
+const (
+	maxRetroTranscripts     = 2000
+	maxRetroTranscriptBytes = 64 << 20
+)
+
+// seedRecordFiles gives the workspace of a scratch node that reads the record what else the retrospective reads
+// (change typed-boundaries §5): ledger.jsonl, a copy of the run's ledger whose grade lines keep only the totals, and
+// transcripts/, a copy of the run's transcripts up to the bound. Every transcript was written by a session before
+// the grade, and nothing of the grade's own folder is copied. It returns what the prompt says of them.
+func seedRecordFiles(r *run.Run, n schema.Node) (string, error) {
+	ws := r.ScratchDir(n.ID)
+	var grades []string
+	for _, m := range r.Setup.Graph.All() {
+		if m.Kind == schema.KindGrade {
+			grades = append(grades, m.ID)
+		}
+	}
+	if err := copyLedger(filepath.Join(r.Dir, "ledger.jsonl"), filepath.Join(ws, "ledger.jsonl"), grades); err != nil {
+		return "", fmt.Errorf("copying the ledger for %s: %w", n.ID, err)
+	}
+	copied, total, err := copyTranscripts(filepath.Join(r.Dir, "transcripts"), filepath.Join(ws, "transcripts"), maxRetroTranscripts, maxRetroTranscriptBytes)
+	if err != nil {
+		return "", fmt.Errorf("copying the transcripts for %s: %w", n.ID, err)
+	}
+	return retroNote(copied, total), nil
+}
+
+// retroNote is what the workspace note of the retrospective adds: where the ledger and the transcripts are, and,
+// when the copy stopped at its bound, that it holds a part of them.
+func retroNote(copied, total int) string {
+	note := "- ledger.jsonl is a copy of the run's ledger, one event a line, up to this session: ledger:SEQ names a line by its seq. " +
+		"The lines of the grade keep its totals, and its own words are left out.\n"
+	switch {
+	case total == 0:
+		note += "- transcripts/ is empty: the run kept no transcript.\n"
+	case copied < total:
+		note += fmt.Sprintf("- transcripts/ holds %d of the run's %d transcript files, in name order: the copy stops at %d files or %d MiB, "+
+			"and the rest are not in this workspace. transcript:NAME names one.\n", copied, total, maxRetroTranscripts, maxRetroTranscriptBytes>>20)
+	default:
+		note += fmt.Sprintf("- transcripts/ holds all %d of the run's transcript files, as its sessions wrote them: transcript:NAME names one.\n", total)
+	}
+	return note
+}
+
+// copyLedger copies the ledger at src to dst, a new file. The lines of the grade nodes (grades) lose their result
+// and note, the grade's own words, such as a refusal that names the suite's scenarios; the grade_* events carry
+// totals only and are copied as they are. The copy is for reading: its hash chain does not hold.
+func copyLedger(src, dst string, grades []string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	sc := bufio.NewScanner(in)
+	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
+	w := bufio.NewWriter(out)
+	for sc.Scan() {
+		line, err := ledgerLine(sc.Bytes(), grades)
+		if err != nil {
+			out.Close()
+			return err
+		}
+		w.Write(line)
+		w.WriteByte('\n')
+	}
+	if err := sc.Err(); err != nil {
+		out.Close()
+		return err
+	}
+	if err := w.Flush(); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// ledgerLine is one line of the ledger as the retrospective's copy holds it.
+func ledgerLine(line []byte, grades []string) ([]byte, error) {
+	var head struct {
+		Node string `json:"ygg.node.id"`
+	}
+	if err := json.Unmarshal(line, &head); err != nil {
+		return nil, err
+	}
+	if !slices.Contains(grades, head.Node) {
+		return line, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(line, &fields); err != nil {
+		return nil, err
+	}
+	delete(fields, "ygg.result")
+	delete(fields, "ygg.note")
+	return json.Marshal(fields)
+}
+
+// copyTranscripts copies the regular files of the folder src into dst, made new, in name order, and stops before the
+// file that would pass maxFiles files or maxBytes bytes. A link is never followed nor copied, and a file that grows
+// while it is read is cut at the size it had. It returns how many files it copied and how many src holds. A src that
+// is not there gives an empty dst.
+func copyTranscripts(src, dst string, maxFiles int, maxBytes int64) (copied, total int, err error) {
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		return 0, 0, err
+	}
+	entries, err := os.ReadDir(src)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, 0, nil
+	} else if err != nil {
+		return 0, 0, err
+	}
+	var size int64
+	full := false
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		total++
+		if full {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return copied, total, err
+		}
+		if copied+1 > maxFiles || size+info.Size() > maxBytes {
+			full = true
+			continue
+		}
+		if err := copyFile(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()), info.Size()); err != nil {
+			return copied, total, err
+		}
+		copied++
+		size += info.Size()
+	}
+	return copied, total, nil
+}
+
+// copyFile copies at most n bytes of the regular file src to dst, a new file. Neither is opened through a link, and
+// a src that is no longer a regular file is an error.
+func copyFile(src, dst string, n int64) error {
+	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if st, err := in.Stat(); err != nil {
+		return err
+	} else if !st.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", src)
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, io.LimitReader(in, n)); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }

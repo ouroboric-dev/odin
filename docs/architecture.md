@@ -309,6 +309,16 @@ reads the prompts again. A run uses one set of instructions: a session whose pro
 run kept fails its node before it starts ("the prompt X changed during the run …; start a new run"). The lines of a task come from `git diff --numstat` in its
 leaf, from its loop's base to its merge's commit, with nothing checked out; blocked answers and notes come from the
 kept outputs, hash-checked and validated, never from prose. What it cannot read is a warning, not an error.
+The engine writes `record.json` whenever a run ends, done, failed or stopped (a record that cannot be built is a
+warning of the outcome), and before a node that reads the `record` input.
+
+The retrospective is an ordinary agent node after the grade: a scratch node that declares the input `record` and returns
+`ygg.retro/v1`, with its own role, `retrospective`, in `factory.yaml`. A run that fails before it, the grade included,
+gets none, and a retrospective that fails fails the run with the grade kept in the record. Its record input is the
+record without the judgements and without its own answer, and of the hidden suite the score's totals only (no
+category, no test). Its workspace holds `ledger.jsonl`, a copy of the ledger whose grade lines lose their result and
+note, and `transcripts/`, a copy of the run's transcripts that stops at 2,000 files or 64 MiB, which its prompt says.
+Its kept answer is the record's `retro`.
 
 `ygg metrics --compare <runA> <runB>` lays two runs side by side: what differed in the setup, the metrics with the delta
 B minus A, and a verdict for success criterion 7 (the metrics that improved, the ones that got worse, and whether the hidden

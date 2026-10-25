@@ -99,18 +99,41 @@ func Encode(r *Run) ([]byte, error) {
 // WriteRecord rebuilds the experiment record of the run in dir from its ledger, run.json and kept files, and
 // writes it to dir/record.json atomically: a synced temporary file in dir, renamed over it. It returns the path.
 func WriteRecord(dir string) (string, error) {
-	r, err := Collect(dir)
-	if err != nil {
-		return "", err
-	}
-	b, err := Encode(r)
-	if err != nil {
-		return "", err
-	}
-	if err := writeAtomic(dir, RecordFile, b); err != nil {
+	if _, err := Rebuild(dir); err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, RecordFile), nil
+}
+
+// Rebuild is WriteRecord, and returns the record it wrote.
+func Rebuild(dir string) (*Run, error) {
+	r, err := Collect(dir)
+	if err != nil {
+		return nil, err
+	}
+	b, err := Encode(r)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeAtomic(dir, RecordFile, b); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// Objective is the record as the retrospective reads it (change typed-boundaries §5): its objective part, without
+// the operator's judgements and the retrospective's own answer, and of the hidden suite the score's totals only.
+// The grade keeps no category of the suite, and every field it keeps is named here, so a field added to Grade
+// later stays out until it is added on purpose. r is not changed.
+func (r *Run) Objective() *Run {
+	o := *r
+	o.Judgements, o.Retro = nil, nil
+	if g := r.Grade; g != nil {
+		o.Grade = &Grade{Task: g.Task, TaskVersion: g.TaskVersion, Suite: g.Suite, Reward: g.Reward, FailToPass: g.FailToPass,
+			PassToPass: g.PassToPass, Categories: map[string]Category{}, Duration: g.Duration, EscapedDefects: g.EscapedDefects,
+			TasksGivenUp: g.TasksGivenUp, Refused: g.Refused}
+	}
+	return &o
 }
 
 // writeAtomic writes data to dir/name with mode 0644: a synced temporary file in dir, renamed over the name, and

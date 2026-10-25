@@ -40,7 +40,7 @@ func (s *Setup) readPrompt(realm, file string) ([]byte, error) {
 	if p := filepath.FromSlash(file); !filepath.IsLocal(p) || filepath.Clean(p) != p {
 		return nil, fmt.Errorf("the prompt %q is not inside its pack", file)
 	}
-	path, err := s.PromptFile(realm, file)
+	path, err := s.promptFile(realm, file)
 	if err != nil {
 		return nil, err
 	}

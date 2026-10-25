@@ -398,7 +398,7 @@ func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 // checkSession checks that a session of node (a node, or a loop's reviewer) can run: its prompt file
 // is in the graph pack and its role is in factory.yaml, whose adapter is built once per role.
 func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
-	path, err := s.PromptFile("", prompt)
+	path, err := s.promptFile("", prompt)
 	if err == nil {
 		_, err = os.Stat(path)
 	}
@@ -578,10 +578,11 @@ func (s *Setup) NodeRealm(n schema.Node) (*realm.Realm, error) {
 	return nil, fmt.Errorf("node %s names the realm %s, which is not loaded", n.ID, n.Realm)
 }
 
-// PromptFile is the path of a prompt file: in the realm called realmName, or in the graph pack for "". The
+// promptFile is the path of a prompt file: in the realm called realmName, or in the graph pack for "". The
 // prompts of agent nodes and reviewers are the graph pack's; a task's implementer prompt is its leaf's
-// realm's. A realm that is not loaded is an error.
-func (s *Setup) PromptFile(realmName, file string) (string, error) {
+// realm's. A realm that is not loaded is an error. It is unexported so a session's prompt is read only through
+// Run.ReadPrompt, which checks it against the hash the run kept (ruling R56).
+func (s *Setup) promptFile(realmName, file string) (string, error) {
 	if realmName == "" {
 		return filepath.Join(s.GraphPack.Dir, file), nil
 	}

@@ -57,7 +57,16 @@ func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]
 		text = strings.TrimRight(text+"\n\n"+skillText, "\n")
 	}
 	if n.Scratch {
-		text = strings.TrimRight(text+"\n\n"+workspaceNote(), "\n")
+		note := workspaceNote()
+		if rv == nil && slices.Contains(inputs, schema.SourceRecord) {
+			// The retrospective reads the ledger and the transcripts beside the record (change typed-boundaries §5).
+			more, err := seedRecordFiles(r, n)
+			if err != nil {
+				return "", &nodeFailure{err}
+			}
+			note += more
+		}
+		text = strings.TrimRight(text+"\n\n"+note, "\n")
 	}
 	files, err := inputFiles(r, n)
 	if err != nil {

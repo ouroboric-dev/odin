@@ -204,6 +204,9 @@ func TestAStoppedRunWithNoLockIsJudged(t *testing.T) {
 
 func TestAJudgementIsKeptWhenTheRecordCannotBeRebuilt(t *testing.T) {
 	dir, id, runDir := scored(t)
+	if err := os.Remove(filepath.Join(runDir, "record.json")); err != nil { // the record the run wrote when it ended
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(filepath.Join(runDir, "record.json"), 0o755); err != nil { // the rebuild cannot rename over a folder
 		t.Fatal(err)
 	}

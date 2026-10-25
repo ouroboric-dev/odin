@@ -58,6 +58,8 @@ size, attempts, findings by source and severity, and the lines it added (written
 `git diff --numstat` in its leaf), and the harness's health: the outputs refused and
 repaired by role and model, every `blocked` answer and note from the kept outputs, and the design's open questions that
 no person answered. It is rebuilt from the ledger, `run.json` and the kept files, so it can be written again at any time.
+Odin writes it too whenever a run ends (done, failed or stopped) and before a retrospective runs, and it holds the
+retrospective's answer (`ygg.retro/v1`) once that node has given one.
 
 `ygg score <run-id> --score N --well TEXT --wrong TEXT [--task ID]` records your judgement of the run, or with `--task`
 of one task of its plan (`ygg.judgement/v1`): a score from 0 to 10, and 1 to 16384 characters each on what went well and

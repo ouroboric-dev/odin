@@ -101,6 +101,33 @@ func (r *Run) experiment(dir string, state *record, events []gungnir.Event) {
 	r.harness(dir, state, events)
 	r.sizes(state, events)
 	r.judgements(dir)
+	r.retro(dir, state)
+}
+
+// retro reads the retrospective's answer (ygg.retro/v1), as Odin kept and validated it in outputs/, into the record.
+// A run whose retro has not answered has none. The record holds one: of two retro nodes, the first by id is kept,
+// and the other is a warning.
+func (r *Run) retro(dir string, state *record) {
+	var keys []string
+	for k, ref := range state.Outputs {
+		if schema.Contract(ref.Contract) == schema.ContractRetro {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		if r.Retro != nil {
+			r.Warnings = append(r.Warnings, fmt.Sprintf("the retro of %s is left out: the record holds one retrospective", k))
+			continue
+		}
+		ref := state.Outputs[k]
+		data, err := readKept(dir, k, ref.Path, ref.SHA256, schema.ContractRetro)
+		if err != nil {
+			r.Warnings = append(r.Warnings, fmt.Sprintf("the retro of %s is left out: %v", k, err))
+			continue
+		}
+		r.Retro = json.RawMessage(data)
+	}
 }
 
 func readEvents(path string) ([]gungnir.Event, error) {

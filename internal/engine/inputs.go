@@ -13,6 +13,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/mdsafe"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -65,7 +66,7 @@ func inputBody(r *run.Run, n schema.Node, who, name string, extra map[string]str
 	case schema.SourceDate:
 		return dateOf(r.Setup) + "\n", nil
 	case schema.SourceRecord:
-		return "", &nodeFailure{fmt.Errorf("node %s needs %s, and the record is not built yet", who, name)}
+		return recordBody(r, who)
 	case schema.SourceChange, schema.SourceOpenFindings, schema.SourceCheckResults:
 		v, ok := extra[name]
 		switch {
@@ -84,6 +85,24 @@ func inputBody(r *run.Run, n schema.Node, who, name string, extra map[string]str
 		return "", missingInput(who, name)
 	}
 	return renderContract(c, v)
+}
+
+// recordBody is the section of the record input. Odin writes the run's record.json first (ruling R54), as ygg record
+// builds it, and renders the view of it that the retrospective has (metrics.Run.Objective): no judgement, no answer
+// of its own, and the hidden suite's score as its totals only. Only a node after the grade may declare the input.
+func recordBody(r *run.Run, who string) (string, error) {
+	if err := r.Save(); err != nil { // the record reads run.json, which must hold the ledger's last line
+		return "", err
+	}
+	rec, err := metrics.Rebuild(r.Dir)
+	if err != nil {
+		return "", &nodeFailure{fmt.Errorf("node %s needs %s: %w", who, schema.SourceRecord, err)}
+	}
+	b, err := metrics.Encode(rec.Objective())
+	if err != nil {
+		return "", &nodeFailure{fmt.Errorf("node %s needs %s: %w", who, schema.SourceRecord, err)}
+	}
+	return renderContract(schema.ContractRecord, json.RawMessage(b))
 }
 
 // dateOf is the date of the date input: Odin's clock, in UTC.

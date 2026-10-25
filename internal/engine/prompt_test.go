@@ -443,11 +443,16 @@ func TestEveryPromptEndsWithItsAnswerInstructions(t *testing.T) {
 	}
 }
 
-func TestTheRecordIsNotBuiltYet(t *testing.T) {
+// The record input is the run's record, built when the prompt is: record.json is written first (ruling R54).
+func TestTheRecordInputIsBuiltWhenThePromptIs(t *testing.T) {
 	r, n, _ := taskReviewer(t)
 	n.Input, n.Output = []string{schema.SourceRecord}, string(schema.ContractRetro)
-	if _, err := promptFor(r, n, nil, nil); err == nil || !strings.Contains(err.Error(), "the record is not built yet") {
-		t.Errorf("promptFor() = %v; want the record refused", err)
+	got, err := promptFor(r, n, nil, nil)
+	if err != nil || !strings.Contains(got, "## Input: record\n\n### run\n\n"+r.State.ID+"\n") {
+		t.Errorf("promptFor() = %v; want the record's section:\n%s", err, got)
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, "record.json")); err != nil {
+		t.Errorf("the record was not written: %v", err)
 	}
 	n.Input = []string{schema.SourceChange}
 	if _, err := promptFor(r, n, nil, nil); err == nil || !strings.Contains(err.Error(), "node gallery-t003-implement needs change, and nothing has provided it") {
