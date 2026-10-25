@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -85,92 +86,58 @@ func copyBesideOdin(t *testing.T, store, name string) string {
 	return dst
 }
 
-const leafReviewers = "  gallery-t%d-implement-spec-compliance:\n    - result: { status: ok, report: [] }\n  gallery-t%d-implement-simplicity:\n    - result: { status: ok, report: [] }\n" +
-	"  gallery-t%d-implement-quality:\n    - result: { status: ok, report: [] }\n"
+// leafReviewers are the answers of the three reviewers of task %03d's loop: ygg.review/v1 documents with no finding.
+const leafReviewers = "  gallery-t%03[1]d-implement-spec-compliance:\n    - result: { status: ok, output: '{\"findings\": []}' }\n" +
+	"  gallery-t%03[1]d-implement-simplicity:\n    - result: { status: ok, output: '{\"findings\": []}' }\n" +
+	"  gallery-t%03[1]d-implement-quality:\n    - result: { status: ok, output: '{\"findings\": []}' }\n"
 
-// planDone is the answer of the scripted planner, a ygg.plan/v1 document: the plan the tasks node reads.
-const planDone = `{"title": "Plan", "slug": "plan", "goal": "The plan of the test.", "decisions": [], "risks": [], "tasks": [{"id": "plan-T001", "title": "Task one", "criteria": ["It works.", "It is tested."], "named_test": "app_test.go:TestOne", "layer": "repos/app", "size": "S", "depends_on": [], "text": "The task of the test."}]}`
+// The typed answers of the scripted stages (change typed-boundaries): each is the whole final answer of its session,
+// a document of the contract its node declares, in a single-quoted YAML scalar (so it holds no apostrophe). The design asks one open question, which the design gate answers, and
+// the spec cites the owner decision given there.
+const (
+	galleryDesign = `{"title": "Gallery", "slug": "gallery", "summary": "Families keep photo galleries.", "goals": "A family makes a gallery and sees it.", ` +
+		`"non_goals": "No photo editing.", "success_criteria": "The home page lists the galleries.", "context": "A family shares photos.", ` +
+		`"product_at_user_level": "A person makes a gallery, finds it on the home page and opens it.", "decisions": [], ` +
+		`"open_questions": [{"id": "q1", "question": "May guests download photos?", "who_can_answer": "The owner"}]}`
+	gallerySpec = `{"title": "Gallery", "slug": "gallery", "summary": "An API that stores galleries and a web app that shows them.", ` +
+		`"architecture": "repos/api serves /api/galleries; repos/web calls it.", "interfaces": "GET and POST /api/galleries.", ` +
+		`"data_model": "A gallery has an id and a name.", "acceptance_criteria": "A gallery made through the API is listed and shown.", ` +
+		`"security": "Only the family writes.", "testing": "Unit tests in each leaf and an end-to-end test.", ` +
+		`"decisions": [{"date": "2026-10-17", "decision": "Guests may download photos.", "reason": "The owner decided it.", "cites": ["guest-download"]}], ` +
+		`"deviations": [], "leaves": {"runtime": {"realm": "niflheim-local", "realm_version": "NIFLHEIM_VERSION"}, "leaves": {` +
+		`"repos/api": {"realm": "helheim-go", "realm_version": "HELHEIM_VERSION", "description": "The API of the gallery."}, ` +
+		`"repos/web": {"realm": "midgard-react", "realm_version": "MIDGARD_VERSION", "description": "The web app of the gallery.", "consumes": ["repos/api"]}}}}`
+	galleryContract = `openapi: 3.1.0\ninfo: { title: Gallery, version: 0.1.0 }\npaths:\n  /api/galleries: {}\n`
+	galleryPlan     = `{"title": "Gallery", "slug": "gallery", "goal": "Galleries are stored, listed and shown.", "decisions": [], "risks": [], "tasks": [` +
+		`{"id": "gallery-T001", "title": "The API stores galleries", "criteria": ["A gallery can be created.", "It is listed."], ` +
+		`"named_test": "gallery_test.go TestCreateGallery", "layer": "repos/api", "size": "S", "depends_on": [], ` +
+		`"text": "POST /api/galleries stores a gallery with a name; GET lists them.", "contract": "` + galleryContract + `"}, ` +
+		`{"id": "gallery-T002", "title": "The web app lists them", "criteria": ["The home page lists galleries.", "An empty list says so."], ` +
+		`"named_test": "e2e/galleries.spec.ts", "layer": "repos/web", "size": "M", "depends_on": ["gallery-T001"], ` +
+		`"text": "The home page calls GET /api/galleries and lists each name.", "contract": "` + galleryContract + `"}, ` +
+		`{"id": "gallery-T003", "title": "The web app shows a gallery", "criteria": ["A gallery page shows its name.", "An unknown gallery shows an error."], ` +
+		`"named_test": "src/gallery.test.tsx", "layer": "repos/web", "size": "S", "depends_on": ["gallery-T002"], ` +
+		`"text": "A gallery page shows the name of the gallery."}]}`
+)
 
 const realScript = `steps:
   design:
-    - actions: [ { write: { path: out/1-product/design/2026-10-17-gallery.md, content: "---\ntitle: Gallery design\nstatus: draft\ndate: 2026-10-17\nrelated: []\n---\n# Gallery design\n" } } ]
-      result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
+    - result: { status: ok, summary: wrote the design, usage: { in: 1000, out: 100, turns: 2 }, output: '` + galleryDesign + `' }
   spec:
-    - actions:
-        - write: { path: out/2-engineering/specs/2026-10-17-gallery.md, content: "---\ntitle: Gallery spec\nstatus: draft\ndate: 2026-10-17\nrelated: []\n---\n# Gallery spec\n" }
-        - write:
-            path: out/leaves.yaml
-            content: |
-              runtime:
-                realm: niflheim-local
-                realm_version: NIFLHEIM_VERSION
-              leaves:
-                repos/api:
-                  realm: helheim-go
-                  realm_version: HELHEIM_VERSION
-                  description: The gallery's API.
-                repos/web:
-                  realm: midgard-react
-                  realm_version: MIDGARD_VERSION
-                  description: The gallery's web app.
-                  consumes: [repos/api]
-      result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 }, output: '{"summary": "done"}' }
+    - result: { status: ok, summary: wrote the spec and named the leaves, usage: { in: 1000, out: 100, turns: 2 }, output: '` + gallerySpec + `' }
   conformance:
-    - actions: [ { write: { path: out/conformance.json, content: '{"deviation": false}' } } ]
-      result: { status: ok, summary: the spec stays inside the design, usage: { in: 500, out: 50, turns: 1 }, output: '{"deviation": false}' }
+    - result: { status: ok, summary: the spec stays inside the design, usage: { in: 500, out: 50, turns: 1 }, output: '{"deviation": false}' }
   plan:
-    - actions:
-        - write:
-            path: out/2-engineering/plans/2026-10-17-gallery/tasks.md
-            content: |
-              ---
-              title: Gallery tasks
-              status: draft
-              date: 2026-10-17
-              related: []
-              ---
-              # Tasks
-
-              ## gallery-T1: the API stores galleries
-
-              - **Acceptance criteria:**
-                - [ ] a gallery can be created
-              - **Named test:** gallery_test.go TestCreateGallery
-              - **Layer:** repos/api
-              - **Size:** S
-              - **Depends on:** nothing
-
-              ## gallery-T2: the web app lists them
-
-              - **Acceptance criteria:**
-                - [ ] the home page lists galleries
-              - **Named test:** e2e/galleries.spec.ts
-              - **Layer:** repos/web
-              - **Size:** M
-              - **Depends on:** gallery-T1
-
-              ## gallery-T3: the web app shows a gallery
-
-              - **Acceptance criteria:**
-                - [ ] a gallery page shows its name
-              - **Named test:** src/gallery.test.tsx
-              - **Layer:** repos/web
-              - **Size:** S
-              - **Depends on:** gallery-T2
-        - write:
-            path: out/2-engineering/plans/2026-10-17-gallery/plan.md
-            content: "---\ntitle: Gallery plan\nstatus: draft\ndate: 2026-10-17\nrelated: []\n---\n# Gallery plan\n"
-      result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 }, output: '` + planDone + `' }
+    - result: { status: ok, summary: wrote the plan, usage: { in: 1000, out: 100, turns: 2 }, output: '` + galleryPlan + `' }
   reuse-review:
-    - actions: [ { write: { path: out/2-engineering/reviews/2026-10-17-gallery-reuse-review.md, content: "---\ntitle: Gallery reuse review\nstatus: draft\ndate: 2026-10-17\nrelated: []\n---\n## Verdict\n\nNothing to remove.\n" } } ]
-      result: { status: ok, summary: nothing to remove, usage: { in: 500, out: 50, turns: 1 }, output: '{"summary": "done"}' }
-  gallery-t1-implement:
+    - result: { status: ok, summary: nothing to remove, usage: { in: 500, out: 50, turns: 1 }, output: '{"verdict": "Nothing to remove.", "items": []}' }
+  gallery-t001-implement:
     - actions: [ { write: { path: api.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built the API's galleries, usage: { in: 2000, out: 200, turns: 4 } }
-  gallery-t2-implement:
+      result: { status: ok, summary: built the API's galleries, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
+  gallery-t002-implement:
     - actions: [ { write: { path: web.txt, content: "done\n" } } ]
       result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
-  gallery-t3-implement:
+  gallery-t003-implement:
     - actions: [ { write: { path: gallery.txt, content: "done\n" } } ]
       result: { status: ok, summary: built the gallery page, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
 `
@@ -205,7 +172,7 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	}
 	script := strings.NewReplacer("HELHEIM_VERSION", versions["helheim-go"], "NIFLHEIM_VERSION", versions["niflheim-local"], "MIDGARD_VERSION", versions["midgard-react"]).Replace(realScript)
 	for i := 1; i <= 3; i++ {
-		script += fmt.Sprintf(leafReviewers, i, i, i)
+		script += fmt.Sprintf(leafReviewers, i)
 	}
 	path := filepath.Join(t.TempDir(), "script.yaml")
 	if err := os.WriteFile(path, []byte(script), 0o644); err != nil {
@@ -220,19 +187,25 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := treetest.Project(t)
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "software")
+	brief := writeFile(t, "brief.md", "Build a photo gallery for a family: an API that stores galleries and a web app that lists and shows them.\n")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "software", "--brief", brief)
 	if code != ExitStopped || !strings.Contains(out, "stopped at approval point design-gate") {
 		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
 	}
 	id := runID(t, dir)
-	if code, out, errOut = ygg(t, "approve", id, "design-gate", "--project", dir); code != ExitDone || !strings.Contains(out, "is done.") {
+	// The owner decides at the design gate and answers the design's question: the spec must cite the decision.
+	decisions := writeFile(t, "decisions.json", `{"decisions": [{"id": "guest-download", "text": "Guests may download photos."}], `+
+		`"answers": [{"question": "q1", "text": "Yes, guests may."}]}`)
+	if code, out, errOut = ygg(t, "approve", id, "design-gate", "--project", dir, "--decisions", decisions); code != ExitDone || !strings.Contains(out, "is done.") {
 		t.Fatalf("approve: exit %d:\n%s%s", code, out, errOut)
 	}
 
-	for _, f := range []string{"docs/1-product/design/2026-10-17-gallery.md", "docs/2-engineering/specs/2026-10-17-gallery.md", "docs/leaves.yaml",
-		"docs/2-engineering/plans/2026-10-17-gallery/tasks.md", "docs/2-engineering/plans/2026-10-17-gallery/plan.md", "docs/2-engineering/reviews/2026-10-17-gallery-reuse-review.md"} {
-		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
-			t.Errorf("%s was not published: %v", f, err)
+	// Each stage's document is published as its JSON and its view, named by the run's date and the slug.
+	for _, f := range []string{"docs/1-product/design/*-gallery.json", "docs/1-product/design/*-gallery.md", "docs/2-engineering/specs/*-gallery.json",
+		"docs/2-engineering/specs/*-gallery.md", "docs/leaves.yaml", "docs/2-engineering/plans/*-gallery/plan.json", "docs/2-engineering/plans/*-gallery/tasks.md",
+		"docs/2-engineering/plans/*-gallery/plan.md", "docs/2-engineering/reviews/*-gallery-reuse-review.md"} {
+		if m, _ := filepath.Glob(filepath.Join(dir, f)); len(m) != 1 {
+			t.Errorf("%s was not published once: %q", f, m)
 		}
 	}
 	st, err := run.LoadState(run.Dir(dir, id))
@@ -279,7 +252,7 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	// The three reviewers of the graph ran for every task, in the task's leaf, and the conformance review ran.
 	for i := 1; i <= 3; i++ {
 		for _, rv := range []string{"spec-compliance", "simplicity", "quality"} {
-			key := fmt.Sprintf("gallery-t%d-implement-%s", i, rv)
+			key := fmt.Sprintf("gallery-t%03d-implement-%s", i, rv)
 			if st.Attempts[key] != 1 {
 				t.Errorf("reviewer session %s ran %d times, want 1", key, st.Attempts[key])
 			}
@@ -292,11 +265,29 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 		}
 	}
 	// The simplicity reviewer and the reuse review got the vendored Ponytail skill in their prompts.
-	for _, stem := range []string{"reuse-review-1", "gallery-t1-implement-simplicity-1"} {
+	for _, stem := range []string{"reuse-review-1", "gallery-t001-implement-simplicity-1"} {
 		tr, err := os.ReadFile(filepath.Join(run.Dir(dir, id), "transcripts", stem+".json"))
 		if err != nil || !strings.Contains(string(tr), "Review a change like the senior developer who will be paged") {
 			t.Errorf("transcript %s lacks the Ponytail skill: %v", stem, err)
 		}
+	}
+	// The spec was told the owner's decision and the answer, with its question, and cited the decision.
+	spec, err := os.ReadFile(filepath.Join(run.Dir(dir, id), "transcripts", "spec-1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tr struct{ Prompt string }
+	if err := json.Unmarshal(spec, &tr); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"## Input: decisions", "- guest-download (at design-gate): Guests may download photos.",
+		"- q1 (at design-gate): Yes, guests may.\n  The question: May guests download photos?", "## Input: brief\n\nBuild a photo gallery for a family"} {
+		if !strings.Contains(tr.Prompt, want) {
+			t.Errorf("the spec's prompt lacks %q:\n%s", want, tr.Prompt)
+		}
+	}
+	if st.Returns["spec"] != 0 {
+		t.Errorf("the owner check sent the spec back %d time(s); it cites the one decision", st.Returns["spec"])
 	}
 	_, status, _ := ygg(t, "status", id, "--project", dir)
 	for _, want := range []string{"graph:    software " + gp.Version, "(helheim-go " + versions["helheim-go"] + ")", "tasks:    3 (3 done, 0 doing, 0 to do, 0 blocked)"} {
