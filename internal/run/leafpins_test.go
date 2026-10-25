@@ -93,10 +93,10 @@ func TestAPromptFileOfARealmThatIsNotLoadedIsAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p, err := s.PromptFile("", "prompts/design.md"); err != nil || p != filepath.Join(s.GraphPack.Dir, "prompts/design.md") {
-		t.Errorf("PromptFile(graph pack) = %q, %v", p, err)
+	if p, err := s.promptFile("", "prompts/design.md"); err != nil || p != filepath.Join(s.GraphPack.Dir, "prompts/design.md") {
+		t.Errorf("promptFile(graph pack) = %q, %v", p, err)
 	}
-	if p, err := s.PromptFile("asgard", "prompts/x.md"); err == nil || !strings.Contains(err.Error(), "asgard") || !strings.Contains(err.Error(), "is not loaded") || p != "" {
-		t.Errorf("PromptFile(asgard) = %q, %v", p, err)
+	if p, err := s.promptFile("asgard", "prompts/x.md"); err == nil || !strings.Contains(err.Error(), "asgard") || !strings.Contains(err.Error(), "is not loaded") || p != "" {
+		t.Errorf("promptFile(asgard) = %q, %v", p, err)
 	}
 }

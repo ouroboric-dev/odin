@@ -100,6 +100,8 @@ func (r *Run) WriteText(w io.Writer) {
 func (r *Run) writeGrade(w io.Writer) {
 	g := r.Grade
 	switch {
+	case g == nil && r.GradeSkipped:
+		line(w, "grade:", "skipped, no grader in factory.yaml")
 	case g == nil:
 		line(w, "grade:", "not graded")
 	case g.Refused != "" && g.Suite == "":

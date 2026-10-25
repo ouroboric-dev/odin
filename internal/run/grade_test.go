@@ -41,20 +41,28 @@ func gradeRealm(t *testing.T) string {
 	return dir
 }
 
-func TestAGradeNodeNeedsTheGraderAndTheSandboxSections(t *testing.T) {
+// A grade node with a grader needs the sandbox section, which names the engine the grader runs on; with no grader
+// section, the node is skipped and needs neither (ruling R63).
+func TestAGradeNodeWithAGraderNeedsTheSandboxSection(t *testing.T) {
 	tk := tasktest.New(t)
 	script := filepath.Join(toySandbox(t), "script.yaml")
 	head := "roles:\n  planner: { agent: scripted, model: none, script: " + script + " }\n  implementer: { agent: scripted, model: none, script: " + script + " }\n" + fullCaps
-	for name, body := range map[string]string{
-		"no grader section":  head + sandboxSection,
-		"no sandbox section": head + graderBlock(tk),
+	for name, c := range map[string]struct {
+		body    string
+		refused bool
+	}{
+		"a grader and no sandbox section": {head + graderBlock(tk), true},
+		"no grader section":               {head + sandboxSection, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := filepath.Join(t.TempDir(), "factory.yaml")
-			os.WriteFile(cfg, []byte(body), 0o644)
+			os.WriteFile(cfg, []byte(c.body), 0o644)
 			_, err := Prepare(ctx, Options{Project: treetest.Project(t, "repos/app"), Config: cfg, Graph: gradeRealm(t)})
-			if err == nil || !strings.Contains(err.Error(), "node score") || !strings.Contains(err.Error(), "grader and the sandbox sections") {
-				t.Errorf("Prepare() = %v, want a refusal that names the node and the sections", err)
+			switch {
+			case c.refused && (err == nil || !strings.Contains(err.Error(), "node score") || !strings.Contains(err.Error(), "needs the sandbox section")):
+				t.Errorf("Prepare() = %v, want a refusal that names the node and the sandbox section", err)
+			case !c.refused && err != nil:
+				t.Errorf("Prepare() = %v, want the grade node accepted: it is skipped", err)
 			}
 		})
 	}

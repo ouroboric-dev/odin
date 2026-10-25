@@ -12,7 +12,8 @@ import (
 
 // grade runs ygg grade: it grades the project of a finished run against the hidden suite of a task and
 // writes score.json to the run's folder (spec §11). A run whose graph has a grade node is graded at its
-// end; this command grades a run that has none, or grades again after a refusal was fixed. It prints the
+// end; this command grades a run that has none, or whose grade was skipped for want of a grader section (ruling
+// R63), or grades again after a refusal was fixed. It needs the grader section all the same. It prints the
 // score to the operator, and to nobody else. A refusal exits 2 and builds nothing.
 func (c *command) grade(args []string) int {
 	f, pos, ok := c.parse("grade", args, 1, func(fs *flag.FlagSet, f *flags) {

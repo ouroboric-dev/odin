@@ -87,7 +87,7 @@ func TestTheContentSmokeFilesLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, role := range []string{"planner", "implementer", "reviewer"} {
+	for _, role := range []string{"planner", "implementer", "reviewer", "retrospective"} {
 		if !strings.Contains(string(example), role+": { agent: scripted, model: none, script: ") {
 			t.Errorf("factory.example.yaml gives the %s no script", role)
 		}
@@ -98,13 +98,14 @@ func TestTheContentSmokeFilesLoad(t *testing.T) {
 }
 
 // smokeContentSessions are the sessions the software graph of Voluspa runs for plan, by key, each with the contract
-// its node declares: the five stages by node id, and for each task its implementer (<task>-implement) and the loop's
-// three reviewers (<task>-implement-<reviewer>). It mirrors voluspa's software/graph.yaml by hand, so that this test
-// needs nothing beside odin; a drift from the graph fails the real content smoke run and the real-realms test in the
-// umbrella (TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents), which run the graph itself.
+// its node declares: the five stages and the retrospective by node id, and for each task its implementer
+// (<task>-implement) and the loop's three reviewers (<task>-implement-<reviewer>). The grade before the retro runs no
+// session, and with no grader in factory.yaml it is skipped. It mirrors voluspa's software/graph.yaml by hand, so that
+// this test needs nothing beside odin; a drift from the graph fails the real content smoke run and the real-realms
+// test in the umbrella (TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents), which run the graph itself.
 func smokeContentSessions(plan schema.Plan) map[string]schema.Contract {
 	sessions := map[string]schema.Contract{"design": schema.ContractDesign, "spec": schema.ContractSpec, "conformance": schema.ContractConformance,
-		"plan": schema.ContractPlan, "reuse-review": schema.ContractReuseReview}
+		"plan": schema.ContractPlan, "reuse-review": schema.ContractReuseReview, "retro": schema.ContractRetro}
 	for _, task := range plan.Tasks {
 		key := strings.ToLower(task.ID) + "-implement"
 		sessions[key] = schema.ContractImplement

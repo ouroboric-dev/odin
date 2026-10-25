@@ -14,6 +14,7 @@ import (
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/score"
 	"github.com/ouroboric-dev/odin/internal/task"
@@ -35,7 +36,9 @@ type GradeFailed struct{ Err error }
 func (e *GradeFailed) Error() string { return "grading failed: " + e.Err.Error() }
 func (e *GradeFailed) Unwrap() error { return e.Err }
 
-// runGrade is the grade node (spec §11), the last node of a graph: it grades the project the run built.
+// runGrade is the grade node (spec §11), the last node of a graph but the retrospective: it grades the project the
+// run built. A factory.yaml with no grader section skips it: the node finishes with metrics.GradeSkipped as its
+// result, and the run goes on with no grade (ruling R63).
 func runGrade(ctx context.Context, r *run.Run, n schema.Node) error {
 	attempt, err := startAttempt(r, n)
 	if err != nil {
@@ -43,6 +46,10 @@ func runGrade(ctx context.Context, r *run.Run, n schema.Node) error {
 	}
 	if err := r.Log(gungnir.Event{Name: gungnir.EventNodeStarted, Node: n.ID, Attempt: attempt}); err != nil {
 		return err
+	}
+	if r.Setup.Config.Grader == nil {
+		r.State.Summaries[n.ID] = metrics.GradeSkipped
+		return r.Log(gungnir.Event{Name: gungnir.EventNodeFinished, Node: n.ID, Attempt: attempt, Result: metrics.GradeSkipped})
 	}
 	began := time.Now()
 	g, err := Grade(ctx, r, "")

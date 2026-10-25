@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -275,5 +276,14 @@ func TestTheRoutingThresholdComesFromTheGraphPack(t *testing.T) {
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("leaf realm threshold: Advance() = %+v, %v; want the index shipped unmeasured", out, err)
+	}
+}
+
+// describeMode names what stands where the transcripts folder should be.
+func TestDescribeModeNamesWhatIsThere(t *testing.T) {
+	for m, want := range map[fs.FileMode]string{0o644: "a regular file", fs.ModeSymlink | 0o777: "a link", fs.ModeNamedPipe | 0o644: "a p--------- file"} {
+		if got := describeMode(m); got != want {
+			t.Errorf("describeMode(%v) = %q, want %q", m, got, want)
+		}
 	}
 }

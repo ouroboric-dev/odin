@@ -24,6 +24,8 @@ ygg status  <run-id> [--watch [--interval <duration>]] [--project <dir>]
 ygg grade   <run-id> [--task <id>] [--project <dir>]
 ygg metrics <run-id|first..last> [--json] [--project <dir>]
 ygg metrics --compare <run-id> <run-id> [--json] [--project <dir>]
+ygg record  <run-id> [--project <dir>]
+ygg score   <run-id> --score <0-10> --well <text> --wrong <text> [--task <id>] [--project <dir>]
 ygg report  <run-id> [--commit] [--project <dir>]
 ygg board   [--project <dir>] | --all [--projects <file>]
 ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <mode>]
@@ -47,7 +49,29 @@ worked with the approval waits and the stopped time taken out, the first-pass ra
 the reviewer veto rate, findings, interventions, blocked tasks, the hidden score and the escaped defects, and what the
 routing indexes scored. A rate over nothing says `n/a`. It checks the ledger's hash chain first and refuses a ledger that
 was changed. `first..last` lists every run of the project from one id to the other, with a total line. `--json` prints the
-same figures for a tool. It writes nothing.
+same figures for a tool: for one run, its experiment record. It writes nothing.
+
+`ygg record <run-id>` writes that record, `record.json` (`ygg.run-record/v1`), into the run's folder and prints its
+path. Beside the metrics it holds the setup (each role's agent, model, CLI version and reasoning, and the hashes of the
+graph, its prompts, the skills and the realms, as `run.json` kept them when the run read them), each task's estimated
+size, attempts, findings by source and severity, and the lines it added (written by hand, tests and generated, from
+`git diff --numstat` in its leaf), and the harness's health: the outputs refused and
+repaired by role and model, every `blocked` answer and note from the kept outputs, and the design's open questions that
+no person answered. It is rebuilt from the ledger, `run.json` and the kept files, so it can be written again at any time.
+A run that another ygg process is advancing has its record printed instead, and not written: that process writes
+`record.json` when it stops.
+Odin writes it too whenever a run ends (done, failed or stopped) and before a retrospective runs, and it holds the
+retrospective's answer (`ygg.retro/v1`) once that node has given one.
+
+`ygg score <run-id> --score N --well TEXT --wrong TEXT [--task ID]` records your judgement of the run, or with `--task`
+of one task of its plan (`ygg.judgement/v1`): a score from 0 to 10, and 1 to 16384 characters each on what went well and
+what went wrong. Give it at any time, a run that stopped included. A new judgement replaces the last one of the same run
+or task in `judgements.json`; the ledger keeps each as a `judged` line (`ygg.result` is the score, `ygg.task.id` the
+task); `record.json` is rebuilt with the judgements. A task the plan does not have is refused, and so is a run that
+another ygg process is advancing, because that process owns the ledger. A judgement the ledger took but
+`judgements.json` could not is exit 1, and says so: scoring again would log it twice. The score of a run started
+before typed boundaries changes nothing in its `run.json` but the ledger's anchor, so it stays a run `ygg resume`
+refuses.
 
 `ygg metrics --compare <runA> <runB>` prints what differed between two runs of one project (the factory build, the
 config hash, the agent and model of each role, the realm versions, the mode, the graph) and the deltas, B minus A.

@@ -198,24 +198,25 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Counts every session's usage, a failed one's too, in the run and in a daily spend journal outside
   any project, and stops the run at the hard approval point `budget-cap` before a session would start
   over a cap (spec §7.4). Pauses the run when the provider's quota is used up (spec §12).
-- Grades a build (spec §11, change benchmark-split). The `grade` node is the last node of a graph. It stops
-  every sandbox first, exports the committed files of the project as `/app` (with, for each leaf that holds an
-  executable `release.sh`, its release at `.ygg/release/<leaf path>/`, see below), and runs the hidden suite of the
-  task in a container of Gleipnir's `Grade`: no network, `/app` read and write, `/tests` read only, one empty
-  folder for the suite's own logs, and no other mount. It checks the task first (`task.toml`, the hash of
-  `instruction.md`, the suite version, the retired mark, the suite's `manifest.json`) and refuses with
+- Grades a build (spec §11, change benchmark-split). The `grade` node is the last node of a graph but the
+  retrospective. With no `grader` section in `factory.yaml` it is skipped: the node finishes with the result
+  "graded: skipped, no grader in factory.yaml", the run goes on, and the record holds no grade (ruling R63).
+  Otherwise it stops every sandbox first, exports the committed files of the project as `/app` (with, for each leaf
+  that holds an executable `release.sh`, its release at `.ygg/release/<leaf path>/`, see below), and runs the
+  hidden suite of the task in a container of Gleipnir's `Grade`: no network, `/app` read and write, `/tests` read
+  only, one empty folder for the suite's own logs, and no other mount. It checks the task first (`task.toml`, the
+  hash of `instruction.md`, the suite version, the retired mark, the suite's `manifest.json`) and refuses with
   `grade_refused` and a reason, before it builds anything. It gives each attempt a random key (16 bytes, hex),
   which the container gets as `YGG_SCORE_KEY`, and reads the scores from the container's stdout: the one line
   `ygg-results/v1 <key> <report>`, the Playwright JSON report on a single line. The app shares the container and
-  can write to the logs folder, so Odin never opens it. A line without the key is ignored; no line with the
-  key, or two or more, or a line that is not a report, is a failed grade (`GradeFailed`: no `score.json`, a
-  resume grades again), never a score of 0. The key is in no event and no state; it can stay in `grade.log`,
-  which is `0600` and never for an agent. It joins the manifest and the report and writes `score.json` to the
-  run folder and nowhere else. Fail-to-pass scenarios decide
-  the reward, by category and weight. Pass-to-pass scenarios are reported and never change it. An agent
-  never sees the suite folder, `score.json` or the container's output. `ygg grade <run-id>` grades a done
-  run that has no grade node, or grades again; `--task` names the task when the brief of the run is not the
-  `instruction.md` of a task.
+  can write to the logs folder, so Odin never opens it. A line without the key is ignored; no line with the key, or
+  two or more, or a line that is not a report, is a failed grade (`GradeFailed`: no `score.json`, a resume grades
+  again), never a score of 0. The key is in no event and no state; it can stay in `grade.log`, which is `0600` and
+  never for an agent. It joins the manifest and the report and writes `score.json` to the run folder and nowhere
+  else. Fail-to-pass scenarios decide the reward, by category and weight. Pass-to-pass scenarios are reported and
+  never change it. An agent never sees the suite folder, `score.json` or the container's output. `ygg grade
+  <run-id>` grades a done run that has no grade node or whose grade was skipped, or grades again, and needs the
+  `grader` section; `--task` names the task when the brief of the run is not the `instruction.md` of a task.
 - Adds the release to the export. A `Releaser` builds the release of each leaf with an executable `release.sh`,
   and Odin copies it to `.ygg/release/<leaf path>/` (for example `.ygg/release/repos/api/`) in the export only: a
   release is never committed to the project or a leaf. `ygg grade` and `ygg bridge` build it in the project's
@@ -298,6 +299,32 @@ warning. The time between a `gate_pending` and its decision is an approval wait;
 killed process to the next `run_resumed` is stopped time; neither is the factory's. Grading after `run_finished` is
 grade time. A finding line says whether a check or a reviewer raised it (`ygg.finding.origin`), a dispute that could not
 be used is a `dispute_ignored` line, and every run records the build of ygg that wrote it (`ygg.factory.version`).
+
+The operator's judgements (`ygg score`, `judgements.json`, `ygg.judgement/v1`) are a score from 0 to 10 with what went well and what went wrong, of the run or of one task. A new one replaces the last of the same run or task in the file, the ledger keeps each as a `judged` line, and the record carries the file's list.
+
+The experiment record (`ygg record`, `record.json`, `ygg.run-record/v1`) is the same figures with the run's setup, each
+task's size and findings and the harness's health; `ygg metrics --json` prints it, validated. The setup's hashes are
+the ones `run.json` keeps: the graph's and the realms', and each prompt's and skill's, which the run takes from the
+bytes it reads (`prompt_sha256`, `skill_sha256`), so a file changed later does not change a record; the record never
+reads the prompts again. A run uses one set of instructions: a session whose prompt or skill no longer hashes as the
+run kept fails its node before it starts ("the prompt X changed during the run …; start a new run"). The lines of a task come from `git diff --numstat` in its
+leaf, from its loop's base to its merge's commit, with nothing checked out; blocked answers and notes come from the
+kept outputs, hash-checked and validated, never from prose. What it cannot read is a warning, not an error. A run
+started before `run.json` kept the hashes and resumed by a build that keeps them has the hashes of what it read after
+the resume only: the record names each prompt of the graph's nodes and each skill with none.
+The engine writes `record.json` whenever a run ends, done, failed or stopped, and before a node that reads the `record`
+input. A record that cannot be built or written is a warning of the outcome that names `ygg record`, never a failure,
+and the outcome gives it once at most: the record written at the end stands for any written before.
+
+The retrospective is an ordinary agent node after the grade: a scratch node that declares the input `record` and returns
+`ygg.retro/v1`, with its own role, `retrospective`, in `factory.yaml`. A run that fails before it, the grade included,
+gets none, and a retrospective that fails fails the run with the grade kept in the record. Its record input is the
+record without the judgements and without its own answer, and of the hidden suite the score's totals only (no
+category, no test); it is built apart from the whole record, so a record.json that cannot be written does not stop it.
+Its workspace holds `ledger.jsonl`, a copy of the ledger with no `judged` line and whose grade lines lose their result
+and note, and `transcripts/`, a copy of the run's transcripts in name order of at most 2,000 files and 64 MiB: a file
+larger than the bytes left is skipped, and its prompt says how many were skipped or left out. A `transcripts` folder
+that is a link is refused. Its kept answer is the record's `retro`.
 
 `ygg metrics --compare <runA> <runB>` lays two runs side by side: what differed in the setup, the metrics with the delta
 B minus A, and a verdict for success criterion 7 (the metrics that improved, the ones that got worse, and whether the hidden

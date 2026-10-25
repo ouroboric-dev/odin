@@ -98,6 +98,32 @@ var gradedLimits = "  memory: 4g\n  cpus: 4\n"
 // fake grader. results is what the fake suite writes.
 func startGraded(t *testing.T, nodes, results string, edit func(*tasktest.Task)) *graded {
 	t.Helper()
+	g, err := startGradedWith(t, gradedRun{nodes: nodes, results: results, edit: edit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+// gradedRun says how startGradedWith makes a graded run. An unset script or roles is startGraded's.
+type gradedRun struct {
+	nodes, results string
+	script         string // the scripted agents' steps, whole; gradedScript by default
+	roles          string // the roles: section of factory.yaml, whole; one scripted planner by default
+	noGrader       bool   // factory.yaml has no grader section
+	edit           func(*tasktest.Task)
+}
+
+// startGradedWith is startGraded with the run's script and roles given, and run.Start's error returned.
+func startGradedWith(t *testing.T, o gradedRun) (*graded, error) {
+	t.Helper()
+	nodes, results, edit := o.nodes, o.results, o.edit
+	if o.script == "" {
+		o.script = gradedScript
+	}
+	if o.roles == "" {
+		o.roles = "roles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n"
+	}
 	tk := tasktest.New(t)
 	if edit != nil {
 		edit(tk)
@@ -106,16 +132,19 @@ func startGraded(t *testing.T, nodes, results string, edit func(*tasktest.Task))
 	project := treetest.Project(t, "repos/app")
 	tmpl := filepath.Join(realm, "t")
 	os.MkdirAll(tmpl, 0o755)
+	grader := "grader:\n  tasks_dir: " + tk.TasksDir + "\n  suite_dir: " + tk.SuiteDir + "\n  timeout: 30m\n" + gradedLimits
+	if o.noGrader {
+		grader = ""
+	}
 	files := map[string]string{
 		filepath.Join(tmpl, "LICENSE"):     "MIT\n",
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + gradedPack,
 		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 2\nnodes:\n" + nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
-		filepath.Join(cfg, "script.yaml"):  gradedScript,
-		filepath.Join(cfg, "factory.yaml"): "mode: unattended\ngates: { design: auto }\nroles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n" +
+		filepath.Join(cfg, "script.yaml"):  o.script,
+		filepath.Join(cfg, "factory.yaml"): "mode: unattended\ngates: { design: auto }\n" + o.roles +
 			"budget:\n  per_run: { tokens: 100000, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\n" +
-			"sandbox:\n  engine: unix:///run/ygg-test.sock\n" +
-			"grader:\n  tasks_dir: " + tk.TasksDir + "\n  suite_dir: " + tk.SuiteDir + "\n  timeout: 30m\n" + gradedLimits,
+			"sandbox:\n  engine: unix:///run/ygg-test.sock\n" + grader,
 	}
 	for p, body := range files {
 		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
@@ -129,11 +158,11 @@ func startGraded(t *testing.T, nodes, results string, edit func(*tasktest.Task))
 	}
 	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Brief: tk.Brief(), Hooks: h})
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	t.Cleanup(func() { r.Close() })
 	g.r = r
-	return g
+	return g, nil
 }
 
 func (g *graded) advance(t *testing.T) Outcome {

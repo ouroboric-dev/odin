@@ -6,8 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +17,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/leaf"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
@@ -29,22 +30,66 @@ type Outcome struct {
 	Status run.Status // done, stopped or failed
 	Gate   string     // stopped: the gate node waiting for a decision
 	Err    error      // failed: why
-	Warn   []string   // what the run couldn't clean up, such as a sandbox that wouldn't stop; doctor finds it
+	Warn   []string   // what Odin couldn't do and the operator can, each ending with its next step: a sandbox that wouldn't stop (ygg doctor), a record.json not written (ygg record)
 }
 
 // Advance runs nodes from the run's position until the graph ends, an approval point stops the
 // run, or a node fails. It saves run.json after every node. Every node is safe to re-run: resume
 // starts the interrupted node again from scratch (spec §4.3). The returned error is for failures
-// of Odin itself (disk, ledger); a failing node is an Outcome.
+// of Odin itself (disk, ledger); a failing node is an Outcome. Whichever way the run ends, done,
+// failed or stopped, its folder then holds its record.json (ruling R54).
 func Advance(ctx context.Context, r *run.Run) (out Outcome, err error) {
 	// Every sandbox this call started stops when it returns, whatever way it returns. A sandbox that
 	// won't stop stays recorded in run.json, and the next resume or ygg doctor stops it.
+	r.Warn = nil
 	defer func() {
+		out.Warn = append(out.Warn, r.Warn...)
+		r.Warn = nil
 		if derr := r.DownSandboxes(context.WithoutCancel(ctx)); derr != nil {
-			out.Warn = append(out.Warn, derr.Error())
+			out.Warn = append(out.Warn, derr.Error()+"; ygg doctor finds and stops what is left")
 		}
+		tried, final := false, ""
+		if err == nil {
+			if err = r.Save(); err == nil { // the record reads run.json; a save that fails is Odin's own
+				tried = true
+				if _, rerr := metrics.WriteRecord(r.Dir); rerr != nil {
+					final = recordWarning(r, rerr)
+				}
+			}
+		}
+		out.Warn = settleRecordWarnings(out.Warn, tried, final)
 	}()
 	return advance(ctx, r)
+}
+
+// recordWarned begins every warning of a record.json not written.
+const recordWarned = "record.json could not be written: "
+
+// recordWarning is the warning of a record.json that could not be built or written. It does not change how the run
+// goes or ended, and ygg record builds it again.
+func recordWarning(r *run.Run, err error) string {
+	return fmt.Sprintf(recordWarned+"%v; ygg record %s writes it", err, r.State.ID)
+}
+
+// settleRecordWarnings leaves one record warning at most in warn, at the end of a run: the record written there
+// stands for any written before it (before the retro, and again on its retry). One that the end tried and wrote
+// leaves none; one it tried and could not write leaves its own, final; one it did not try leaves the last given.
+func settleRecordWarnings(warn []string, tried bool, final string) []string {
+	last := ""
+	warn = slices.DeleteFunc(warn, func(w string) bool {
+		if strings.HasPrefix(w, recordWarned) {
+			last = w
+			return true
+		}
+		return false
+	})
+	if tried {
+		last = final
+	}
+	if last != "" {
+		warn = append(warn, last)
+	}
+	return warn
 }
 
 func advance(ctx context.Context, r *run.Run) (Outcome, error) {
@@ -209,15 +254,6 @@ func fail(r *run.Run, n schema.Node, cause error) (Outcome, error) {
 func startAttempt(r *run.Run, n schema.Node) (int, error) {
 	r.State.Attempts[n.ID]++
 	return r.State.Attempts[n.ID], r.Save()
-}
-
-// readPrompt reads the prompt file of the realm named realm ("" is the graph pack).
-func readPrompt(s *run.Setup, realm, file string) ([]byte, error) {
-	path, err := s.PromptFile(realm, file)
-	if err != nil {
-		return nil, err
-	}
-	return os.ReadFile(path)
 }
 
 // runAgent runs agent node n in the repo it works in: one session, whose prompt promptFor builds from the node's

@@ -43,21 +43,30 @@ func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]
 		who, role, realm, file, skillNames, output = n.SessionKey(*rv), rv.Role, "", rv.Prompt, rv.Skills, rv.Output
 	}
 	inputs := sessionInputs(n, rv)
-	b, err := readPrompt(r.Setup, realm, file)
+	b, err := r.ReadPrompt(realm, file) // its hash is kept in run.json, for the record (ruling R55)
 	if err != nil {
-		return "", err
+		return "", changed(err)
 	}
 	text := strings.TrimRight(string(b), "\n")
 	// Skills load explicitly, the ones the session names, and no others (spec §5.1).
-	skillText, err := r.Setup.Libs.Load(skillNames)
+	skillText, err := r.LoadSkills(skillNames)
 	if err != nil {
-		return "", err
+		return "", changed(err)
 	}
 	if skillText != "" {
 		text = strings.TrimRight(text+"\n\n"+skillText, "\n")
 	}
 	if n.Scratch {
-		text = strings.TrimRight(text+"\n\n"+workspaceNote(), "\n")
+		note := workspaceNote()
+		if rv == nil && slices.Contains(inputs, schema.SourceRecord) {
+			// The retrospective reads the ledger and the transcripts beside the record (change typed-boundaries §5).
+			more, err := seedRecordFiles(r, n)
+			if err != nil {
+				return "", &nodeFailure{err}
+			}
+			note += more
+		}
+		text = strings.TrimRight(text+"\n\n"+note, "\n")
 	}
 	files, err := inputFiles(r, n)
 	if err != nil {
@@ -194,4 +203,14 @@ func writeInputFile(base, folder, name, body string) (string, error) {
 		return "", err
 	}
 	return filepath.ToSlash(filepath.Join(folder, name+".md")), nil
+}
+
+// changed makes a prompt or a skill that changed during the run a failure of the node, before its session starts
+// (ruling R56): a resume reads it again, and fails again until the file is back or a new run starts.
+func changed(err error) error {
+	var ce *run.ChangedError
+	if errors.As(err, &ce) {
+		return &nodeFailure{err}
+	}
+	return err
 }

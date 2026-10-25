@@ -5,8 +5,11 @@
 package metrics
 
 import (
+	"encoding/json"
 	"strconv"
 	"time"
+
+	"github.com/ouroboric-dev/gungnir/schema"
 )
 
 // Duration is a time.Duration that is written in JSON as whole milliseconds, which the field names promise.
@@ -86,5 +89,12 @@ type Run struct {
 	Findings      Findings      `json:"findings"`
 	Interventions Interventions `json:"interventions"`
 	Grade         *Grade        `json:"grade,omitempty"`
+	GradeSkipped  bool          `json:"-"` // a grade node was skipped, as factory.yaml has no grader; it is in no record
 	Routing       Routing       `json:"routing"`
+
+	// The experiment record's own parts (ygg.run-record/v1, change typed-boundaries §5).
+	Setup      Setup              `json:"setup"`
+	Harness    Harness            `json:"harness"`
+	Retro      json.RawMessage    `json:"retro,omitempty"`      // the retrospective's output, as Odin kept and validated it
+	Judgements []schema.Judgement `json:"judgements,omitempty"` // the operator's, of the run and of its tasks
 }

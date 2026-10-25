@@ -38,7 +38,8 @@ func Collect(dir string) (*Run, error) {
 	}
 	r := &Run{ID: state.ID, Status: string(state.Status), Mode: string(state.Mode), Graph: state.Graph, GraphVersion: state.GraphVersion,
 		ConfigSHA256: state.ConfigSHA256, BriefSHA256: state.BriefSHA256, Roles: map[string]Setting{}, Realms: map[string]string{},
-		ByRole: map[string]Usage{}, Leaves: map[string]Group{}, Tasks: []Task{}, BlockedTasks: []BlockedTask{}, Factory: []string{}, Warnings: []string{}}
+		ByRole: map[string]Usage{}, Leaves: map[string]Group{}, Tasks: []Task{}, BlockedTasks: []BlockedTask{}, Factory: []string{}, Warnings: []string{},
+		Setup: newSetup(), Harness: newHarness()}
 	for name, rr := range state.Roles {
 		r.Roles[name] = Setting{Agent: rr.Agent, Model: rr.Model}
 	}
@@ -46,6 +47,7 @@ func Collect(dir string) (*Run, error) {
 		r.Realms[name] = rl.Version
 	}
 	if len(events) == 0 {
+		r.experiment(dir, state, events)
 		return r, nil
 	}
 	r.clock(events)
@@ -88,7 +90,44 @@ func Collect(dir string) (*Run, error) {
 	if err := r.grade(dir, state, events); err != nil {
 		return nil, err
 	}
+	r.experiment(dir, state, events)
 	return r, nil
+}
+
+// experiment fills what the experiment record adds to the metrics: the setup, the harness's health and each
+// task's size. What it can't read is a warning, never an error: the metrics stand without it.
+func (r *Run) experiment(dir string, state *record, events []gungnir.Event) {
+	r.setup(state, events)
+	r.harness(dir, state, events)
+	r.sizes(state, events)
+	r.judgements(dir)
+	r.retro(dir, state)
+}
+
+// retro reads the retrospective's answer (ygg.retro/v1), as Odin kept and validated it in outputs/, into the record.
+// A run whose retro has not answered has none. The record holds one: of two retro nodes, the first by id is kept,
+// and the other is a warning.
+func (r *Run) retro(dir string, state *record) {
+	var keys []string
+	for k, ref := range state.Outputs {
+		if schema.Contract(ref.Contract) == schema.ContractRetro {
+			keys = append(keys, k)
+		}
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		if r.Retro != nil {
+			r.Warnings = append(r.Warnings, fmt.Sprintf("the retro of %s is left out: the record holds one retrospective", k))
+			continue
+		}
+		ref := state.Outputs[k]
+		data, err := readKept(dir, k, ref.Path, ref.SHA256, schema.ContractRetro)
+		if err != nil {
+			r.Warnings = append(r.Warnings, fmt.Sprintf("the retro of %s is left out: %v", k, err))
+			continue
+		}
+		r.Retro = json.RawMessage(data)
+	}
 }
 
 func readEvents(path string) ([]gungnir.Event, error) {

@@ -73,6 +73,7 @@ type Setup struct {
 	Mode         gungnir.Mode
 	Agents       map[string]gungnir.Agent // role: adapter, for every role the graph uses
 	Libs         skills.Libraries         // where the graph's skills come from
+	privateDir   string                   // the folder Libs.Private was opened from, which a session's skills are read from again
 	Skills       skills.Record            // every skill the graph names, with the set's hash
 	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
 	newSandbox   NewSandbox
@@ -255,10 +256,10 @@ func (s *Setup) findProject(ctx context.Context, project string) error {
 func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) error {
 	switch {
 	case n.Kind == schema.KindGrade:
-		// Grading runs the hidden suite in a container of the engine the sandbox section names, so a graph
-		// with a grade node needs both sections, before anything runs.
-		if s.Config.Grader == nil || s.Config.Sandbox == nil {
-			return fmt.Errorf("%s: node %s grades the run, which needs the grader and the sandbox sections in %s", graphPath, n.ID, s.ConfigPath)
+		// Grading runs the hidden suite in a container of the engine the sandbox section names, so a grader
+		// needs the sandbox section, before anything runs. With no grader section the node is skipped (ruling R63).
+		if s.Config.Grader != nil && s.Config.Sandbox == nil {
+			return fmt.Errorf("%s: node %s grades the run with the grader of %s, which needs the sandbox section: it names the engine the grader runs on", graphPath, n.ID, s.ConfigPath)
 		}
 		return nil
 	case n.Kind == schema.KindGate, n.Kind == schema.KindPublish, n.Kind == schema.KindTasks, n.Kind == schema.KindInit:
@@ -397,7 +398,7 @@ func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 // checkSession checks that a session of node (a node, or a loop's reviewer) can run: its prompt file
 // is in the graph pack and its role is in factory.yaml, whose adapter is built once per role.
 func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
-	path, err := s.PromptFile("", prompt)
+	path, err := s.promptFile("", prompt)
 	if err == nil {
 		_, err = os.Stat(path)
 	}
@@ -577,10 +578,11 @@ func (s *Setup) NodeRealm(n schema.Node) (*realm.Realm, error) {
 	return nil, fmt.Errorf("node %s names the realm %s, which is not loaded", n.ID, n.Realm)
 }
 
-// PromptFile is the path of a prompt file: in the realm called realmName, or in the graph pack for "". The
+// promptFile is the path of a prompt file: in the realm called realmName, or in the graph pack for "". The
 // prompts of agent nodes and reviewers are the graph pack's; a task's implementer prompt is its leaf's
-// realm's. A realm that is not loaded is an error.
-func (s *Setup) PromptFile(realmName, file string) (string, error) {
+// realm's. A realm that is not loaded is an error. It is unexported so a session's prompt is read only through
+// Run.ReadPrompt, which checks it against the hash the run kept (ruling R56).
+func (s *Setup) promptFile(realmName, file string) (string, error) {
 	if realmName == "" {
 		return filepath.Join(s.GraphPack.Dir, file), nil
 	}
@@ -681,6 +683,7 @@ type Run struct {
 	changes  []gungnir.Event // a mode or config switch Open found, not yet in the ledger
 	Saved    []string        // one note per leaf whose discarded changes Open saved to a ref, or discarded unsaved, before resetting it
 	SetAside []string        // the notes of Saved from the set-aside of a session whose spend the journal couldn't take, for its gate (review I4)
+	Warn     []string        // what this process could not do and the operator can, each with its next step; the engine's Advance hands them on
 	Sandbox  gungnir.Sandbox // runs the leaves' commands; nil when the config has no sandbox section
 	Grader   Grader          // runs the hidden suite; nil unless the config has a grader and a sandbox section
 	Releaser Releaser        // builds the releases of the export; nil adds none
@@ -1065,6 +1068,12 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		unlock()
 		return nil, err
 	}
+	prompts, skillHashes, err := fingerprints(setup)
+	if err != nil {
+		l.Close()
+		unlock()
+		return nil, err
+	}
 	now := time.Now().UTC()
 	r := &Run{Project: project, Dir: dir, Setup: setup, Ledger: l, unlock: unlock, State: &State{
 		ID: id, Status: StatusRunning, Mode: setup.Mode,
@@ -1072,7 +1081,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Realms: realmRecords(setup), GraphSHA256: setup.GraphSHA256,
 		Factory:    version.Factory(),
 		ConfigPath: setup.ConfigPath, ConfigSHA256: setup.ConfigSHA256,
-		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
+		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills, PromptSHA256: prompts, SkillSHA256: skillHashes,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
 		Waived: map[string]bool{}, Judged: map[string]string{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, NewLeaves: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Outputs: map[string]OutputRef{}, Created: now, Updated: now,
