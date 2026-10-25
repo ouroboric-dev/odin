@@ -49,6 +49,7 @@ const usage = `usage:
   ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <mode>]   (started by the Harbor adapter)
   ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
+  ygg models  preset <models.yaml> | server <models.yaml> | image | build [--cuda-arch <list>] [--config <factory.yaml>]
   ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
 exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused: the provider's quota is used up,
   5 done, with tasks given up (unattended)
@@ -68,7 +69,7 @@ func MainWithInput(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	c := &command{ctx: ctx, in: stdin, out: stdout, err: stderr}
 	cmds := map[string]func([]string) int{
 		"run": c.run, "resume": c.resume, "approve": c.approve, "reject": c.reject,
-		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "grade": c.grade, "deps": c.deps, "metrics": c.metrics, "record": c.record, "score": c.score, "report": c.report, "board": c.board, "bridge": c.bridge,
+		"status": c.status, "doctor": c.doctor, "sandbox": c.sandbox, "models": c.models, "grade": c.grade, "deps": c.deps, "metrics": c.metrics, "record": c.record, "score": c.score, "report": c.report, "board": c.board, "bridge": c.bridge,
 	}
 	f, ok := cmds[args[0]]
 	if !ok {

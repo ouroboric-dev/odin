@@ -246,6 +246,14 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   `grader.cpus: 0` ask for no limit, for an engine that cannot apply one; `ygg doctor` warns when either is
   set, because only the timeout then holds a suite that hangs. `ygg doctor` also finds the grader containers
   a killed `ygg` left (label `ygg.grader`) and removes the ones no live run holds.
+- Serves the local models' list to the scripts (local-models spec §3.2 to §3.4): `ygg models preset FILE` prints
+  llama-server's preset INI, `ygg models server FILE` prints NAME, NETWORK, PORT, HOST_PORT, WEIGHTS and STATE as
+  `KEY=value` lines (`schema.ParseModels` checked every value, so a shell reads them unquoted), `ygg models image`
+  prints the tag of the model server's image without building it, and `ygg models build [--cuda-arch N]` builds the
+  image (`Driver.BuildModels`) and prints the tag. `ygg doctor` checks each local role (`checkModels`): the list
+  not holding the model is an error; a server that does not answer at the host URL (it names
+  `scripts/ygg-models.sh start`), or a model network that `podman network inspect` does not call internal, is a
+  warning. A config with no local role adds no line.
 - Finds, in `ygg doctor`, the empty pods that compose leaves behind when a sandbox goes (named
   `pod_ygg<run id>...`, no label), reports their number and removes the ones no live run or bump holds. A
   pod is tied to its run by its name starting with the run's prefix, so a pod that matches no run of the
