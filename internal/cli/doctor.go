@@ -526,11 +526,17 @@ func checkGraphPrompts(f *schema.Factory, pack *realm.Realm, report func(level, 
 	if err := g.CheckPrompts(pack.Dir); err != nil {
 		report("ERROR", "graphs", pack.Name+": "+err.Error())
 	}
+	// A store that cannot be read, a realm that does not load, and a config with no realms section are reported by
+	// checkRealms, so this walk leaves them out rather than report them twice.
 	var realms []*realm.Realm
 	if f.Realms != nil {
 		entries, _ := os.ReadDir(f.Realms.Dir)
 		for _, e := range entries {
-			if r, err := realm.Load(filepath.Join(f.Realms.Dir, e.Name())); err == nil {
+			dir := filepath.Join(f.Realms.Dir, e.Name())
+			if _, err := os.Stat(filepath.Join(dir, "pack.yaml")); err != nil {
+				continue // not a realm leaf
+			}
+			if r, err := realm.Load(dir); err == nil {
 				realms = append(realms, r)
 			}
 		}

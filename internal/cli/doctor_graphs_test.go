@@ -306,9 +306,14 @@ func TestDoctorReportsAPromptThatNamesAnInputItsSessionDoesNotDeclare(t *testing
 		t.Fatal(err)
 	}
 	code, out, _ := ygg(t, "doctor", "--project", dir, "--config", config2)
-	for _, w := range []string{"ERROR graphs: flow: graph.yaml: node design: prompts/design.md", "prompts/design.md", "brief", "implementer prompt prompts/implementer.md", "the input design"} {
-		if !strings.Contains(out, w) {
-			t.Errorf("doctor's output lacks %q:\n%s", w, out)
+	// Both lines in full: the graph's prompt, and the realm's implementer prompt.
+	for _, w := range []string{
+		"ERROR graphs: flow: graph.yaml: node design: prompts/design.md names the input `brief`, which the session does not declare",
+		"ERROR graphs: flow: realm ground: the implementer prompt prompts/implementer.md (" + filepath.Join(store, "ground", "prompts", "implementer.md") +
+			") names the input design, which loop implement does not declare; a session sees only the inputs its node declares",
+	} {
+		if !strings.Contains(out, w+"\n") {
+			t.Errorf("doctor's output lacks the line %q:\n%s", w, out)
 		}
 	}
 	if code != ExitFailed {

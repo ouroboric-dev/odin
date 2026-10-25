@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -607,5 +608,35 @@ func TestInitRefusesAnUncommittedGitignoreAndCommitsNothing(t *testing.T) {
 	}
 	if _, ok := r.Setup.Project.Umbrella.Children["repos/api"]; ok {
 		t.Error("a leaf was created before the refusal")
+	}
+}
+
+// The realms of a fresh run enter at the init node, after run start, so init holds their implementer prompts to
+// the rule of the prompts too (ruling R66): a prompt that names an input the loop does not declare is refused
+// before any leaf is created.
+func TestInitRefusesARealmWhoseImplementerPromptNamesAnInputTheLoopDoesNotDeclare(t *testing.T) {
+	nodes := "  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection, refusal], output: ygg.plan/v1 }\n" +
+		"  - { id: ready, kind: tasks, from: plan }\n" + initNode +
+		"  - id: tasks\n    kind: foreach\n    over: tasks\n    nodes:\n" +
+		"      - { id: implement, kind: loop, realm: leaf, role: implementer, input: [task, rejection, refusal, open_findings, check_results], output: ygg.implement/v1 }\n" +
+		"      - { id: feature-gate, kind: gate, gate: feature }\n"
+	r := startRealms(t, realmsSetup{nodes: nodes, script: "steps: {}\n", realms: []realmFiles{
+		recipeRealm("midgard-react", "0.1.0", "web.txt", "Build the `task`."), recipeRealm("helheim-go", "0.2.0", "api.txt", "Build the `task`, from the `brief`.")}})
+	if err := os.MkdirAll(filepath.Join(r.Project, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.Project, "docs", "leaves.yaml"), []byte(galleryLeaves), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runInit(context.Background(), r, schema.Node{ID: "leaves", Kind: schema.KindInit, From: "docs/leaves.yaml"})
+	var nf *nodeFailure
+	if !errors.As(err, &nf) || !strings.Contains(err.Error(), "helheim-go") || !strings.Contains(err.Error(), "names the input brief") {
+		t.Fatalf("runInit() = %v; want a failure of the node naming the realm and the input brief", err)
+	}
+	if strings.Contains(ledgerText(t, r), `"event":"repo_created"`) {
+		t.Error("a leaf was created before init refused")
+	}
+	if u, _ := schema.LoadUmbrella(r.Project); len(u.Children) != 0 {
+		t.Errorf("init created %v before refusing", u.Paths())
 	}
 }
