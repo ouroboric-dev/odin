@@ -56,7 +56,7 @@ func TestAMalformedReviewerOutputStopsTheLoopForAPerson(t *testing.T) {
     - result: { status: ok, report: [], usage: { in: 100, out: 10, turns: 1 } }
 `
 	dir, config, realm := loopProject(t, script, "")
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", realm, "--mode", "unattended")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", realm, "--mode", "unattended", "--brief", writeFile(t, "brief.md", "Write build.txt.\n"))
 	id := runID(t, dir)
 	if code != ExitStopped || !strings.Contains(out, "stopped at approval point build, which takes no approval") || !strings.Contains(out, "ygg reject "+id+" build --reason") || strings.Contains(out, "ygg approve") {
 		t.Fatalf("run: exit %d:\n%s%s\nwant a stop that offers a rejection only", code, out, errOut)
@@ -94,7 +94,7 @@ func TestARunThatHitsACapStopsResumableAndGoesOnWhenTheCapIsRaised(t *testing.T)
 `
 	caps := "budget:\n  per_run: { tokens: 2000, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\n"
 	dir, config, realm := loopProject(t, script, caps)
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", realm)
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", realm, "--brief", writeFile(t, "brief.md", "Write build.txt.\n"))
 	id := runID(t, dir)
 	if code != ExitStopped || !strings.Contains(out, "stopped at the hard approval point budget-cap") || strings.Contains(out, "ygg reject") {
 		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
@@ -139,7 +139,7 @@ func TestAFindingClosesOnlyWhenItsSourceConfirmsItWithProof(t *testing.T) {
   build-quality: [ { result: { status: ok, report: [] } } ]
 `
 	dir, config, realm := loopProject(t, script, "")
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", realm)
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", config, "--graph", realm, "--brief", writeFile(t, "brief.md", "Write build.txt.\n"))
 	if code != ExitDone {
 		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
 	}

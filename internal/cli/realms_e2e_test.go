@@ -50,7 +50,7 @@ func galleryConfig(t *testing.T, mode, gates, script string) string {
 func TestARunOfTheToyRealmsBuildsAProductFromTwoRealms(t *testing.T) {
 	dir := treetest.Project(t)
 	cfg := galleryConfig(t, "key-points", "", "../../testdata/realms-scripts/gallery.yaml")
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy", "--brief", writeFile(t, "brief.md", "Build the toy product.\n"))
 	if code != ExitStopped || !strings.Contains(out, "stopped at approval point design-gate") {
 		t.Fatalf("run: exit %d:\n%s%s", code, out, errOut)
 	}
@@ -153,7 +153,7 @@ func TestAnUnattendedRunOfTheToyRealmsGivesUpATaskAndExitsFive(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := galleryConfig(t, "unattended", "gates:\n  design: auto\n", path)
-	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy")
+	code, out, errOut := ygg(t, "run", "--project", dir, "--config", cfg, "--graph", "midgard-toy", "--brief", writeFile(t, "brief.md", "Build the toy product.\n"))
 	if code != ExitBlocked {
 		t.Fatalf("exit %d, want %d:\n%s%s", code, ExitBlocked, out, errOut)
 	}

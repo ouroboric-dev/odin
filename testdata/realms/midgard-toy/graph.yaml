@@ -5,7 +5,7 @@ name: midgard-toy
 version: 0.1.0
 schema: 2
 nodes:
-  - { id: design, kind: agent, role: planner, prompt: prompts/design.md, scratch: true, input: [rejection], output: ygg.design/v1 }
+  - { id: design, kind: agent, role: planner, prompt: prompts/design.md, scratch: true, input: [brief, rejection], output: ygg.design/v1 }
   - { id: design-gate, kind: gate, gate: design }
   - { id: design-docs, kind: publish, from: design, to: docs }
   - { id: spec, kind: agent, role: planner, prompt: prompts/spec.md, scratch: true, input: [design, decisions, rejection, refusal], output: ygg.spec/v1 }

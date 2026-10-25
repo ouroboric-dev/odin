@@ -14,7 +14,7 @@ nodes:
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: reviewer, prompt: prompts/review-spec.md, input: [change, open_findings, check_results, rejection], output: ygg.review/v1 }
+      - { id: spec, role: reviewer, prompt: prompts/review-spec.md, input: [brief, change, open_findings, check_results, rejection], output: ygg.review/v1 }
       - { id: quality, role: reviewer, prompt: prompts/review-quality.md, input: [change, open_findings, check_results, rejection], output: ygg.review/v1 }
   - { id: feature-gate, kind: gate, gate: feature }
   - { id: merge, kind: merge, repo: repos/app, checks: [unit] }
