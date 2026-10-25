@@ -251,4 +251,4 @@ steps:
         output: |
           {"went_well": [{"category": "automated-checks", "severity": "low", "text": "Each task passed its check ladder in its first attempt.", "block": "implement", "evidence": ["task:version-T001", "task:version-T002"]}],
            "went_wrong": [],
-           "suggestions": [{"category": "other", "severity": "low", "text": "The run was not graded; a factory with a grader would give the retro a score to read.", "block": "grade", "evidence": ["record:grade"]}]}
+           "suggestions": [{"category": "information-access", "severity": "low", "text": "repos/api's contract index does not list openapi.yaml, so its contract gate stopped for a person; listing it would let the gate read the contract.", "block": "contract-gate", "evidence": ["task:version-T001"]}]}
