@@ -1,9 +1,10 @@
 # The scripted agents' answers for the content smoke run (v0-H15): a one-feature brief (the gallery's
 # version) built in two leaves, with real code and real tests, so that every rung of the realms' check ladders
 # and the acceptance run have something real to judge. Every stage answers with its typed contract (change
-# typed-boundaries): the planners' documents, the reviews and the implementers' summaries are each session's whole
-# final answer, which Odin validates, keeps and publishes; the implementers also write what a real implementer
-# would, with the commands a real one would run. The run is given brief.md (ygg-smoke-realms.sh --brief).
+# typed-boundaries): the planners' documents, the reviews, the implementers' summaries and the retrospective's retro
+# are each session's whole final answer, which Odin validates, keeps and publishes; the implementers also write what
+# a real implementer would, with the commands a real one would run. The run is given brief.md (ygg-smoke-realms.sh
+# --brief). Its factory has no grader, so the grade before the retro is skipped.
 steps:
   design:
     - result:
@@ -242,3 +243,12 @@ steps:
     - result: { status: ok, output: '{"findings": []}' }
   version-t002-implement-quality:
     - result: { status: ok, output: '{"findings": []}' }
+  retro:
+    - result:
+        status: ok
+        summary: looked back at the run
+        usage: { in: 1000, out: 100, turns: 2 }
+        output: |
+          {"went_well": [{"category": "automated-checks", "severity": "low", "text": "Each task passed its check ladder in its first attempt.", "block": "implement", "evidence": ["task:version-T001", "task:version-T002"]}],
+           "went_wrong": [],
+           "suggestions": [{"category": "other", "severity": "low", "text": "The run was not graded; a factory with a grader would give the retro a score to read.", "block": "grade", "evidence": ["record:grade"]}]}

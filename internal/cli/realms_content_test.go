@@ -118,6 +118,8 @@ const (
 		`{"id": "gallery-T003", "title": "The web app shows a gallery", "criteria": ["A gallery page shows its name.", "An unknown gallery shows an error."], ` +
 		`"named_test": "src/gallery.test.tsx", "layer": "repos/web", "size": "S", "depends_on": ["gallery-T002"], ` +
 		`"text": "A gallery page shows the name of the gallery."}]}`
+	galleryRetro = `{"went_well": [{"category": "automated-checks", "severity": "low", "text": "Each task passed its ladder first time.", ` +
+		`"block": "implement", "evidence": ["task:gallery-T001"]}], "went_wrong": [], "suggestions": []}`
 )
 
 const realScript = `steps:
@@ -140,6 +142,8 @@ const realScript = `steps:
   gallery-t003-implement:
     - actions: [ { write: { path: gallery.txt, content: "done\n" } } ]
       result: { status: ok, summary: built the gallery page, usage: { in: 2000, out: 200, turns: 4 }, output: '{"summary": "done"}' }
+  retro:
+    - result: { status: ok, summary: looked back, usage: { in: 1000, out: 100, turns: 2 }, output: '` + galleryRetro + `' }
 `
 
 func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
@@ -181,7 +185,8 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	roles := "{ agent: scripted, model: none, script: " + path + " }"
 	cfg := filepath.Join(t.TempDir(), "factory.yaml")
-	body := "mode: key-points\nroles:\n  planner: " + roles + "\n  implementer: " + roles + "\n  reviewer: " + roles + "\n" +
+	// No grader section: the graph's grade is skipped, and the retrospective reads a record with no grade (ruling R63).
+	body := "mode: key-points\nroles:\n  planner: " + roles + "\n  implementer: " + roles + "\n  reviewer: " + roles + "\n  retrospective: " + roles + "\n" +
 		"budget:\n  per_run: { tokens: 1000000, turns: 1000 }\n  per_day: { tokens: 2000000, turns: 2000 }\nrealms:\n  dir: " + store + "\ngraphs:\n  dir: " + graphs + "\n"
 	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -259,10 +264,19 @@ func TestTheRealRealmsBuildAProductFromABriefWithScriptedAgents(t *testing.T) {
 		}
 	}
 	ledger, _ := os.ReadFile(filepath.Join(run.Dir(dir, id), "ledger.jsonl"))
-	for _, want := range []string{`"event":"conformance_checked"`, `"ygg.result":"no deviation"`, `"event":"tasks_ready"`, `"event":"pointer_moved"`} {
+	for _, want := range []string{`"event":"conformance_checked"`, `"ygg.result":"no deviation"`, `"event":"tasks_ready"`, `"event":"pointer_moved"`,
+		`"ygg.result":"graded: skipped, no grader in factory.yaml"`} {
 		if !strings.Contains(string(ledger), want) {
 			t.Errorf("the ledger lacks %s", want)
 		}
+	}
+	// The retrospective ran last, and record.json holds its retro and no grade.
+	var rec map[string]any
+	if b, err := os.ReadFile(filepath.Join(run.Dir(dir, id), "record.json")); err != nil || json.Unmarshal(b, &rec) != nil {
+		t.Fatalf("record.json: %v", err)
+	}
+	if st.Attempts["retro"] != 1 || rec["retro"] == nil || rec["grade"] != nil {
+		t.Errorf("the retro ran %d time(s); record.json: retro %v, grade %v", st.Attempts["retro"], rec["retro"], rec["grade"])
 	}
 	// The simplicity reviewer and the reuse review got the vendored Ponytail skill in their prompts.
 	for _, stem := range []string{"reuse-review-1", "gallery-t001-implement-simplicity-1"} {

@@ -89,6 +89,7 @@ type Run struct {
 	Findings      Findings      `json:"findings"`
 	Interventions Interventions `json:"interventions"`
 	Grade         *Grade        `json:"grade,omitempty"`
+	GradeSkipped  bool          `json:"-"` // a grade node was skipped, as factory.yaml has no grader; it is in no record
 	Routing       Routing       `json:"routing"`
 
 	// The experiment record's own parts (ygg.run-record/v1, change typed-boundaries §5).

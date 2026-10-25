@@ -25,6 +25,10 @@ type Category struct {
 	Weight float64 `json:"weight"`
 }
 
+// GradeSkipped is the result of a grade node when factory.yaml has no grader section: Odin skips the node, and the
+// run goes on with no grade (ruling R63).
+const GradeSkipped = "graded: skipped, no grader in factory.yaml"
+
 // Grade is the hidden suite's result for the run.
 type Grade struct {
 	Task        string              `json:"task"`
@@ -79,6 +83,8 @@ func (r *Run) grade(dir string, state *record, events []gungnir.Event) error {
 			finished, fin, refused = e.Time, &events[i], ""
 		case gungnir.EventGradeRefused:
 			refused = string(e.Reason)
+		case gungnir.EventNodeFinished:
+			r.GradeSkipped = r.GradeSkipped || e.Result == GradeSkipped
 		}
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "score.json"))

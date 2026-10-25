@@ -198,24 +198,25 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Counts every session's usage, a failed one's too, in the run and in a daily spend journal outside
   any project, and stops the run at the hard approval point `budget-cap` before a session would start
   over a cap (spec §7.4). Pauses the run when the provider's quota is used up (spec §12).
-- Grades a build (spec §11, change benchmark-split). The `grade` node is the last node of a graph. It stops
-  every sandbox first, exports the committed files of the project as `/app` (with, for each leaf that holds an
-  executable `release.sh`, its release at `.ygg/release/<leaf path>/`, see below), and runs the hidden suite of the
-  task in a container of Gleipnir's `Grade`: no network, `/app` read and write, `/tests` read only, one empty
-  folder for the suite's own logs, and no other mount. It checks the task first (`task.toml`, the hash of
-  `instruction.md`, the suite version, the retired mark, the suite's `manifest.json`) and refuses with
+- Grades a build (spec §11, change benchmark-split). The `grade` node is the last node of a graph but the
+  retrospective. With no `grader` section in `factory.yaml` it is skipped: the node finishes with the result
+  "graded: skipped, no grader in factory.yaml", the run goes on, and the record holds no grade (ruling R63).
+  Otherwise it stops every sandbox first, exports the committed files of the project as `/app` (with, for each leaf
+  that holds an executable `release.sh`, its release at `.ygg/release/<leaf path>/`, see below), and runs the
+  hidden suite of the task in a container of Gleipnir's `Grade`: no network, `/app` read and write, `/tests` read
+  only, one empty folder for the suite's own logs, and no other mount. It checks the task first (`task.toml`, the
+  hash of `instruction.md`, the suite version, the retired mark, the suite's `manifest.json`) and refuses with
   `grade_refused` and a reason, before it builds anything. It gives each attempt a random key (16 bytes, hex),
   which the container gets as `YGG_SCORE_KEY`, and reads the scores from the container's stdout: the one line
   `ygg-results/v1 <key> <report>`, the Playwright JSON report on a single line. The app shares the container and
-  can write to the logs folder, so Odin never opens it. A line without the key is ignored; no line with the
-  key, or two or more, or a line that is not a report, is a failed grade (`GradeFailed`: no `score.json`, a
-  resume grades again), never a score of 0. The key is in no event and no state; it can stay in `grade.log`,
-  which is `0600` and never for an agent. It joins the manifest and the report and writes `score.json` to the
-  run folder and nowhere else. Fail-to-pass scenarios decide
-  the reward, by category and weight. Pass-to-pass scenarios are reported and never change it. An agent
-  never sees the suite folder, `score.json` or the container's output. `ygg grade <run-id>` grades a done
-  run that has no grade node, or grades again; `--task` names the task when the brief of the run is not the
-  `instruction.md` of a task.
+  can write to the logs folder, so Odin never opens it. A line without the key is ignored; no line with the key, or
+  two or more, or a line that is not a report, is a failed grade (`GradeFailed`: no `score.json`, a resume grades
+  again), never a score of 0. The key is in no event and no state; it can stay in `grade.log`, which is `0600` and
+  never for an agent. It joins the manifest and the report and writes `score.json` to the run folder and nowhere
+  else. Fail-to-pass scenarios decide the reward, by category and weight. Pass-to-pass scenarios are reported and
+  never change it. An agent never sees the suite folder, `score.json` or the container's output. `ygg grade
+  <run-id>` grades a done run that has no grade node or whose grade was skipped, or grades again, and needs the
+  `grader` section; `--task` names the task when the brief of the run is not the `instruction.md` of a task.
 - Adds the release to the export. A `Releaser` builds the release of each leaf with an executable `release.sh`,
   and Odin copies it to `.ygg/release/<leaf path>/` (for example `.ygg/release/repos/api/`) in the export only: a
   release is never committed to the project or a leaf. `ygg grade` and `ygg bridge` build it in the project's

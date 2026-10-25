@@ -48,7 +48,8 @@ func TestEveryFieldOfTheRecordIsInOrOutOfTheRetrosView(t *testing.T) {
 		"Usage", "ByRole", "Tasks", "Leaves", "BlockedTasks", "Retries",
 		"Warnings", // without the warning about the judgements
 		"Loops", "Review", "Findings", "Interventions",
-		"Grade", // the score's totals only
+		"Grade",        // the score's totals only
+		"GradeSkipped", // in no record: it says why the text shows no grade
 		"Routing", "Setup", "Harness"}
 	out := []string{"Retro", "Judgements"}
 	for _, f := range reflect.VisibleFields(reflect.TypeFor[Run]()) {

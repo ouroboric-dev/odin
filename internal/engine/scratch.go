@@ -17,6 +17,7 @@ import (
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -111,13 +112,16 @@ const (
 // seedRecordFiles gives the workspace of a scratch node that reads the record what else the retrospective reads
 // (change typed-boundaries §5): ledger.jsonl, a copy of the run's ledger whose grade lines keep only the totals, and
 // transcripts/, a copy of the run's transcripts up to the bound. Every transcript was written by a session before
-// the grade, and nothing of the grade's own folder is copied. It returns what the prompt says of them.
+// the grade, and nothing of the grade's own folder is copied. It returns what the prompt says of them, and that the
+// run was not graded when its grade was skipped.
 func seedRecordFiles(r *run.Run, n schema.Node) (string, error) {
 	ws := r.ScratchDir(n.ID)
 	var grades []string
+	skipped := false
 	for _, m := range r.Setup.Graph.All() {
 		if m.Kind == schema.KindGrade {
 			grades = append(grades, m.ID)
+			skipped = skipped || r.State.Summaries[m.ID] == metrics.GradeSkipped
 		}
 	}
 	if err := copyLedger(filepath.Join(r.Dir, "ledger.jsonl"), filepath.Join(ws, "ledger.jsonl"), grades); err != nil {
@@ -127,7 +131,11 @@ func seedRecordFiles(r *run.Run, n schema.Node) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("copying the transcripts for %s: %w", n.ID, err)
 	}
-	return retroNote(c), nil
+	note := retroNote(c)
+	if skipped {
+		note += "- The run was not graded: factory.yaml has no grader, so the record holds no grade and there is no score to look for.\n"
+	}
+	return note, nil
 }
 
 // transcriptCopy is how a copy of the transcripts went: the files it copied, the ones it skipped because each was

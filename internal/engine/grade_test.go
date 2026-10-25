@@ -110,6 +110,7 @@ type gradedRun struct {
 	nodes, results string
 	script         string // the scripted agents' steps, whole; gradedScript by default
 	roles          string // the roles: section of factory.yaml, whole; one scripted planner by default
+	noGrader       bool   // factory.yaml has no grader section
 	edit           func(*tasktest.Task)
 }
 
@@ -131,6 +132,10 @@ func startGradedWith(t *testing.T, o gradedRun) (*graded, error) {
 	project := treetest.Project(t, "repos/app")
 	tmpl := filepath.Join(realm, "t")
 	os.MkdirAll(tmpl, 0o755)
+	grader := "grader:\n  tasks_dir: " + tk.TasksDir + "\n  suite_dir: " + tk.SuiteDir + "\n  timeout: 30m\n" + gradedLimits
+	if o.noGrader {
+		grader = ""
+	}
 	files := map[string]string{
 		filepath.Join(tmpl, "LICENSE"):     "MIT\n",
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + gradedPack,
@@ -139,8 +144,7 @@ func startGradedWith(t *testing.T, o gradedRun) (*graded, error) {
 		filepath.Join(cfg, "script.yaml"):  o.script,
 		filepath.Join(cfg, "factory.yaml"): "mode: unattended\ngates: { design: auto }\n" + o.roles +
 			"budget:\n  per_run: { tokens: 100000, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\n" +
-			"sandbox:\n  engine: unix:///run/ygg-test.sock\n" +
-			"grader:\n  tasks_dir: " + tk.TasksDir + "\n  suite_dir: " + tk.SuiteDir + "\n  timeout: 30m\n" + gradedLimits,
+			"sandbox:\n  engine: unix:///run/ygg-test.sock\n" + grader,
 	}
 	for p, body := range files {
 		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {

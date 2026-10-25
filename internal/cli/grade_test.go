@@ -48,6 +48,12 @@ func engineStub(t *testing.T, results, graderPS string) string {
 // real command line does, with the real driver, which the stubs of engineStub stand in for.
 func gradedRun(t *testing.T, withGrader bool) (dir, config, id string, tk *tasktest.Task) {
 	t.Helper()
+	return gradedRunOf(t, withGrader, "")
+}
+
+// gradedRunOf is gradedRun with more nodes after the graph's one node.
+func gradedRunOf(t *testing.T, withGrader bool, more string) (dir, config, id string, tk *tasktest.Task) {
+	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	tk = tasktest.New(t)
 	realm, cfgDir := t.TempDir(), t.TempDir()
@@ -61,7 +67,7 @@ func gradedRun(t *testing.T, withGrader bool) (dir, config, id string, tk *taskt
 	for p, body := range map[string]string{
 		filepath.Join(realm, "t", "LICENSE"):  "MIT\n",
 		filepath.Join(realm, "pack.yaml"):     "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + gradePack,
-		filepath.Join(realm, "graph.yaml"):    "name: test\nversion: 1.0.0\nschema: 2\nnodes:\n  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n",
+		filepath.Join(realm, "graph.yaml"):    "name: test\nversion: 1.0.0\nschema: 2\nnodes:\n  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n" + more,
 		filepath.Join(realm, "p.md"):          "Do the work.\n",
 		filepath.Join(cfgDir, "script.yaml"):  script,
 		filepath.Join(cfgDir, "factory.yaml"): cfg,
@@ -182,6 +188,24 @@ func TestGradeNeedsADoneRunAndTheGraderSection(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir3, ".factory", "runs", id3, "score.json")); err == nil {
 		t.Error("a run that did not finish has a score")
+	}
+}
+
+// A run whose grade node was skipped, as factory.yaml had no grader (ruling R63), is graded by ygg grade once the
+// grader section is there, and refused as before without it.
+func TestGradeGradesARunWhoseGradeWasSkipped(t *testing.T) {
+	dir, config, id, tk := gradedRunOf(t, false, "  - { id: score, kind: grade }\n")
+	engineStub(t, tasktest.Results(nil), "[]")
+	if code, _, errOut := ygg(t, "grade", id, "--project", dir); code != ExitRefused || !strings.Contains(errOut, "grader") {
+		t.Errorf("grade without a grader section: exit %d, %q", code, errOut)
+	}
+	b, _ := os.ReadFile(config)
+	grader := "grader:\n  tasks_dir: " + tk.TasksDir + "\n  suite_dir: " + tk.SuiteDir + "\n  timeout: 30m\n  memory: 4g\n  cpus: 4\n"
+	if err := os.WriteFile(config, append(b, grader...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut := ygg(t, "grade", id, "--project", dir); code != ExitDone || !strings.Contains(out, "reward:        1.0000") {
+		t.Errorf("grade with the grader section: exit %d\n%s%s", code, out, errOut)
 	}
 }
 

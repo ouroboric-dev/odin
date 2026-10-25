@@ -256,10 +256,10 @@ func (s *Setup) findProject(ctx context.Context, project string) error {
 func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) error {
 	switch {
 	case n.Kind == schema.KindGrade:
-		// Grading runs the hidden suite in a container of the engine the sandbox section names, so a graph
-		// with a grade node needs both sections, before anything runs.
-		if s.Config.Grader == nil || s.Config.Sandbox == nil {
-			return fmt.Errorf("%s: node %s grades the run, which needs the grader and the sandbox sections in %s", graphPath, n.ID, s.ConfigPath)
+		// Grading runs the hidden suite in a container of the engine the sandbox section names, so a grader
+		// needs the sandbox section, before anything runs. With no grader section the node is skipped (ruling R63).
+		if s.Config.Grader != nil && s.Config.Sandbox == nil {
+			return fmt.Errorf("%s: node %s grades the run with the grader of %s, which needs the sandbox section: it names the engine the grader runs on", graphPath, n.ID, s.ConfigPath)
 		}
 		return nil
 	case n.Kind == schema.KindGate, n.Kind == schema.KindPublish, n.Kind == schema.KindTasks, n.Kind == schema.KindInit:
