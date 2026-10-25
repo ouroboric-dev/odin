@@ -1,0 +1,47 @@
+{{- /* The design document (ygg.design/v1), with the sections the design prompt asked for. */ -}}
+{{front .Front}}
+{{with .Doc.Blocked}}## Blocked
+
+{{text .Reason}}
+
+{{end}}## Summary
+
+{{text .Doc.Summary}}
+
+## Goals, non-goals and success criteria
+
+### Goals
+
+{{text .Doc.Goals}}
+
+### Non-goals
+
+{{text .Doc.NonGoals}}
+
+### Success criteria
+
+{{text .Doc.SuccessCriteria}}
+
+## Context and constraints
+
+{{text .Doc.Context}}
+
+## The product at user level
+
+{{text .Doc.ProductAtUserLevel}}
+
+## Decisions
+
+{{range .Doc.Decisions}}- {{decided .}}
+{{else}}None.
+{{end}}
+## Open questions
+
+{{range .Doc.OpenQuestions}}- {{item (printf "%s\n(Who can answer: %s)" (after (printf "**%s:** " (line .ID)) .Question) (line .WhoCanAnswer)) 2}}
+{{else}}None.
+{{end}}
+{{- with .Doc.Notes}}
+## Notes
+
+{{bullets .}}
+{{- end}}

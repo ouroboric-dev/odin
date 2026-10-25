@@ -12,7 +12,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 )
 
 // Odin's identity on every commit it makes.
@@ -93,6 +96,43 @@ func (r Repo) Run(ctx context.Context, args ...string) (string, error) {
 // Output is Run with git's standard output untrimmed.
 func (r Repo) Output(ctx context.Context, args ...string) ([]byte, error) {
 	return Output(ctx, r.WorkTree, append([]string{"--git-dir=" + r.GitDir, "--work-tree=" + r.WorkTree}, args...)...)
+}
+
+// maxExclude bounds what Odin reads of a repo's info/exclude: a few rules of its own.
+const maxExclude = 64 << 10
+
+// Exclude adds pattern, one line of gitignore, to the exclude file of r's git dir, once. The git dir is Odin's,
+// outside the working copy, and a sandbox mounts a leaf's read-only, so a session can't take the rule back; git
+// add, git status and git clean, as Odin runs them, all keep to it.
+func (r Repo) Exclude(pattern string) error {
+	dir := filepath.Join(r.GitDir, "info")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	p := filepath.Join(dir, "exclude")
+	f, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxExclude+1))
+	if err != nil {
+		return err
+	}
+	if len(b) > maxExclude {
+		return fmt.Errorf("%s is larger than Odin writes it", p)
+	}
+	if slices.Contains(strings.Split(string(b), "\n"), pattern) {
+		return nil
+	}
+	line := pattern + "\n"
+	if len(b) > 0 && !strings.HasSuffix(string(b), "\n") {
+		line = "\n" + line
+	}
+	if _, err := f.WriteString(line); err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // Pipe runs git with args against r and hands its standard output to read as it is produced, for output

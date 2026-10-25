@@ -3,7 +3,8 @@
 # cost nothing: they answer from script.yaml, and every command the realms run (the check ladder, the
 # services, the acceptance run) is real. Copy it, set the engine, the mounts, the realm folder and the graph
 # folder for your machine (`ygg run --graph software` finds the pack in graphs.dir; each leaf's realm comes
-# from the realm store). The factory ships no defaults for the caps.
+# from the realm store). The factory ships no defaults for the caps. The run needs its brief: ygg-smoke-realms.sh
+# --graph software --brief /home/OPERATOR/yggdrasil/odin/testdata/smoke-content/brief.md --tag h15.
 mode: unattended
 privacy: strict
 gates:

@@ -253,3 +253,28 @@ func TestQuoteEndsEveryKindOfLineBreakAndKeepsEveryLineInTheQuote(t *testing.T) 
 		t.Errorf("quote = %q, want %q", got, want)
 	}
 }
+
+// A decisions file on a gate's event reads in the report as its ids, and the first line of its reason; the ledger
+// keeps the file whole.
+func TestADecisionsNoteReadsAsItsIdsAndItsReason(t *testing.T) {
+	m, st := fixture()
+	m.Interventions.Items = []metrics.Item{
+		{Kind: "rejection", Node: "spec-gate", Note: `{"decisions":[{"id":"two-users","text":"The owner & a guest."},{"id":"no-sms","text":"x"}],` +
+			`"answers":[{"question":"q1","text":"Yes."}],"reason":"Name the users.\nAnd the rest."}`},
+		{Kind: "approval with a note", Node: "design-gate", Note: `{"decisions":[{"id":"note-design-gate","text":"Warm."}]}`},
+		{Kind: "approval with a note", Node: "old-gate", Note: "a note from before decisions files"}}
+	var b bytes.Buffer
+	if err := Write(&b, m, st); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	for _, want := range []string{"| rejection | spec-gate | decisions two-users, no-sms; answers q1; reason: Name the users. |",
+		"| approval with a note | design-gate | decisions note-design-gate |", "a note from before decisions files"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `\{`) || strings.Contains(out, "The owner") {
+		t.Errorf("the report shows a decisions note as JSON:\n%s", out)
+	}
+}

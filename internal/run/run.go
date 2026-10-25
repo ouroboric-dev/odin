@@ -29,6 +29,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/remote"
 	"github.com/ouroboric-dev/odin/internal/tree"
 	"github.com/ouroboric-dev/odin/internal/version"
+	"github.com/ouroboric-dev/odin/internal/views"
 )
 
 // Options say what to run.
@@ -80,6 +81,7 @@ type Setup struct {
 	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
 	Backoff      jormungandr.Backoff
 	Sleep        func(ctx context.Context, d time.Duration) error // nil: wait for real
+	Clock        func() time.Time                                 // nil: the system's; the date input reads it
 	PinGraph     bool                                             // the graph pack was named, and the project doesn't pin a graph yet: Start pins it
 	store        *realm.Store                                     // where a realm is found by name; nil without factory.yaml's realms section
 	recorded     map[string]string                                // a resume: the folder of each realm the run recorded
@@ -160,6 +162,9 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		if err := s.checkNode(ctx, graphPath, n); err != nil {
 			return nil, err
 		}
+	}
+	if err := checkPublish(graphPath, s.Graph.Nodes, map[string]schema.Node{}); err != nil {
+		return nil, err
 	}
 	for _, p := range s.projectLeaves() { // every leaf the project has, whether or not the graph names it
 		if _, err := s.RealmOf(p); err != nil {
@@ -301,6 +306,59 @@ func (s *Setup) checkNode(ctx context.Context, graphPath string, n schema.Node) 
 		if err := s.checkSession(graphPath, n.SessionKey(rv), rv.Role, rv.Prompt); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkPublish refuses a publish node that could only fail, before anything runs: one whose source declares no
+// output, or one with no view (Odin publishes an output's JSON and the view it renders from it, change
+// typed-boundaries); and one whose source takes no rejection, which it is given when a person approves its run again
+// after the secret scan stops the publish, or after the source's output is blocked (ruling R43). It refuses a tasks
+// node whose plan node takes no rejection too: a blocked plan is sent back to it with a person's note (R44); an
+// agent whose output is a spec that does not take the decisions and a refusal: Odin checks that the spec cites every
+// owner decision, and sends it back with the ids it misses (typed-T19); and a loop, or a reviewer of one, that takes no
+// rejection: a person's rejection of the loop's escalation goes to its implementer, or to the reviewer whose block it
+// answers (R52). before holds the nodes before nodes, by id.
+func checkPublish(graphPath string, nodes []schema.Node, before map[string]schema.Node) error {
+	for _, n := range nodes {
+		if n.Kind == schema.KindPublish {
+			from, ok := before[n.From]
+			switch {
+			case !ok || from.Output == "":
+				return fmt.Errorf("%s: node %s: publish names %s, which declares no output", graphPath, n.ID, n.From)
+			case !views.Has(schema.Contract(from.Output)):
+				return fmt.Errorf("%s: node %s: publish has no view for %s", graphPath, n.ID, from.Output)
+			case !slices.Contains(from.Input, schema.SourceRejection):
+				return fmt.Errorf("%s: node %s: when the secret scan stops it, publish runs %s again with the finding as its rejection, so %s must declare the input rejection",
+					graphPath, n.ID, n.From, n.From)
+			}
+		}
+		if n.Kind == schema.KindTasks {
+			// An unknown from is the graph check's to refuse (gungnir CheckTypes).
+			if from, ok := before[n.From]; ok && !slices.Contains(from.Input, schema.SourceRejection) {
+				return fmt.Errorf("%s: node %s: tasks reads %s, which must declare rejection: a blocked plan is sent back to it with a person's note",
+					graphPath, n.ID, n.From)
+			}
+		}
+		if n.Kind == schema.KindAgent && schema.Contract(n.Output) == schema.ContractSpec &&
+			(!slices.Contains(n.Input, schema.SourceDecisions) || !slices.Contains(n.Input, schema.SourceRefusal)) {
+			return fmt.Errorf("%s: node %s: Odin checks that the spec cites every owner decision, and sends it back with the ids it misses, "+
+				"so %s must declare the inputs decisions and refusal", graphPath, n.ID, n.ID)
+		}
+		if n.Kind == schema.KindLoop {
+			if !slices.Contains(n.Input, schema.SourceRejection) {
+				return fmt.Errorf("%s: node %s: a loop must declare rejection: a person's rejection of its escalation is sent to its implementer", graphPath, n.ID)
+			}
+			for _, rv := range n.Reviewers {
+				if !slices.Contains(rv.Input, schema.SourceRejection) {
+					return fmt.Errorf("%s: node %s: reviewer %s must declare rejection: a person's answer to its block is sent to it", graphPath, n.ID, rv.ID)
+				}
+			}
+		}
+		if err := checkPublish(graphPath, n.Body, maps.Clone(before)); err != nil {
+			return err
+		}
+		before[n.ID] = n
 	}
 	return nil
 }
@@ -1017,7 +1075,7 @@ func record(project, dir, id string, setup *Setup) (*Run, error) {
 		Brief: setup.Brief, BriefSHA256: setup.BriefSHA256, Roles: roles(setup), Skills: setup.Skills,
 		Root: setup.Root, ProjectPath: setup.ProjectPath, Leaves: map[string]LeafRecord{},
 		Attempts: map[string]int{}, Reasons: map[string]string{}, Summaries: map[string]string{},
-		Waived: map[string]bool{}, Judged: map[string]string{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, NewLeaves: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Created: now, Updated: now,
+		Waived: map[string]bool{}, Judged: map[string]string{}, Warned: map[string]bool{}, Loops: map[string]*LoopRecord{}, Expanded: map[string]bool{}, NewLeaves: map[string]bool{}, Returns: map[string]int{}, Refusals: map[string]string{}, Outputs: map[string]OutputRef{}, Created: now, Updated: now,
 	}}
 	started := gungnir.Event{Name: gungnir.EventRunStarted, Mode: setup.Mode, ConfigHash: setup.ConfigSHA256, FactoryVersion: r.State.Factory,
 		Note: graphNote(setup.GraphPack) + "; " + realmNote(setup.Realms)}
@@ -1149,6 +1207,11 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	s, err := LoadState(dir)
 	if err != nil {
 		return nil, err
+	}
+	if s.Outputs == nil {
+		// Its sessions answered in prose, which nothing reads any more, and its graph declares no node's input
+		// and output: none of it can go on (change typed-boundaries).
+		return nil, fmt.Errorf("run %s was started before typed boundaries; start a new run", s.ID)
 	}
 	if mode == "" {
 		mode = s.Mode

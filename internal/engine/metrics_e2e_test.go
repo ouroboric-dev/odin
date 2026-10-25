@@ -11,9 +11,9 @@ import (
 // major, and the loop gives up. The true veto rate is 1 of 1 reviewed attempts: the metrics must read the ledger
 // the engine writes, where a reviewer's counter and the loop's attempt drift apart.
 func TestMetricsReadTheVetoRateOfARealLoopWhereTheReviewerFirstRunsInAttempt3(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "todo again") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "todo again") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [ " + majorFinding + " ] }\n"
 	r := startReview(t, "key-points", script)
 	if _, err := Advance(context.Background(), r); err != nil {
@@ -38,12 +38,12 @@ func TestMetricsReadTheVetoRateOfARealLoopWhereTheReviewerFirstRunsInAttempt3(t 
 }
 
 func usedStep(node, file string) string {
-	return "  " + node + ":\n    - actions: [ { write: { path: " + file + ", content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote " + file + ", usage: { in: 100, out: 10, turns: 3, cost_usd: 0.5 } }\n"
+	return "  " + node + ":\n    - actions: [ { write: { path: " + file + ", content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote " + file + ", usage: { in: 100, out: 10, turns: 3, cost_usd: 0.5 }, output: '{\"summary\": \"done\"}' }\n"
 }
 
 // A session line carries no task id; the metrics attribute it to its task by the node's slug prefix.
 func TestMetricsAttributeTheSessionsOfARealRunToTheirTasks(t *testing.T) {
-	r := galleryRun(t, "unattended", usedStep("p-t1-implement", "api.txt")+usedStep("p-t2-implement", "web.txt"))
+	r := galleryRun(t, "unattended", usedStep("p-t001-implement", "api.txt")+usedStep("p-t002-implement", "web.txt"))
 	if out, err := Advance(context.Background(), r); err != nil {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}

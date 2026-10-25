@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -36,25 +37,26 @@ func exactContent(t *testing.T, prompt string) string {
 	return strings.TrimRight(body, "\n") + "\n"
 }
 
-func indentBlock(s string) string {
+// indentBlock indents every line of s by n spaces, for a YAML block scalar.
+func indentBlock(s string, n int) string {
 	var out []string
 	for _, l := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
-		out = append(out, "              "+l)
+		out = append(out, strings.Repeat(" ", n)+l)
 	}
 	return strings.Join(out, "\n") + "\n"
 }
 
 // The realms smoke run (v0-H13) with real agents has a fixed shape; this runs the same graph with
-// scripted agents that write exactly what the prompts ask for. If a prompt asked for a file that Odin
+// scripted agents that answer exactly what the prompts ask for. If a prompt asked for a document that Odin
 // would refuse, the founder's run with real tokens would fail on it, and this test fails first.
 func TestTheSmokeRealmsRunWithScriptedAgentsThatWriteWhatThePromptsAsk(t *testing.T) {
 	lead := filepath.Join(smokeRealms(t), "smoke-lead")
-	leaves := exactContent(t, filepath.Join(lead, "prompts", "spec.md"))
-	tasks := exactContent(t, filepath.Join(lead, "prompts", "plan.md"))
-	hello := "    - actions: [ { write: { path: hello.txt, content: \"hello from the factory\\n\" } } ]\n      result: { status: ok, summary: wrote hello.txt }\n"
-	script := "steps:\n  spec:\n    - actions:\n        - write:\n            path: out/leaves.yaml\n            content: |\n" + indentBlock(leaves) +
-		"      result: { status: ok, summary: wrote the leaves file }\n  plan:\n    - actions:\n        - write:\n            path: out/plan/tasks.md\n            content: |\n" + indentBlock(tasks) +
-		"      result: { status: ok, summary: wrote the plan }\n  smoke-t1-implement:\n" + hello + "  smoke-t2-implement:\n" + hello
+	spec := exactContent(t, filepath.Join(lead, "prompts", "spec.md"))
+	plan := exactContent(t, filepath.Join(lead, "prompts", "plan.md"))
+	hello := "    - actions: [ { write: { path: hello.txt, content: \"hello from the factory\\n\" } } ]\n      result: { status: ok, summary: wrote hello.txt, output: '{\"summary\": \"done\"}' }\n"
+	script := "steps:\n  spec:\n    - result:\n        status: ok\n        summary: answered with the spec\n        output: |\n" + indentBlock(spec, 10) +
+		"  plan:\n    - result:\n        status: ok\n        summary: answered with the plan\n        output: |\n" + indentBlock(plan, 10) +
+		"  smoke-t001-implement:\n" + hello + "  smoke-t002-implement:\n" + hello
 	scriptPath := filepath.Join(t.TempDir(), "smoke.yaml")
 	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 		t.Fatal(err)
@@ -106,5 +108,46 @@ func TestTheSmokeRealmsPrepareWithTheRealAdapter(t *testing.T) {
 	}
 	if got := strings.Join(s.Realms.Names(), ","); got != "smoke-lead" {
 		t.Errorf("realms = %s; smoke-api joins when init creates its leaf", got)
+	}
+}
+
+// The loops of the realm smoke graphs see what a loop is for (rulings R37, R52): the implementer its task, the open
+// findings and how the checks ended, so a second attempt can fix a failing check; each reviewer the task, the change,
+// the findings, the checks and a person's answer to its block.
+func TestTheRealmSmokeLoopsDeclareWhatALoopIsFor(t *testing.T) {
+	implementer := []string{schema.SourceTask, schema.SourceOpenFindings, schema.SourceCheckResults, schema.SourceRejection}
+	reviewer := []string{schema.SourceTask, schema.SourceChange, schema.SourceOpenFindings, schema.SourceCheckResults, schema.SourceRejection}
+	for _, p := range []string{"../../testdata/smoke-realms/smoke-lead/graph.yaml", "../../testdata/realms/midgard-toy/graph.yaml"} {
+		g, err := schema.LoadGraph(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loops := 0
+		var walk func([]schema.Node)
+		walk = func(nodes []schema.Node) {
+			for _, n := range nodes {
+				walk(n.Body)
+				if n.Kind != schema.KindLoop {
+					continue
+				}
+				loops++
+				for _, in := range implementer {
+					if !slices.Contains(n.Input, in) {
+						t.Errorf("%s: loop %s does not declare %s: %v", p, n.ID, in, n.Input)
+					}
+				}
+				for _, rv := range n.Reviewers {
+					for _, in := range reviewer {
+						if !slices.Contains(rv.Input, in) {
+							t.Errorf("%s: reviewer %s of loop %s does not declare %s: %v", p, rv.ID, n.ID, in, rv.Input)
+						}
+					}
+				}
+			}
+		}
+		walk(g.Nodes)
+		if loops == 0 {
+			t.Errorf("%s has no loop", p)
+		}
 	}
 }

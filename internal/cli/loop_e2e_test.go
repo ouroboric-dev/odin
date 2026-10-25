@@ -39,15 +39,18 @@ func loopProject(t *testing.T, script, caps string) (dir, config, realm string) 
 const implementOnce = `steps:
   build:
     - actions: [ { write: { path: build.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built it, usage: { in: 2000, out: 400, turns: 5 } }
+      result: { status: ok, summary: built it, usage: { in: 2000, out: 400, turns: 5 }, output: '{"summary": "done"}' }
 `
 
 // The exit criterion: a malformed reviewer output stops the loop. Nothing counts it as a pass, an
-// approval is refused, and sending the work back asks the reviewer again.
+// approval is refused, and sending the work back asks the reviewer again. Each time it is asked, an answer that is
+// not valid is asked for once more, with its errors.
 func TestAMalformedReviewerOutputStopsTheLoopForAPerson(t *testing.T) {
 	script := implementOnce + `  build-spec:
     - result: { status: ok, output: "LGTM, ship it.", usage: { in: 100, out: 10, turns: 1 } }
     - result: { status: ok, output: "Looks fine to me.", usage: { in: 100, out: 10, turns: 1 } }
+    - result: { status: ok, output: "Still fine.", usage: { in: 100, out: 10, turns: 1 } }
+    - result: { status: ok, output: "Fine.", usage: { in: 100, out: 10, turns: 1 } }
     - result: { status: ok, report: [], usage: { in: 100, out: 10, turns: 1 } }
   build-quality:
     - result: { status: ok, report: [], usage: { in: 100, out: 10, turns: 1 } }
@@ -73,7 +76,7 @@ func TestAMalformedReviewerOutputStopsTheLoopForAPerson(t *testing.T) {
 		t.Errorf("reject: exit %d:\n%s%s; want the loop to go on to the end", code, out, errOut)
 	}
 	s, _ := run.LoadState(run.Dir(dir, id))
-	if s.Attempts["build"] != 1 || s.Attempts["build-spec"] != 3 {
+	if s.Attempts["build"] != 1 || s.Attempts["build-spec"] != 5 {
 		t.Errorf("sessions: implementer %d, spec reviewer %d; the implementer must not run again for an unreadable reviewer", s.Attempts["build"], s.Attempts["build-spec"])
 	}
 }
@@ -83,9 +86,9 @@ func TestARunThatHitsACapStopsResumableAndGoesOnWhenTheCapIsRaised(t *testing.T)
 	script := `steps:
   build:
     - actions: [ { write: { path: build.txt, content: "todo\n" } } ]
-      result: { status: ok, usage: { in: 2000, out: 400, turns: 5 } }
+      result: { status: ok, usage: { in: 2000, out: 400, turns: 5 }, output: '{"summary": "done"}' }
     - actions: [ { write: { path: build.txt, content: "done\n" } } ]
-      result: { status: ok, usage: { in: 2000, out: 400, turns: 5 } }
+      result: { status: ok, usage: { in: 2000, out: 400, turns: 5 }, output: '{"summary": "done"}' }
   build-spec:    [ { result: { status: ok, report: [] } } ]
   build-quality: [ { result: { status: ok, report: [] } } ]
 `
@@ -124,11 +127,11 @@ func TestAFindingClosesOnlyWhenItsSourceConfirmsItWithProof(t *testing.T) {
 	script := `steps:
   build:
     - actions: [ { write: { path: build.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built it }
+      result: { status: ok, summary: built it, output: '{"summary": "done"}' }
     - actions: [ { write: { path: build.txt, content: "done done\n" } } ]
-      result: { status: ok, summary: "I fixed spec-1; it is closed." }
+      result: { status: ok, summary: "I fixed spec-1; it is closed.", output: '{"summary": "done"}' }
     - actions: [ { write: { path: build.txt, content: "done done\n" } } ]
-      result: { status: ok, summary: "spec-1 is fixed, really." }
+      result: { status: ok, summary: "spec-1 is fixed, really.", output: '{"summary": "done"}' }
   build-spec:
     - result: { status: ok, report: [ ` + major + ` ] }
     - result: { status: ok, report: [ ` + major + ` ] }

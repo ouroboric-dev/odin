@@ -16,16 +16,16 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-var twoNodes = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+var twoNodes = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 
 const spendScript = `steps:
   a:
     - actions: [ { write: { path: a.txt, content: "a\n" } } ]
-      result: { status: ok, summary: did a, usage: { in: 100, out: 20, cache: 1000, turns: 3, cost_usd: 0.25 } }
+      result: { status: ok, summary: did a, usage: { in: 100, out: 20, cache: 1000, turns: 3, cost_usd: 0.25 }, output: '{"summary": "done"}' }
   b:
     - actions: [ { write: { path: b.txt, content: "b\n" } } ]
-      result: { status: ok, summary: did b, usage: { in: 10, out: 1, turns: 1 } }
-    - result: { status: ok, summary: did b again, usage: { in: 10, out: 1, turns: 1 } }
+      result: { status: ok, summary: did b, usage: { in: 10, out: 1, turns: 1 }, output: '{"summary": "done"}' }
+    - result: { status: ok, summary: did b again, usage: { in: 10, out: 1, turns: 1 }, output: '{"summary": "done"}' }
 `
 
 func caps(runTokens, runTurns, dayTokens, dayTurns int) string {
@@ -115,13 +115,13 @@ func TestApprovingBudgetCapDoesNotWaiveTheCapButRaisingItDoes(t *testing.T) {
 	if out, _ := Advance(context.Background(), r); out.Status != run.StatusStopped {
 		t.Fatalf("Advance() = %+v", out)
 	}
-	if err := Approve(context.Background(), r, "b", "go on"); err != nil {
+	if err := Approve(context.Background(), r, "b", Note(r, "b", "go on")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateBudgetCap {
 		t.Fatalf("Advance() = %+v, %v; approving does not lift a cap that is still reached", out, err)
 	}
-	if err := Reject(context.Background(), r, "b", "no"); err == nil {
+	if err := Reject(context.Background(), r, "b", Reason("no")); err == nil {
 		t.Error("a hard stop took a rejection")
 	}
 	// The operator raises the cap in factory.yaml; the run is opened again and approved.
@@ -130,7 +130,7 @@ func TestApprovingBudgetCapDoesNotWaiveTheCapButRaisingItDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	r = reopen(t, r)
-	if err := Approve(context.Background(), r, "b", "raised the cap"); err != nil {
+	if err := Approve(context.Background(), r, "b", Note(r, "b", "raised the cap")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -172,8 +172,8 @@ func TestAJournalThatCannotBeReadStopsTheRun(t *testing.T) {
 }
 
 func TestASessionIsGivenOnlyTheTurnsTheCapsStillAllow(t *testing.T) {
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 50 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 2 }\n  - { id: c, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
-	script := "steps:\n  a:\n    - result: { status: ok, usage: { turns: 3 } }\n  b:\n    - result: { status: ok }\n  c:\n    - result: { status: ok }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 50, input: [rejection], output: ygg.implement/v1 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 2, input: [rejection], output: ygg.implement/v1 }\n  - { id: c, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
+	script := "steps:\n  a:\n    - result: { status: ok, usage: { turns: 3 }, output: '{\"summary\": \"done\"}' }\n  b:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n  c:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{nodes: nodes, script: script, budget: caps(100000, 10, 200000, 200)})
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -198,11 +198,11 @@ func TestASessionIsGivenOnlyTheTurnsTheCapsStillAllow(t *testing.T) {
 
 func TestTheLedgerWarnsOnceWhenACapIsEightyPercentUsed(t *testing.T) {
 	script := `steps:
-  a: [ { result: { status: ok, usage: { in: 70, out: 10, turns: 1 } } } ]
-  b: [ { result: { status: ok, usage: { in: 5, out: 0, turns: 1 } } } ]
-  c: [ { result: { status: ok, usage: { in: 4, out: 0, turns: 1 } } } ]
+  a: [ { result: { status: ok, usage: { in: 70, out: 10, turns: 1 }, output: '{"summary": "done"}' } } ]
+  b: [ { result: { status: ok, usage: { in: 5, out: 0, turns: 1 }, output: '{"summary": "done"}' } } ]
+  c: [ { result: { status: ok, usage: { in: 4, out: 0, turns: 1 }, output: '{"summary": "done"}' } } ]
 `
-	nodes := twoNodes + "  - { id: c, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+	nodes := twoNodes + "  - { id: c, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 	r := startWith(t, setup{nodes: nodes, script: script, budget: caps(100, 100, 200000, 200)})
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -235,7 +235,7 @@ func (b journalBreaker) Run(ctx context.Context, t gungnir.Task) (gungnir.Result
 func TestASpendTheJournalCannotTakeStopsAtBudgetCapWithTheWorkSetAside(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	journal := filepath.Join(t.TempDir(), "spend")
-	again := "    - actions: [ { write: { path: a.txt, content: \"a again\\n\" } } ]\n      result: { status: ok, summary: did a again, usage: { in: 5, out: 1, turns: 1 } }\n"
+	again := "    - actions: [ { write: { path: a.txt, content: \"a again\\n\" } } ]\n      result: { status: ok, summary: did a again, usage: { in: 5, out: 1, turns: 1 }, output: '{\"summary\": \"done\"}' }\n"
 	script := strings.Replace(spendScript, "  b:\n", again+"  b:\n", 1)
 	r := startWith(t, setup{nodes: twoNodes, script: script, journal: journal})
 	r.Setup.Agents["planner"] = journalBreaker{Agent: r.Setup.Agents["planner"], dir: journal}
@@ -276,7 +276,7 @@ func TestASpendTheJournalCannotTakeStopsAtBudgetCapWithTheWorkSetAside(t *testin
 		t.Fatal(err)
 	}
 	r = reopen(t, r)
-	if err := Approve(context.Background(), r, "a", "the journal is fixed"); err != nil {
+	if err := Approve(context.Background(), r, "a", Note(r, "a", "the journal is fixed")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {

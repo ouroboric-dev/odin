@@ -39,6 +39,17 @@ type setup struct {
 // with the config's path in r.Setup.ConfigPath, so a test can edit it before it opens the run again.
 func startWith(t *testing.T, o setup) *run.Run {
 	t.Helper()
+	r, err := run.Start(context.Background(), startOptions(t, o))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	return r
+}
+
+// startOptions makes the realm, the config and a fresh project of a test run, and returns the options that start it.
+func startOptions(t *testing.T, o setup) run.Options {
+	t.Helper()
 	realm, cfg := t.TempDir(), t.TempDir()
 	project := treetest.Project(t, "repos/app")
 	if o.mode == "" {
@@ -60,7 +71,7 @@ func startWith(t *testing.T, o setup) *run.Run {
 	}
 	files := map[string]string{
 		filepath.Join(realm, "pack.yaml"):  "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + o.pack,
-		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 1\nnodes:\n" + o.nodes,
+		filepath.Join(realm, "graph.yaml"): "name: test\nversion: 1.0.0\nschema: 2\nnodes:\n" + o.nodes,
 		filepath.Join(realm, "p.md"):       "Do the work.\n",
 		filepath.Join(cfg, "script.yaml"):  o.script,
 		filepath.Join(cfg, "factory.yaml"): "mode: " + o.mode + "\n" + o.gates + o.roles + o.budget,
@@ -70,12 +81,7 @@ func startWith(t *testing.T, o setup) *run.Run {
 			t.Fatal(err)
 		}
 	}
-	r, err := run.Start(context.Background(), run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Hooks: o.hooks})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.Close() })
-	return r
+	return run.Options{Project: project, Config: filepath.Join(cfg, "factory.yaml"), Graph: realm, Hooks: o.hooks}
 }
 
 func ledgerText(t *testing.T, r *run.Run) string {
@@ -90,11 +96,11 @@ func ledgerText(t *testing.T, r *run.Run) string {
 const okScript = `steps:
   a:
     - actions: [ { write: { path: out.txt, content: "done\n" } } ]
-      result: { status: ok, summary: wrote out.txt, usage: { in: 100, out: 10, cache: 5, turns: 2, cost_usd: 0.5 } }
+      result: { status: ok, summary: wrote out.txt, usage: { in: 100, out: 10, cache: 5, turns: 2, cost_usd: 0.5 }, output: '{"summary": "done"}' }
 `
 
 func TestAgentAndExecNodesRunInOrder(t *testing.T) {
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: check, kind: exec, run: [grep, -q, done, out.txt], repo: repos/app }\n", okScript)
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: check, kind: exec, run: [grep, -q, done, out.txt], repo: repos/app }\n", okScript)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v; want done", out, err)
@@ -113,8 +119,8 @@ func TestAgentAndExecNodesRunInOrder(t *testing.T) {
 }
 
 func TestAFailedNodeStopsTheRunAndResumeRerunsIt(t *testing.T) {
-	script := "steps:\n  a:\n    - result: { status: failed, summary: tests fail }\n    - result: { status: ok, summary: fixed }\n"
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n", script)
+	script := "steps:\n  a:\n    - result: { status: failed, summary: tests fail }\n    - result: { status: ok, summary: fixed, output: '{\"summary\": \"done\"}' }\n"
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n", script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "tests fail") {
 		t.Fatalf("Advance() = %+v, %v; want failed with the agent's summary", out, err)
@@ -128,8 +134,8 @@ func TestAFailedNodeStopsTheRunAndResumeRerunsIt(t *testing.T) {
 }
 
 func TestAMalformedAgentResultIsAFailureNotAPass(t *testing.T) {
-	script := "steps:\n  a:\n    - result: { status: ok, usage: { turns: -1 } }\n"
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n", script)
+	script := "steps:\n  a:\n    - result: { status: ok, usage: { turns: -1 }, output: '{\"summary\": \"done\"}' }\n"
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n", script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusFailed {
 		t.Errorf("Advance() = %+v, %v; want failed", out, err)
@@ -193,8 +199,8 @@ func must(b []byte, err error) []byte {
 }
 
 func TestAnInterruptedAgentCountsItsAttempt(t *testing.T) {
-	script := "steps:\n  a:\n    - hang: true\n    - result: { status: ok, summary: done }\n"
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n", script)
+	script := "steps:\n  a:\n    - hang: true\n    - result: { status: ok, summary: done, output: '{\"summary\": \"done\"}' }\n"
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n", script)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusFailed {
@@ -231,7 +237,7 @@ func TestRunJSONRecordsTheRunningExecProcess(t *testing.T) {
 }
 
 func TestEveryNodeInALeafEndsWithACheckpoint(t *testing.T) {
-	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: check, kind: exec, run: [grep, -q, done, out.txt], repo: repos/app }\n", okScript)
+	r := start(t, "key-points", "", "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: check, kind: exec, run: [grep, -q, done, out.txt], repo: repos/app }\n", okScript)
 	base := r.State.Leaves["repos/app"].Base
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)

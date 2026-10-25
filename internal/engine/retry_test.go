@@ -12,7 +12,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-const oneNode = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+const oneNode = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 
 // waits is a Sleep that records its waits and returns at once.
 type waits struct{ got []time.Duration }
@@ -30,7 +30,7 @@ func TestATransientFailureIsRetriedWithABackoffAndLeavesNoTraceInTheAttempts(t *
       kind: transient
     - result: { status: failed, summary: HTTP 429, failure: transient, usage: { in: 5, out: 1, turns: 1 } }
     - actions: [ { write: { path: a.txt, content: "a\n" } } ]
-      result: { status: ok, summary: did a, usage: { in: 100, out: 10, turns: 2 } }
+      result: { status: ok, summary: did a, usage: { in: 100, out: 10, turns: 2 }, output: '{"summary": "done"}' }
 `
 	w := &waits{}
 	r := startWith(t, setup{nodes: oneNode, script: script, hooks: hooks(w)})
@@ -51,7 +51,7 @@ func TestATransientFailureIsRetriedWithABackoffAndLeavesNoTraceInTheAttempts(t *
 }
 
 func TestTransientFailuresThatOutlastTheRetriesFailTheRunAndAResumeTriesAgain(t *testing.T) {
-	script := "steps:\n  a:\n    - { error: down, kind: transient }\n    - { error: down, kind: transient }\n    - { error: down, kind: transient }\n    - { error: down, kind: transient }\n    - result: { status: ok, summary: did a }\n"
+	script := "steps:\n  a:\n    - { error: down, kind: transient }\n    - { error: down, kind: transient }\n    - { error: down, kind: transient }\n    - { error: down, kind: transient }\n    - result: { status: ok, summary: did a, output: '{\"summary\": \"done\"}' }\n"
 	w := &waits{}
 	r := startWith(t, setup{nodes: oneNode, script: script, hooks: hooks(w)})
 	out, err := Advance(context.Background(), r)
@@ -64,7 +64,7 @@ func TestTransientFailuresThatOutlastTheRetriesFailTheRunAndAResumeTriesAgain(t 
 }
 
 func TestAnAgentFailureIsNotRetried(t *testing.T) {
-	script := "steps:\n  a:\n    - { error: tests fail }\n    - result: { status: ok }\n"
+	script := "steps:\n  a:\n    - { error: tests fail }\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	w := &waits{}
 	r := startWith(t, setup{nodes: oneNode, script: script, hooks: hooks(w)})
 	out, err := Advance(context.Background(), r)
@@ -74,7 +74,7 @@ func TestAnAgentFailureIsNotRetried(t *testing.T) {
 }
 
 func TestAnInfrastructureFailureStopsTheRunWithNoRetry(t *testing.T) {
-	script := "steps:\n  a:\n    - { error: podman is gone, kind: infra }\n    - result: { status: ok }\n"
+	script := "steps:\n  a:\n    - { error: podman is gone, kind: infra }\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	w := &waits{}
 	r := startWith(t, setup{nodes: oneNode, script: script, hooks: hooks(w)})
 	out, err := Advance(context.Background(), r)
@@ -91,7 +91,7 @@ func TestAUsedUpQuotaPausesTheRunAndAResumeStartsTheNodeAgain(t *testing.T) {
       kind: quota
       usage: { in: 40, out: 4, turns: 1 }
     - actions: [ { write: { path: a.txt, content: "a\n" } } ]
-      result: { status: ok, summary: did a }
+      result: { status: ok, summary: did a, output: '{"summary": "done"}' }
 `
 	w := &waits{}
 	r := startWith(t, setup{nodes: oneNode, script: script, hooks: hooks(w)})

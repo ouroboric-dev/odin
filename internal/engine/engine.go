@@ -16,7 +16,6 @@ import (
 	"github.com/ouroboric-dev/gleipnir/scan"
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
-	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/run"
@@ -82,6 +81,15 @@ func advance(ctx context.Context, r *run.Run) (Outcome, error) {
 				err = runScratch(ctx, r, n)
 			} else {
 				err = runAgent(ctx, r, n)
+			}
+			if err == nil {
+				err = ownerCheck(r, n) // a spec must cite every owner decision (ownercheck.go)
+			}
+			if err == nil {
+				// The session's work stands: its rejection and refusal are used. A spec the check sends back keeps them,
+				// so its next session still has the person's reason beside the check's refusal.
+				delete(s.Reasons, n.ID)
+				delete(s.Refusals, n.ID)
 			}
 		case schema.KindLoop:
 			err = runLoop(ctx, r, n)
@@ -212,44 +220,29 @@ func readPrompt(s *run.Setup, realm, file string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// runAgent runs agent node n in the repo it works in: one session, whose prompt promptFor builds from the node's
+// declared inputs, and a checkpoint of what it did.
 func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	s := r.State
-	prompt, err := readPrompt(r.Setup, n.Realm, n.Prompt)
+	text, err := promptFor(r, n, nil, nil)
 	if err != nil {
 		return err
 	}
-	text := string(prompt)
-	// Skills load explicitly, the ones this node names, and no others (spec §5.1).
-	skillText, err := r.Setup.Libs.Load(n.Skills)
-	if err != nil {
-		return err
-	}
-	if skillText != "" {
-		text += "\n\n" + skillText
-	}
-	if r.Setup.BriefText != "" {
-		text += "\n\n## Brief\n\n" + r.Setup.BriefText
-	}
-	text = withDecisions(text, s)
-	if block := taskBlock(r, n); block != "" {
-		text += "\n\n" + block
-	}
-	if reason := s.Reasons[n.ID]; reason != "" {
-		text += "\n\n## Rejected at the approval point\n\n" + reason + "\n"
-	}
-	if refusal := s.Refusals[n.ID]; refusal != "" {
-		text += "\n\n" + jormungandr.Refusal(refusal)
-	}
+	defer dropInputs(r, n) // on every way out, a snapshot that fails too; the session's own path drops them before the checkpoint
 	var before string
 	if n.ReadOnly {
 		if before, err = snapshot(ctx, r, n.Repo); err != nil {
 			return err
 		}
 	}
-	sp := sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, readOnly: n.ReadOnly, before: before,
+	sp := sessionSpec{key: n.ID, role: n.Role, repo: n.Repo, text: text, output: schema.Contract(n.Output), readOnly: n.ReadOnly, before: before,
 		maxTurns: n.MaxTurns, maxTokens: n.MaxTokens, timeout: time.Duration(n.Timeout)}
-	res, ev, err := session(ctx, r, sp)
-	if err := checkReadOnly(ctx, r, sp, ev, err); err != nil {
+	res, ev, err := sessionForOutput(ctx, r, sp)
+	err = checkReadOnly(ctx, r, sp, ev, err)
+	if derr := dropInputs(r, n); derr != nil && err == nil {
+		err = derr
+	}
+	if err != nil {
 		return nodeError(err)
 	}
 	if ev.Commit, err = checkpoint(ctx, r, n, ev.Attempt); err != nil {
@@ -259,9 +252,7 @@ func runAgent(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := r.Log(ev); err != nil {
 		return err
 	}
-	delete(s.Reasons, n.ID)
-	delete(s.Refusals, n.ID)
-	s.Summaries[n.ID] = res.Summary
+	s.Summaries[n.ID] = res.Summary // its rejection and refusal go once its output passes the owner check (advance)
 	return nil
 }
 
@@ -342,15 +333,16 @@ func orDefault(timeout time.Duration) time.Duration {
 }
 
 // runCheck runs one command through the check runner: in repo's sandbox when it has one, on the host
-// otherwise. A failure of the sandbox, or of the log, fails the node; a context that ended is the
-// context's error.
+// otherwise. A typed check (spec.Typed) is typed in a sandbox only: the host runner takes no environment, and
+// its /tmp is shared, so a command on the host runs as it is and writes no typed result. A failure of the
+// sandbox, or of the log, fails the node; a context that ended is the context's error.
 func runCheck(ctx context.Context, r *run.Run, node, repo, dir string, spec checks.Spec, logPath string) (checks.Result, error) {
 	runner, err := r.Runner(ctx, repo)
 	if err != nil {
 		return checks.Result{}, sandboxStart(err)
 	}
 	if runner == nil {
-		runner = hostRunner{r: r, node: node, dir: dir}
+		runner, spec.Typed = hostRunner{r: r, node: node, dir: dir}, false
 	}
 	return runOn(ctx, runner, spec, logPath)
 }

@@ -2,11 +2,8 @@ package engine
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,19 +13,21 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/lock"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
 // FeaturesFile is where Odin writes the plan's tasks and where each stands, in the project (spec §3.3 rule 2).
 const FeaturesFile = ".factory/features.json"
 
-// runTasks reads the plan's tasks.md, checks every task is ready (the Definition of Ready, spec §4.2) and
-// derives features.json from it. A plan that isn't ready is a refusal: it goes back to the node n names
-// with back_to, the planner, as input with every problem listed; with no back_to, or once the returns are
-// used, the node fails. The tasks of a ready plan are recorded in build order, in run.json and in
-// features.json, with all of them to do. A node that names a leaves file also checks that the project's
-// runtime realm provides every need of the file's realms (spec §6.1): init runs after it, and the plan can't
-// change the leaves file, so an unmet need fails the node and goes back to no one.
+// runTasks reads the plan, the typed output of the node n names with from (ygg.plan/v1), checks every task is ready
+// (the Definition of Ready, spec §4.2) and derives features.json from it. A plan that isn't ready is a refusal: it
+// goes back to the node n names with back_to, the planner, as input with every problem listed; with no back_to, or
+// once the returns are used, the node fails. A blocked plan says what only a person can give, so it stops the run
+// for one, in every mode, and is not sent back. The tasks of a ready plan are recorded in build order, in run.json
+// and in features.json, with all of them to do. A node that names a leaves file also checks that the project's
+// runtime realm provides every need of the file's realms (spec §6.1): init runs after it, and the plan can't change
+// the leaves file, so an unmet need fails the node and goes back to no one.
 func runTasks(ctx context.Context, r *run.Run, n schema.Node) error {
 	attempt, err := startAttempt(r, n)
 	if err != nil {
@@ -65,48 +64,28 @@ func runTasks(ctx context.Context, r *run.Run, n schema.Node) error {
 	if err := writeFeatures(r); err != nil {
 		return err
 	}
-	s.Summaries[n.ID] = fmt.Sprintf("%d task(s) are ready, from %s", len(fs), source)
+	s.Summaries[n.ID] = fmt.Sprintf("%d task(s) are ready, from the output of %s (%s)", len(fs), n.From, source)
 	return r.Log(gungnir.Event{Name: gungnir.EventTasksReady, Node: n.ID, Attempt: attempt, Result: s.Summaries[n.ID]})
 }
 
-// readPlan finds the one tasks.md that n.From names, reads it, and applies the Definition of Ready. A plan
-// that can't be read or isn't ready gives a refusal, in words for the planner; err is Odin's own failure. spec
-// is the leaves file the node points at, parsed, and nil when it points at none.
+// readPlan reads the plan node n.From kept, as Odin validated it, and applies the Definition of Ready to its tasks.
+// Nothing reads a tasks.md: Odin renders that file from this output, for people. A plan that isn't ready gives a
+// refusal, in words for the planner; a blocked plan is a *hardStop at external-input, with the planner's reason; err
+// is otherwise Odin's own failure. source is the kept output's path in the project and sum its SHA-256; spec is the
+// leaves file the node points at, parsed, and nil when it points at none.
 func readPlan(r *run.Run, n schema.Node) (fs []schema.Feature, source, sum string, spec *schema.Leaves, refusal string, err error) {
-	matches, err := filepath.Glob(filepath.Join(r.Project, filepath.FromSlash(n.From)))
+	p, err := loadOutput[schema.Plan](r, n.From)
 	if err != nil {
-		return nil, "", "", nil, fmt.Sprintf("tasks: %q is not a path pattern: %v", n.From, err), nil
+		return nil, "", "", nil, "", &nodeFailure{fmt.Errorf("the plan can't be read: %w", err)}
 	}
-	var files []string
-	for _, m := range matches {
-		// A plan is a regular file reached without a symlink, so it is a file of the project.
-		if st, err := os.Lstat(m); err == nil && st.Mode().IsRegular() && noSymlinks(r.Project, m) == nil {
-			files = append(files, m)
-		}
+	if p.Blocked != nil {
+		return nil, "", "", nil, "", &hardStop{gate: gungnir.GateExternalInput, err: fmt.Errorf("the plan is blocked: %s", p.Blocked.Reason)}
 	}
-	switch {
-	case len(files) == 0:
-		return nil, "", "", nil, fmt.Sprintf("there is no tasks file at %s, so there is no plan to build. Write the plan's tasks.md there.", n.From), nil
-	case len(files) > 1:
-		return nil, "", "", nil, fmt.Sprintf("%d files match %s, and a plan has exactly one tasks.md: keep one.", len(files), n.From), nil
-	}
-	f, err := os.Open(files[0])
-	if err != nil {
+	ref := r.State.Outputs[n.From]
+	if source, err = filepath.Rel(r.Project, filepath.Join(r.Dir, filepath.FromSlash(ref.Path))); err != nil {
 		return nil, "", "", nil, "", err
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, schema.MaxTasksFile+1))
-	if err != nil {
-		return nil, "", "", nil, "", err
-	}
-	source, err = filepath.Rel(r.Project, files[0])
-	if err != nil {
-		return nil, "", "", nil, "", err
-	}
-	source = filepath.ToSlash(source)
-	if fs, err = schema.ParseTasks(source, data); err != nil {
-		return nil, "", "", nil, err.Error(), nil
-	}
+	fs = schema.FeaturesFromPlan(p)
 	leaves, spec, refusal, err := planLeaves(r, n)
 	if err != nil || refusal != "" {
 		return nil, "", "", nil, refusal, err
@@ -117,8 +96,7 @@ func readPlan(r *run.Run, n schema.Node) (fs []schema.Feature, source, sum strin
 	if fs, err = schema.ReadyOrder(fs); err != nil {
 		return nil, "", "", nil, err.Error(), nil
 	}
-	h := sha256.Sum256(data)
-	return fs, source, hex.EncodeToString(h[:]), spec, "", nil
+	return fs, filepath.ToSlash(source), ref.SHA256, spec, "", nil
 }
 
 // checkLeavesNeeds checks the needs of the realms of the leaves file spec (none when spec is nil), with the
@@ -149,6 +127,8 @@ func planLeaves(r *run.Run, n schema.Node) (leaves []string, spec *schema.Leaves
 		}
 	}
 	if n.Leaves != "" {
+		// The leaves file is the one Odin wrote from the spec's typed leaves when it published the spec (spec-docs),
+		// read back as data Odin wrote, not as anything an agent wrote.
 		data, rerr := readLeavesFile(r, n.Leaves)
 		if rerr != nil {
 			return nil, nil, fmt.Sprintf("the leaves file %s can't be read (%v), so the tasks' leaves can't be checked. The spec stage names the product's leaves there.", n.Leaves, rerr), nil
@@ -174,43 +154,31 @@ func writeFeatures(r *run.Run) error {
 	return f.Save(filepath.Join(r.Project, filepath.FromSlash(FeaturesFile)))
 }
 
-// What a task's text may take up in a prompt: the plan is written by an agent, and one task's fields
-// must not swamp a session.
-const (
-	maxTaskTitle    = 200
-	maxTaskCriteria = 30
-	maxTaskField    = 1000
-)
-
-func clip(s string, n int) string {
-	if r := []rune(strings.TrimSpace(s)); len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return strings.TrimSpace(s)
-}
-
-// taskBlock tells a session what its task is, as the plan states it (spec §4.4: a session reads its task
-// from features.json, and Odin, the only reader of that file, puts the task in the prompt). It is empty
-// for a node that works for no task. The words are the planner's, bounded, and are data to the session as
-// the rest of the repository is.
-func taskBlock(r *run.Run, n schema.Node) string {
+// taskInput is the section of the task input: what the session's task is, as the plan states it (spec §4.4: a
+// session reads its task from features.json, and Odin, the only reader of that file, puts the task in the prompt).
+// It is empty for a node that works for no task. In order: the title, the layer, the criteria, the named test and
+// the dependencies, then the planner's text under "What the plan says" and, when the task has one, its OpenAPI text
+// under "The contract", in a yaml fence no run of backticks in it can close. Every field is whole: the plan's schema
+// and the readiness check bound them, and Odin never cuts one (B-176). Every line is data to the session, written so
+// that none starts a heading.
+func taskInput(r *run.Run, n schema.Node) string {
 	i := slices.IndexFunc(r.State.Features, func(f schema.FeatureRecord) bool { return n.Task != "" && f.Slug() == n.Task })
 	if i < 0 {
 		return ""
 	}
 	f := r.State.Features[i]
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Your task\n\n%s: %s\n\nYou work in the leaf %s.\n\nAcceptance criteria:\n", f.ID, clip(f.Title, maxTaskTitle), f.Layer)
-	for j, c := range f.Criteria {
-		if j == maxTaskCriteria {
-			fmt.Fprintf(&b, "- ... and %d more in the plan\n", len(f.Criteria)-j)
-			break
-		}
-		fmt.Fprintf(&b, "- %s\n", clip(c, maxTaskField))
-	}
-	fmt.Fprintf(&b, "\nThe test that proves it: %s\n", clip(f.Test, maxTaskField))
+	fmt.Fprintf(&b, "%s\n\n%s\n\nAcceptance criteria:\n", mdsafe.Text(f.ID+": "+mdsafe.Line(f.Title)), mdsafe.Text("You work in the leaf "+f.Layer+"."))
+	b.WriteString(mdsafe.Bullets(f.Criteria))
+	fmt.Fprintf(&b, "\n%s\n", mdsafe.Text("The test that proves it: "+mdsafe.Line(f.Test)))
 	if len(f.DependsOn) > 0 {
-		fmt.Fprintf(&b, "\nIt builds on: %s (already landed).\n", strings.Join(f.DependsOn, ", "))
+		fmt.Fprintf(&b, "\n%s\n", mdsafe.Text("It builds on: "+strings.Join(f.DependsOn, ", ")+" (already landed)."))
+	}
+	if strings.TrimSpace(f.Text) != "" {
+		b.WriteString("\n### What the plan says\n\n" + mdsafe.Text(f.Text) + "\n")
+	}
+	if strings.TrimSpace(f.Contract) != "" {
+		b.WriteString("\n### The contract\n\n" + mdsafe.Fenced("yaml", f.Contract))
 	}
 	return b.String()
 }

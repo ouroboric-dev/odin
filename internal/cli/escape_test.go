@@ -72,7 +72,7 @@ func verifies(t *testing.T, dir, id string) {
 	}
 }
 
-const ok = "      result: { status: ok, summary: wrote design.md }\n"
+const ok = "      result: { status: ok, summary: wrote design.md, output: '{\"summary\": \"done\"}' }\n"
 
 func TestAnAgentCannotPlantAHookInTheLeaf(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "hook-ran")

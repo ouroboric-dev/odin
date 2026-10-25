@@ -52,7 +52,7 @@ func gradedRun(t *testing.T, withGrader bool) (dir, config, id string, tk *taskt
 	tk = tasktest.New(t)
 	realm, cfgDir := t.TempDir(), t.TempDir()
 	os.MkdirAll(filepath.Join(realm, "t"), 0o755)
-	script := "steps:\n  a:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built }\n"
+	script := "steps:\n  a:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built, output: '{\"summary\": \"done\"}' }\n"
 	cfg := "mode: unattended\nroles:\n  planner: { agent: scripted, model: none, script: script.yaml }\n" +
 		"budget:\n  per_run: { tokens: 100000, turns: 100 }\n  per_day: { tokens: 200000, turns: 200 }\nsandbox:\n  engine: unix:///run/ygg-test.sock\n"
 	if withGrader {
@@ -61,7 +61,7 @@ func gradedRun(t *testing.T, withGrader bool) (dir, config, id string, tk *taskt
 	for p, body := range map[string]string{
 		filepath.Join(realm, "t", "LICENSE"):  "MIT\n",
 		filepath.Join(realm, "pack.yaml"):     "name: test\nversion: 0.1.0\ngraph: graph.yaml\n" + gradePack,
-		filepath.Join(realm, "graph.yaml"):    "name: test\nversion: 1.0.0\nschema: 1\nnodes:\n  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n",
+		filepath.Join(realm, "graph.yaml"):    "name: test\nversion: 1.0.0\nschema: 2\nnodes:\n  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n",
 		filepath.Join(realm, "p.md"):          "Do the work.\n",
 		filepath.Join(cfgDir, "script.yaml"):  script,
 		filepath.Join(cfgDir, "factory.yaml"): cfg,

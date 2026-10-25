@@ -12,7 +12,7 @@ import (
 const shape = `
 name: g
 version: 1.0.0
-schema: 1
+schema: 2
 nodes:
   - { id: before, kind: exec, run: [echo, before], repo: . }
   - id: tasks
@@ -21,10 +21,12 @@ nodes:
     nodes:
       - id: implement
         kind: loop
+        input: [rejection, refusal]
+        output: ygg.implement/v1
         realm: leaf
         role: implementer
         reviewers:
-          - { id: spec, role: reviewer, prompt: prompts/review-spec.md }
+          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, input: [rejection], output: ygg.review/v1 }
       - { id: feature-gate, kind: gate, gate: feature }
       - { id: land, kind: merge, realm: leaf, back_to: implement }
       - { id: merge-gate, kind: gate, gate: merge }
@@ -134,5 +136,36 @@ func TestExpandRefusesWhatItCannotPlace(t *testing.T) {
 	}
 	if got, err := Expand(g.Nodes[1], nil, g, recipes); err != nil || len(got) != 0 {
 		t.Errorf("no tasks = %v, %v", got, err)
+	}
+}
+
+// An input that names a body node is that task's copy of it, as a re-run and a back_to are: its output is kept
+// under the copy's id. An input that names a node before the foreach, or a built-in source, stays as it is.
+func TestAnInputOfAnEarlierBodyNodeNamesTheTasksOwnCopy(t *testing.T) {
+	body := strings.Replace(shape, "      - { id: feature-gate", "      - { id: sum, kind: agent, role: planner, prompt: p.md, input: [task, implement, before-plan, rejection], output: ygg.implement/v1 }\n      - { id: feature-gate", 1)
+	body = strings.Replace(body, "  - { id: before, kind: exec, run: [echo, before], repo: . }\n",
+		"  - { id: before, kind: exec, run: [echo, before], repo: . }\n  - { id: before-plan, kind: agent, role: planner, prompt: p.md, input: [brief], output: ygg.plan/v1 }\n", 1)
+	body = strings.Replace(body, "          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, input: [rejection], output: ygg.review/v1 }",
+		"          - { id: spec, role: reviewer, prompt: prompts/review-spec.md, input: [task, change, rejection], output: ygg.review/v1 }", 1)
+	g, err := schema.ParseGraph("graph.yaml", []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := Expand(g.Nodes[2], tasks[:1], g, recipes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(nodes, func(n schema.Node) bool { return n.ID == "gallery-t001-sum" })
+	if i < 0 {
+		t.Fatalf("no sum node in %v", nodes)
+	}
+	if want := []string{"task", "gallery-t001-implement", "before-plan", "rejection"}; !slices.Equal(nodes[i].Input, want) {
+		t.Errorf("sum's input = %v, want %v", nodes[i].Input, want)
+	}
+	if got := nodes[0].Reviewers[0].Input; !slices.Equal(got, []string{"task", "change", "rejection"}) {
+		t.Errorf("the reviewer's input = %v", got)
+	}
+	if g.Nodes[2].Body[1].Input[1] != "implement" {
+		t.Error("Expand changed the graph's own node")
 	}
 }

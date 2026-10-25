@@ -95,6 +95,10 @@ func (c *command) doctor(args []string) int {
 				report("WARN", "run "+s.ID, fmt.Sprintf("node %s left process group %d running; stopped it", s.Exec.Node, s.Exec.PGID))
 			}
 		}
+		if s.Outputs == nil {
+			report("WARN", "run "+s.ID, "started before typed boundaries ("+string(s.Status)+"), so it can't be resumed; status, report and metrics still read it")
+			continue
+		}
 		if s.Status == run.StatusRunning && !run.Locked(dir) {
 			report("WARN", "run "+s.ID, "interrupted at node position "+fmt.Sprint(s.Position)+"; ygg resume "+s.ID)
 			continue

@@ -10,17 +10,16 @@ import (
 
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir"
-	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/odin/internal/agents"
 	"github.com/ouroboric-dev/odin/internal/run"
 	"github.com/ouroboric-dev/odin/internal/sandboxfake"
 )
 
-const scratchNode = "  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true, inputs: [docs/input.md, docs/more, missing.md] }\n"
+const scratchNode = "  - { id: design, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection], output: ygg.implement/v1 }\n"
 
 const designScript = "steps:\n  design:\n    - actions:\n        - write: { path: out/docs/design.md, content: \"# Design\\n\" }\n        - write: { path: docs/input.md, content: \"changed in the copy\\n\" }\n" +
-	"      result: { status: ok, summary: wrote the design }\n" +
-	"    - actions: [ { write: { path: out/docs/other.md, content: \"# Other\\n\" } } ]\n      result: { status: ok, summary: wrote another design }\n"
+	"      result: { status: ok, summary: wrote the design, output: '{\"summary\": \"done\"}' }\n" +
+	"    - actions: [ { write: { path: out/docs/other.md, content: \"# Other\\n\" } } ]\n      result: { status: ok, summary: wrote another design, output: '{\"summary\": \"done\"}' }\n"
 
 // withInputs writes the project files a scratch agent is given copies of.
 func withInputs(t *testing.T, r *run.Run) {
@@ -35,7 +34,7 @@ func withInputs(t *testing.T, r *run.Run) {
 }
 
 func TestAScratchAgentWorksInAWorkspaceOfItsOwnAndWritesUnderOut(t *testing.T) {
-	r := start(t, "key-points", "", scratchNode, designScript)
+	r := start(t, "key-points", "", strings.Replace(scratchNode, "input: [rejection]", "input: [brief, rejection]", 1), designScript)
 	withInputs(t, r)
 	r.Setup.BriefText = "Build a gallery."
 	out, err := Advance(context.Background(), r)
@@ -49,26 +48,25 @@ func TestAScratchAgentWorksInAWorkspaceOfItsOwnAndWritesUnderOut(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(ws, "out", "docs", "design.md")); err != nil || string(b) != "# Design\n" {
 		t.Errorf("out/docs/design.md = %q, %v", b, err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(ws, "brief.md")); string(b) != "Build a gallery." {
-		t.Errorf("brief.md = %q", b)
+	// Nothing is copied in, not even the brief: inputs are typed, and reach the prompt (typed-T16).
+	if _, err := os.Stat(filepath.Join(ws, "brief.md")); err == nil {
+		t.Error("the brief was copied into the workspace")
 	}
-	if b, _ := os.ReadFile(filepath.Join(ws, "docs", "more", "a.md")); string(b) != "a\n" {
-		t.Errorf("the copy of docs/more/a.md = %q", b)
-	}
-	if _, err := os.Stat(filepath.Join(ws, "docs", "more", ".git")); err == nil {
-		t.Error("a .git inside an input was copied into the workspace")
+	if _, err := os.Stat(filepath.Join(ws, "docs", "more")); err == nil {
+		t.Error("a project folder was copied into the workspace")
 	}
 	if b, _ := os.ReadFile(filepath.Join(r.Project, "docs", "input.md")); string(b) != "the input\n" {
-		t.Errorf("the agent changed the project's docs/input.md through its copy: %q", b)
+		t.Errorf("the agent changed the project's docs/input.md: %q", b)
 	}
 	prompt := promptOf(t, r, "design-1")
-	for _, want := range []string{"## Your workspace", "- docs/input.md is a copy", "- docs/more is a copy", "Write every document you produce under out/", "## Brief"} {
+	for _, want := range []string{"## Your workspace", "out/ is for drafts", "Nothing in out/ leaves this workspace", "## Input: brief\n\nBuild a gallery.\n"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt lacks %q:\n%s", want, prompt)
 		}
 	}
-	if strings.Contains(prompt, "missing.md") {
-		t.Errorf("the prompt lists an input that is not in the project:\n%s", prompt)
+	// out/ is drafts only: Odin publishes the views of the typed output, so no session is told to write its documents there.
+	if strings.Contains(prompt, "Write every document") {
+		t.Errorf("the prompt still asks for documents under out/:\n%s", prompt)
 	}
 	if len(r.State.Leaves) != 0 {
 		t.Errorf("a scratch node is not a leaf: leaves %v", r.State.Leaves)
@@ -84,7 +82,7 @@ func TestEachAttemptOfAScratchAgentStartsFromAFreshWorkspace(t *testing.T) {
 	if err != nil || out.Status != run.StatusStopped {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if err := Reject(ctx, r, "design-gate", "shorter, please"); err != nil {
+	if err := Reject(ctx, r, "design-gate", Reason("shorter, please")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusStopped {
@@ -97,37 +95,17 @@ func TestEachAttemptOfAScratchAgentStartsFromAFreshWorkspace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ws, "out", "docs", "other.md")); err != nil {
 		t.Errorf("the second attempt's output is missing: %v", err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(ws, "docs", "input.md")); string(b) != "the input\n" {
-		t.Errorf("the second attempt got %q for docs/input.md; the first attempt's change in its copy must not carry over", b)
+	if _, err := os.Stat(filepath.Join(ws, "docs", "input.md")); err == nil {
+		t.Error("the first attempt's docs/input.md was still in the workspace for the second")
 	}
 	if got := promptOf(t, r, "design-2"); !strings.Contains(got, "shorter, please") {
 		t.Errorf("the second prompt lacks the rejection:\n%s", got)
 	}
 }
 
-func TestAnInputThatCouldLeadOutOfTheProjectIsRefused(t *testing.T) {
-	r := start(t, "key-points", "", scratchNode, designScript)
-	withInputs(t, r)
-	secret := filepath.Join(t.TempDir(), "secret.txt")
-	os.WriteFile(secret, []byte("secret\n"), 0o644)
-	if err := os.Symlink(secret, filepath.Join(r.Project, "docs", "more", "link.md")); err != nil {
-		t.Fatal(err)
-	}
-	out, err := Advance(context.Background(), r)
-	if err != nil || out.Status != run.StatusFailed || !strings.Contains(out.Err.Error(), "link.md") || !strings.Contains(out.Err.Error(), "not a regular file") {
-		t.Errorf("Advance() = %+v, %v", out, err)
-	}
-	if _, err := os.Stat(filepath.Join(r.ScratchDir("design"), "docs", "more", "link.md")); err == nil {
-		t.Error("the symlink's target was copied into the workspace")
-	}
-	if r.State.Attempts["design"] != 0 {
-		t.Error("the agent ran although its workspace could not be made")
-	}
-}
-
 func TestAScratchAgentRunsInAScratchSandboxWithNoGitDir(t *testing.T) {
-	r, fake := startSandboxedWith(t, strings.Replace(scratchNode, "inputs: [docs/input.md, docs/more, missing.md] ", "", 1),
-		"steps:\n  design:\n    - actions:\n        - write: { path: out/design.md, content: \"# Design\\n\" }\n        - run: { argv: [sh, -c, \"echo ok > ran-in-sandbox.txt\"] }\n      result: { status: ok, summary: wrote }\n", run.Hooks{})
+	r, fake := startSandboxedWith(t, scratchNode,
+		"steps:\n  design:\n    - actions:\n        - write: { path: out/design.md, content: \"# Design\\n\" }\n        - run: { argv: [sh, -c, \"echo ok > ran-in-sandbox.txt\"] }\n      result: { status: ok, summary: wrote, output: '{\"summary\": \"done\"}' }\n", run.Hooks{})
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -158,10 +136,10 @@ func TestARetryOfAScratchAgentReseedsTheWorkspaceItsSandboxMounts(t *testing.T) 
 	// fresh copy in that same folder, not in a new one the container doesn't see (review I-3).
 	script := "steps:\n  design:\n" +
 		"    - actions:\n        - write: { path: out/first.md, content: \"# First\\n\" }\n        - run: { argv: [sh, -c, \"echo 1 > try.txt\"] }\n      error: the CLI crashed\n      kind: transient\n" +
-		"    - actions:\n        - run: { argv: [sh, -c, \"echo 2 > try.txt\"] }\n        - write: { path: out/design.md, content: \"# Design\\n\" }\n      result: { status: ok, summary: wrote }\n"
+		"    - actions:\n        - run: { argv: [sh, -c, \"echo 2 > try.txt\"] }\n        - write: { path: out/design.md, content: \"# Design\\n\" }\n      result: { status: ok, summary: wrote, output: '{\"summary\": \"done\"}' }\n"
 	w := &waits{}
 	h := hooks(w)
-	r, fake := startSandboxedWith(t, strings.Replace(scratchNode, "inputs: [docs/input.md, docs/more, missing.md] ", "", 1), script, h)
+	r, fake := startSandboxedWith(t, scratchNode, script, h)
 	// The first try holds the folder open, as a container's mount does, so the folder it saw can't go and
 	// come back under the same inode: each later command must run in that same folder.
 	var mounted *os.File
@@ -204,36 +182,6 @@ func TestARetryOfAScratchAgentReseedsTheWorkspaceItsSandboxMounts(t *testing.T) 
 	}
 	if b, _ := os.ReadFile(filepath.Join(ws, "try.txt")); strings.TrimSpace(string(b)) != "2" {
 		t.Errorf("try.txt = %q", b)
-	}
-}
-
-// An input that holds the project's root, such as ".", never brings the project's .factory (run state,
-// ledgers, other runs' transcripts) or .git into a workspace: the workspace is the project as the agent
-// may read it (review M-4). Gungnir refuses "." as an input; this holds whatever an input names.
-func TestAnInputThatHoldsTheProjectRootLeavesOutFactoryAndGit(t *testing.T) {
-	r := start(t, "key-points", "", scratchNode, designScript)
-	withInputs(t, r)
-	if _, err := os.Stat(filepath.Join(r.Project, ".factory")); err != nil {
-		t.Fatalf("the project has no .factory to leave out: %v", err)
-	}
-	for _, in := range []string{".", "docs/.."} {
-		n := schema.Node{ID: "design", Role: "planner", Prompt: "p.md", Scratch: true, Inputs: []string{in}}
-		present, err := seedScratch(r, n)
-		if err != nil {
-			t.Fatalf("seedScratch(%q) = %v", in, err)
-		}
-		ws := filepath.Join(r.ScratchDir("design"), filepath.FromSlash(in))
-		for _, hidden := range []string{".factory", ".git"} {
-			if _, err := os.Lstat(filepath.Join(ws, hidden)); err == nil {
-				t.Errorf("input %q: the workspace holds the project's %s", in, hidden)
-			}
-		}
-		if b, err := os.ReadFile(filepath.Join(ws, "docs", "input.md")); err != nil || string(b) != "the input\n" {
-			t.Errorf("input %q: the copy of docs/input.md = %q, %v", in, b, err)
-		}
-		if len(present) != 1 {
-			t.Errorf("input %q: present = %v", in, present)
-		}
 	}
 }
 

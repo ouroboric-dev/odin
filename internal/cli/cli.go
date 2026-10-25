@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/gungnir/schema"
@@ -35,8 +36,8 @@ const (
 const usage = `usage:
   ygg run     --graph <name|dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
   ygg resume  <run-id> [--project <dir>] [--mode <mode>]
-  ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
-  ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
+  ygg approve <run-id> <gate> [--decisions <file> | --note <text>] [--project <dir>] [--mode <mode>]
+  ygg reject  <run-id> <gate> (--decisions <file> | --reason <text>) [--project <dir>] [--mode <mode>]
   ygg status  <run-id> [--watch [--interval <duration>]] [--project <dir>]
   ygg grade   <run-id> [--task <id>] [--project <dir>]
   ygg metrics <run-id|first..last> [--json] [--project <dir>]
@@ -83,10 +84,10 @@ type command struct {
 
 // flags holds every flag; each command reads the ones it defines.
 type flags struct {
-	project, config, graph, realm, brief, mode, note, reason, root, task, canary string
-	realms, rollout                                                              []string        // sandbox build: every --realm given; deps bump: every --rollout given
-	all, host, json                                                              bool            // sandbox build: --all; deps bump: --host; metrics: --json
-	set                                                                          map[string]bool // the flags given
+	project, config, graph, realm, brief, mode, note, reason, decisions, root, task, canary string
+	realms, rollout                                                                         []string        // sandbox build: every --realm given; deps bump: every --rollout given
+	all, host, json                                                                         bool            // sandbox build: --all; deps bump: --host; metrics: --json
+	set                                                                                     map[string]bool // the flags given
 }
 
 // parse parses flags that may come before, between or after the positional arguments, and
@@ -219,32 +220,64 @@ func (c *command) resume(args []string) int {
 	return c.advance(r)
 }
 
+// decide approves or rejects a run's pending stop with what the person gives: a decisions file (ygg.decisions/v1:
+// decisions under ids of their own, answers to the design's open questions, and for a rejection the reason), or its
+// shorthand, --note (a file with one decision, under the next free id note-<gate>, note-<gate>-2, …) or --reason (a file with only the reason). The file is
+// read and checked before the run is opened, so a refused one changes nothing.
 func (c *command) decide(name string, args []string) int {
+	shorthand := map[string]string{"approve": "note", "reject": "reason"}[name]
 	f, pos, ok := c.parse(name, args, 2, func(fs *flag.FlagSet, f *flags) {
 		if name == "approve" {
-			fs.StringVar(&f.note, "note", "", "a note on the approval")
+			fs.StringVar(&f.decisions, "decisions", "", "a ygg.decisions/v1 `file`: decisions under ids of your own, and answers to the design's open questions by their ids; not with --note")
+			fs.StringVar(&f.note, "note", "", "shorthand for a decisions file with one decision, whose `text` is this one line, under the next free id: note-<gate>, then note-<gate>-2, …")
 		} else {
-			fs.StringVar(&f.reason, "reason", "", "why the work goes back")
+			fs.StringVar(&f.decisions, "decisions", "", "a ygg.decisions/v1 `file`: the reason, which a rejection needs, and decisions and answers as for approve; not with --reason")
+			fs.StringVar(&f.reason, "reason", "", "shorthand for a decisions file with only the reason, this one line of `text`: why the work goes back")
 		}
 	})
 	if !ok {
 		return ExitRefused
+	}
+	var d schema.Decisions
+	switch text := f.note + f.reason; {
+	case f.set["decisions"] && f.set[shorthand]:
+		return c.refuse(fmt.Errorf("give --decisions or --%s, not both: --%s is shorthand for a decisions file", shorthand, shorthand))
+	case f.set["decisions"]:
+		var err error
+		if d, err = engine.ReadDecisions(f.decisions); err != nil {
+			return c.refuse(err)
+		}
+	case !singleLine(text):
+		return c.refuse(fmt.Errorf("--%s is one line of text, and this one has a control character or a line or paragraph separator; "+
+			"a decisions file (--decisions) holds text of more lines", shorthand))
+	case name == "reject":
+		d = engine.Reason(f.reason)
 	}
 	r, code := c.open(f, pos[0])
 	if r == nil {
 		return code
 	}
 	defer r.Close()
+	if name == "approve" && !f.set["decisions"] {
+		d = engine.Note(r, pos[1], f.note) // its id is the next one free in the run (ruling R47)
+	}
 	var err error
 	if name == "approve" {
-		err = engine.Approve(c.ctx, r, pos[1], f.note)
+		err = engine.Approve(c.ctx, r, pos[1], d)
 	} else {
-		err = engine.Reject(c.ctx, r, pos[1], f.reason)
+		err = engine.Reject(c.ctx, r, pos[1], d)
 	}
 	if err != nil {
 		return c.refuse(err)
 	}
 	return c.advance(r)
+}
+
+// singleLine reports whether a shorthand is one line: no newline, carriage return, tab or other control character, and
+// no line or paragraph separator (U+2028, U+2029). It is the rule that ygg-proof-run.sh applies to --note and
+// --reason; a text of more lines goes in a decisions file.
+func singleLine(text string) bool {
+	return strings.IndexFunc(text, func(r rune) bool { return unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp) }) < 0
 }
 
 func (c *command) approve(args []string) int { return c.decide("approve", args) }
@@ -275,14 +308,14 @@ func (c *command) advance(r *run.Run) int {
 		switch {
 		case reject && approve:
 			fmt.Fprintf(c.out, "Run %s stopped at approval point %s. Read %s, then run one of:\n"+
-				"  ygg approve %s %s [--note \"...\"]\n  ygg reject %s %s --reason \"...\"\n",
+				"  ygg approve %s %s [--note \"...\" | --decisions <file>]\n  ygg reject %s %s --reason \"...\" | --decisions <file>\n",
 				id, out.Gate, gates, id, out.Gate, id, out.Gate)
 		case reject:
 			fmt.Fprintf(c.out, "Run %s stopped at approval point %s, which takes no approval. Read %s, then run:\n"+
-				"  ygg reject %s %s --reason \"...\"\n", id, out.Gate, gates, id, out.Gate)
+				"  ygg reject %s %s --reason \"...\" | --decisions <file>\n", id, out.Gate, gates, id, out.Gate)
 		default:
 			fmt.Fprintf(c.out, "Run %s stopped at the hard approval point %s. Read %s, then run:\n"+
-				"  ygg approve %s %s [--note \"...\"]\nA hard stop takes no rejection: to drop the work, start a new run.\n",
+				"  ygg approve %s %s [--note \"...\" | --decisions <file>]\nA hard stop takes no rejection: to drop the work, start a new run.\n",
 				id, r.State.PendingGate, gates, id, out.Gate)
 		}
 		return ExitStopped

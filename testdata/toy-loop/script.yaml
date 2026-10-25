@@ -3,7 +3,7 @@
 steps:
   build:
     - actions: [ { write: { path: build.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built it, usage: { in: 2000, out: 400, cache: 1500, turns: 5 } }
+      result: { status: ok, summary: built it, usage: { in: 2000, out: 400, cache: 1500, turns: 5 }, output: '{"summary": "done"}' }
   build-spec:
     - result: { status: ok, summary: reviewed, report: [], usage: { in: 800, out: 100, turns: 2 } }
   build-quality:

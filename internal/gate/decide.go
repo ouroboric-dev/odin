@@ -22,6 +22,10 @@ type Facts struct {
 	// (routing.Judge said escalate), so a person decides in every mode. Neither: a contract changed.
 	NoContractChange bool
 	Escalate         bool
+
+	// Uncited: a spec since the last gate still does not cite every owner decision after Odin sent it back once
+	// (typed-T19), so a person decides in every mode.
+	Uncited bool
 }
 
 // Decide applies the mode × approval-point table of spec §7.1, then the config's overrides.
@@ -29,6 +33,9 @@ type Facts struct {
 // approval point stops, so a typo never passes silently.
 func Decide(mode gungnir.Mode, g gungnir.Gate, overrides map[gungnir.Gate]string, f Facts) Action {
 	if !g.Known() || g.Hard() || mode == gungnir.ModeStepByStep || overrides[g] == "stop" {
+		return Stop
+	}
+	if f.Uncited {
 		return Stop
 	}
 	if g == gungnir.GateEscalation {

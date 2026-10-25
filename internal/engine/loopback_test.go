@@ -18,13 +18,13 @@ import (
 // at the pointer's new commit (the pointer's acceptance).
 const gateChecks = "checks:\n  unit: [test, -f, out.txt]\n  late: [test, -f, fixed.txt]\n  accept: [test, -f, repos/app/fixed.txt]\n"
 
-const loopOfBuild = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit] }\n"
+const loopOfBuild = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit], input: [rejection, refusal, open_findings, check_results], output: ygg.implement/v1 }\n"
 
 // fixScript has the implementer write out.txt in attempt 1 and fixed.txt in the attempts after it.
 const fixScript = "steps:\n  build:\n" +
-	"    - actions: [ { write: { path: out.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote out.txt }\n" +
-	"    - actions: [ { write: { path: fixed.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote fixed.txt }\n" +
-	"    - actions: [ { write: { path: more.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote more.txt }\n"
+	"    - actions: [ { write: { path: out.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote out.txt, output: '{\"summary\": \"done\"}' }\n" +
+	"    - actions: [ { write: { path: fixed.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote fixed.txt, output: '{\"summary\": \"done\"}' }\n" +
+	"    - actions: [ { write: { path: more.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: wrote more.txt, output: '{\"summary\": \"done\"}' }\n"
 
 func TestAMergeGateThatRefusesTheChecksSendsTheWorkBackIntoTheLoop(t *testing.T) {
 	nodes := loopOfBuild + "  - { id: merge, kind: merge, repo: repos/app, checks: [late], back_to: build }\n"
@@ -37,7 +37,7 @@ func TestAMergeGateThatRefusesTheChecksSendsTheWorkBackIntoTheLoop(t *testing.T)
 		t.Errorf("the implementer ran %d times, the refusal went back %d times; want 2 and 1", r.State.Attempts["build"], r.State.Returns["merge"])
 	}
 	prompt := promptOf(t, r, "build-2")
-	for _, want := range []string{"## Refused after your work passed", "merge gate refused (checks)", "check late failed"} {
+	for _, want := range []string{"## Input: refusal\n\nA later step of the factory refused the last attempt's work.", "merge gate refused (checks)", "check late failed"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the second attempt's prompt lacks %q:\n%s", want, prompt)
 		}
@@ -139,11 +139,11 @@ func checkNotSentBack(t *testing.T, r *run.Run, out Outcome, err error, want str
 	}
 }
 
-const sandboxedGate = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit] }\n" +
+const sandboxedGate = "  - { id: build, kind: loop, repo: repos/app, role: planner, prompt: p.md, checks: [unit], input: [rejection, refusal, open_findings, check_results], output: ygg.implement/v1 }\n" +
 	"  - { id: merge, kind: merge, repo: repos/app, checks: [junk], back_to: build }\n"
 
-const loopBuildScript = "steps:\n  build:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built }\n" +
-	"    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built again }\n"
+const loopBuildScript = "steps:\n  build:\n    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built, output: '{\"summary\": \"done\"}' }\n" +
+	"    - actions: [ { write: { path: build.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built again, output: '{\"summary\": \"done\"}' }\n"
 
 func TestACheckTheRealmDoesNotDefineFailsTheGateAndIsNotSentBack(t *testing.T) {
 	nodes := loopOfBuild + "  - { id: merge, kind: merge, repo: repos/app, checks: [late], back_to: build }\n"

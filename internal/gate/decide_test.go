@@ -99,3 +99,15 @@ func TestPointerContractFollowsTheJudgement(t *testing.T) {
 		}
 	}
 }
+
+// A spec that still does not cite every owner decision after Odin sent it back once stops its gate for a person in
+// every mode, whatever the overrides say (typed-T19).
+func TestAnUncitedOwnerDecisionStopsTheGate(t *testing.T) {
+	for _, mode := range []gungnir.Mode{gungnir.ModeKeyPoints, gungnir.ModeUnattended} {
+		for _, over := range []map[gungnir.Gate]string{nil, {gungnir.GateSpec: "auto"}} {
+			if got := Decide(mode, gungnir.GateSpec, over, Facts{Uncited: true}); got != Stop {
+				t.Errorf("%s, overrides %v: Decide() = %s, want stop", mode, over, got)
+			}
+		}
+	}
+}

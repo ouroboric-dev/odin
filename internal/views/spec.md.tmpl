@@ -1,0 +1,64 @@
+{{- /* The engineering spec (ygg.spec/v1), with the sections the spec prompt asked for, and its leaves. */ -}}
+{{front .Front}}
+{{with .Doc.Blocked}}## Blocked
+
+{{text .Reason}}
+
+{{end}}## Summary
+
+{{text .Doc.Summary}}
+
+## Architecture and components
+
+{{text .Doc.Architecture}}
+
+## Interfaces and contracts
+
+{{text .Doc.Interfaces}}
+
+## Data model
+
+{{text .Doc.DataModel}}
+
+## Acceptance criteria per feature
+
+{{text .Doc.AcceptanceCriteria}}
+
+## Security considerations
+
+{{text .Doc.Security}}
+
+## Testing approach
+
+{{text .Doc.Testing}}
+
+## Decisions
+
+{{range .Doc.Decisions}}- {{decided .}}
+{{else}}None.
+{{end}}
+## Deviations from the design doc
+
+{{range .Doc.Deviations}}- {{item .What 2}}
+  - {{item (print "Where: " .Where) 4}}
+  - {{item (print "Why: " .Why) 4}}
+{{- with .Cites}}
+  - Owner decisions: {{list .}}
+{{- end}}
+{{else}}None.
+{{end}}
+## Leaves
+
+The repositories the product is built in, which Odin writes to the project's leaves.yaml:
+
+{{with .Doc.Leaves.Runtime}}- The runtime: {{line .Realm}} {{line .RealmVersion}}
+{{end}}
+{{- range $path, $leaf := .Doc.Leaves.Leaves}}- {{line $path}}, from {{line $leaf.Realm}} {{line $leaf.RealmVersion}}: {{line $leaf.Description}}
+{{- with $leaf.Consumes}} It consumes {{list .}}.{{end}}
+{{else}}None.
+{{end}}
+{{- with .Doc.Notes}}
+## Notes
+
+{{bullets .}}
+{{- end}}

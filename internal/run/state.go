@@ -95,13 +95,14 @@ type State struct {
 	Warned          map[string]bool        `json:"warned,omitempty"`        // the budget warnings already given, so each comes once
 	Loops           map[string]*LoopRecord `json:"loops,omitempty"`         // loop node id: where its loop stands
 	Features        []schema.FeatureRecord `json:"features,omitempty"`      // the plan's tasks in the order they are built, once the tasks node has run
-	PlanSource      string                 `json:"plan_source,omitempty"`   // the tasks.md they came from, relative to the project
-	PlanSHA256      string                 `json:"plan_sha256,omitempty"`   // that file as Odin read it
+	PlanSource      string                 `json:"plan_source,omitempty"`   // the plan's kept output they came from (outputs/<node>.json), relative to the project
+	PlanSHA256      string                 `json:"plan_sha256,omitempty"`   // that output's SHA-256, as Odin kept it
 	Expanded        map[string]bool        `json:"expanded,omitempty"`      // foreach node ids already expanded into the nodes of each task
 	NewLeaves       map[string]bool        `json:"new_leaves,omitempty"`    // leaf paths this run's init creates: only these get the realm's template
-	Returns         map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node
+	Returns         map[string]int         `json:"returns,omitempty"`       // node id: how many times its refusal went back into an earlier node; a spec node: how many times the owner-decision check sent it back
 	Refusals        map[string]string      `json:"refusals,omitempty"`      // node id: what a later step refused, for the node's next attempt
-	Decisions       []Decision             `json:"decisions,omitempty"`     // the notes of gate approvals, in the order given: every later session reads them
+	Decisions       []GateDecisions        `json:"decisions,omitempty"`     // what people gave at the gates, in the order given: every later session reads it
+	Outputs         map[string]OutputRef   `json:"outputs"`                 // session key: its last typed output, kept in outputs/ (change typed-boundaries)
 	Ledger          ledger.Anchor          `json:"ledger"`
 	Error           string                 `json:"error,omitempty"`
 	Exec            *ExecProcess           `json:"exec,omitempty"` // the exec node running now, if any
@@ -109,11 +110,25 @@ type State struct {
 	Updated         time.Time              `json:"updated"`
 }
 
-// Decision is the note an operator gave when approving a gate node (spec §7.2): the product owner's
-// decision, which every later session reads.
-type Decision struct {
-	Gate string `json:"gate"`
-	Note string `json:"note"`
+// GateDecisions is what a person gave at a gate node, approving or rejecting it (spec §7.2, change typed-boundaries):
+// the product owner's decisions and answers, which every later session reads and the spec must cite. A rejection's
+// reason is not kept here: it goes to the node the gate runs again. Questions holds, by question id, the text of the
+// question each answer answered, as the design asked it when the answer was given: a later design may renumber its
+// questions (ruling R51).
+type GateDecisions struct {
+	Gate      string            `json:"gate"`
+	Decisions schema.Decisions  `json:"decisions"`
+	Questions map[string]string `json:"questions,omitempty"`
+}
+
+// OutputRef is where a session's typed output is kept: the document, as the session handed it back and Odin
+// validated it, in the run folder at Path, with its contract, its hash and the session's attempt.
+type OutputRef struct {
+	Contract string `json:"contract"`
+	Path     string `json:"path"` // relative to the run folder: outputs/<key>.json
+	SHA256   string `json:"sha256"`
+	Attempt  int    `json:"attempt"`
+	View     string `json:"view,omitempty"` // where a publish node put its view in the project, from the project; a later view links to it
 }
 
 // LoopRecord is where one loop node stands (spec §4.2): Jormungandr's state, which holds the attempt,
@@ -124,12 +139,29 @@ type LoopRecord struct {
 	// Base is the leaf's commit when the loop started, before its first attempt: the task's diff starts there.
 	// A state written before this field has none, and the loop records the leaf's commit when it next runs.
 	Base string `json:"base,omitempty"`
+	// Checks are how the checks of the ladder ended the last time they ran, in attempt ChecksAttempt, read from their
+	// typed results: the check_results of the sessions after them. They are kept here, so a resumed session is told
+	// what it was told before the stop.
+	Checks        []CheckView `json:"checks,omitempty"`
+	ChecksAttempt int         `json:"checks_attempt,omitempty"`
 }
 
-// Escalation is why a loop gave up (spec §7.3): see the Reason constants of Jormungandr.
+// CheckView is how one check of a loop's ladder ended, as its typed result (ygg.check/v1) says, for the sessions of
+// the loop to read. The lists are empty for a check with no valid typed result: the exit code alone decided it.
+type CheckView struct {
+	Check       string   `json:"check"`
+	Passed      bool     `json:"passed"`
+	TimedOut    bool     `json:"timed_out,omitempty"`
+	FailedTests []string `json:"failed_tests,omitempty"`
+	PassedTests []string `json:"passed_tests,omitempty"`
+}
+
+// Escalation is why a loop gave up (spec §7.3): see the Reason constants of Jormungandr. Reviewer is the reviewer
+// that could not answer, for reviewer-blocked and reviewer-unreadable: a person's rejection answers it (ruling R52).
 type Escalation struct {
-	Reason string `json:"reason"`
-	Detail string `json:"detail"`
+	Reason   string `json:"reason"`
+	Detail   string `json:"detail"`
+	Reviewer string `json:"reviewer,omitempty"`
 }
 
 // Pause is why a run waits for the provider (spec §12).
@@ -177,6 +209,9 @@ func Dir(project, id string) string { return filepath.Join(project, ".factory", 
 // over the old one, then the directory synced (spec §12).
 func (s *State) Save(dir string) error {
 	s.Schema = StateSchema
+	if s.Outputs == nil {
+		s.Outputs = map[string]OutputRef{}
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
@@ -224,10 +259,8 @@ func LoadState(dir string) (*State, error) {
 	if head.Schema == stateSchemaV2 {
 		return nil, fmt.Errorf("%s/run.json: run %s was led by a realm (schema %s), from before graphs, so it can't be resumed; start a new run with --graph", dir, head.ID, stateSchemaV2)
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	var s State
-	if err := dec.Decode(&s); err != nil {
+	s, err := decodeState(data)
+	if err != nil {
 		return nil, fmt.Errorf("%s/run.json: %w", dir, err)
 	}
 	if s.Schema != StateSchema {
@@ -275,7 +308,69 @@ func LoadState(dir string) (*State, error) {
 	if s.Leaves == nil {
 		s.Leaves = map[string]LeafRecord{}
 	}
+	return s, nil
+}
+
+// decodeState decodes run.json strictly. Outputs is written even when it is empty: a run.json without it was started
+// before typed boundaries, and is read in that run's shape, its gates' notes as {gate, note}, with Outputs left nil
+// for Open to refuse (ruling R49). The read-only commands still read it.
+func decodeState(data []byte) (*State, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	if _, ok := fields["outputs"]; ok {
+		var s State
+		if err := strictDecode(data, &s); err != nil {
+			return nil, err
+		}
+		if s.Outputs == nil {
+			s.Outputs = map[string]OutputRef{}
+		}
+		return &s, nil
+	}
+	// The outer Decisions hides State's: it takes the old shape.
+	var old struct {
+		State
+		Decisions []legacyNote `json:"decisions,omitempty"`
+	}
+	if err := strictDecode(data, &old); err != nil {
+		return nil, err
+	}
+	s := old.State
+	for _, n := range old.Decisions {
+		s.Decisions = append(s.Decisions, GateDecisions{Gate: n.Gate, Decisions: schema.Decisions{Decisions: []schema.Decision{{ID: legacyNoteID(&s, n.Gate), Text: n.Note}}}})
+	}
 	return &s, nil
+}
+
+// legacyNote is a gate's note as a run started before typed boundaries kept it.
+type legacyNote struct {
+	Gate string `json:"gate"`
+	Note string `json:"note"`
+}
+
+// legacyNoteID is the id an old note at gate reads under: the one the --note shorthand gives today, note-<gate>, then
+// note-<gate>-2 and on (ruling R47).
+func legacyNoteID(s *State, gate string) string {
+	taken := map[string]bool{}
+	for _, g := range s.Decisions {
+		for _, d := range g.Decisions.Decisions {
+			taken[d.ID] = true
+		}
+	}
+	id := "note-" + gate
+	for i := 2; taken[id]; i++ {
+		id = fmt.Sprintf("note-%s-%d", gate, i)
+	}
+	return id
+}
+
+// strictDecode decodes data into v, refusing unknown fields.
+func strictDecode(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
 }
 
 // ExecProcess is an exec node's running command: its process group, and its leader's start time,

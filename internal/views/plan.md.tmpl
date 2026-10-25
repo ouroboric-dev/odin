@@ -1,0 +1,31 @@
+{{- /* The plan (ygg.plan/v1), with the sections the plan prompt asked for; its tasks are in tasks.md. */ -}}
+{{front .Front}}
+{{with .Doc.Blocked}}## Blocked
+
+{{text .Reason}}
+
+{{end}}## Goal
+
+{{text .Doc.Goal}}
+
+## Order
+
+{{if .Doc.Tasks}}| Task | Leaf | Size | Depends on |
+| --- | --- | --- | --- |
+{{range .Doc.Tasks}}| {{cell .ID}} | {{cell .Layer}} | {{cell .Size}} | {{cell (deps .DependsOn)}} |
+{{end}}{{else}}None.
+{{end}}
+## Decisions
+
+{{range .Doc.Decisions}}- {{decided .}}
+{{else}}None.
+{{end}}
+## Risks
+
+{{if .Doc.Risks}}{{bullets .Doc.Risks}}{{else}}None.
+{{end}}
+{{- with .Doc.Notes}}
+## Notes
+
+{{bullets .}}
+{{- end}}

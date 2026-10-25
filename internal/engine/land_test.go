@@ -18,7 +18,7 @@ var bg = context.Background()
 // in the project umbrella.
 const packChecks = "checks:\n  unit: [test, -f, out.txt]\n  e2e: [test, -f, umbrella.yaml]\n  broken: [\"false\"]\n"
 
-const build = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
+const build = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
 
 func TestAMergeNodeLandsTheBranchThroughTheGate(t *testing.T) {
 	r := startPack(t, "key-points", "", packChecks, build+"  - { id: merge, kind: merge, repo: repos/app, checks: [unit] }\n", okScript)
@@ -90,10 +90,10 @@ func TestAShrunkGeneratedFileStopsAtTheShrinkGuard(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(r.Dir, "gates", "move-1.md")); err != nil || !strings.Contains(string(b), "keeps 1 of its 10 rows") {
 		t.Errorf("gate file = %q, %v", b, err)
 	}
-	if err := Reject(bg, r, "move", "no"); err == nil {
+	if err := Reject(bg, r, "move", Reason("no")); err == nil {
 		t.Error("Reject() of a hard stop succeeded; a hard stop takes approve, or a new run")
 	}
-	if err := Approve(bg, r, "move", "the index shrank on purpose"); err != nil {
+	if err := Approve(bg, r, "move", Note(r, "move", "the index shrank on purpose")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
@@ -107,8 +107,8 @@ func TestAShrunkGeneratedFileStopsAtTheShrinkGuard(t *testing.T) {
 func TestAPlantedRepositoryStopsAtPolicyViolation(t *testing.T) {
 	script := "steps:\n  a:\n    - actions:\n        - write: { path: vendor/x/.git/HEAD, content: \"ref: refs/heads/main\\n\" }\n" +
 		"        - write: { path: vendor/x/.git/objects/.keep, content: \"\" }\n        - write: { path: vendor/x/.git/refs/heads/.keep, content: \"\" }\n" +
-		"      result: { status: ok, summary: planted a repo }\n" +
-		"    - actions: [ { write: { path: out.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: clean }\n"
+		"      result: { status: ok, summary: planted a repo, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ { write: { path: out.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: clean, output: '{\"summary\": \"done\"}' }\n"
 	r := startPack(t, "unattended", "", "", build, script)
 	base := r.State.Leaves["repos/app"].Checkpoint
 	out, err := Advance(bg, r)
@@ -129,7 +129,7 @@ func TestAPlantedRepositoryStopsAtPolicyViolation(t *testing.T) {
 	if _, err := os.Stat(planted); err != nil {
 		t.Error("Open() cleaned the quarantined leaf before anyone decided; the evidence is gone")
 	}
-	if err := Approve(bg, reopened, "a", "investigated"); err != nil {
+	if err := Approve(bg, reopened, "a", Note(reopened, "a", "investigated")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(planted); err == nil {

@@ -20,7 +20,8 @@ type sessionSpec struct {
 	key       string
 	role      string
 	repo      string
-	text      string // the whole prompt
+	text      string          // the whole prompt
+	output    schema.Contract // the contract of the document the session hands back; empty for none
 	readOnly  bool
 	before    string // a read-only session's snapshot of the leaf before it ran
 	maxTurns  int
@@ -30,6 +31,9 @@ type sessionSpec struct {
 	// there, in the scratch sandbox of key, and a try that failed starts again from reseed's fresh copy.
 	scratch string
 	reseed  func() error
+	// repair says the session asks again for the answer of the session before it, which did the work: a try that
+	// fails for a reason that is not the agent's is retried on that work, which is not set aside.
+	repair bool
 	// started, when set, runs once, when the first try starts: after the meter let it, so a stop for
 	// a cap or a quota before the session logs nothing that says it started (review I5).
 	started func() error
@@ -56,9 +60,12 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 	meter := r.Meter()
 	retrier := jormungandr.Retrier{Backoff: r.Setup.Backoff, Meter: meter, Sleep: r.Setup.Sleep,
 		OnRetry: func(try int, wait time.Duration, why string) error {
-			// The failed try may have left half its work in the leaf: the retry starts from the checkpoint.
-			if err := setAside(ctx, r, sp); err != nil {
-				return err
+			// The failed try may have left half its work in the leaf: the retry starts from the checkpoint. A repair
+			// session's leaf holds the work of the session it repairs, which is not yet checkpointed: it stays.
+			if !sp.repair {
+				if err := setAside(ctx, r, sp); err != nil {
+					return err
+				}
 			}
 			return r.Log(gungnir.Event{Name: gungnir.EventRetry, Node: sp.key, Attempt: r.State.Attempts[sp.key],
 				Note: fmt.Sprintf("try %d failed for a reason that is not the agent's; it runs again in %s: %s", try, wait, why)})
@@ -105,7 +112,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 		}
 		task := gungnir.Task{Role: sp.role, Node: sp.key, Attempt: attempt, Prompt: sp.text, Workdir: workdir,
 			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turnsFor(sp.maxTurns, left), MaxTokens: sp.maxTokens, Timeout: sp.timeout,
-			TranscriptDir: filepath.Join(r.Dir, "transcripts"), Sandbox: runner}
+			TranscriptDir: filepath.Join(r.Dir, "transcripts"), Output: string(sp.output), Sandbox: runner}
 		actx, cancel := ctx, context.CancelFunc(func() {})
 		if task.Timeout > 0 {
 			actx, cancel = context.WithTimeout(ctx, task.Timeout)

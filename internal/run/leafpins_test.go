@@ -25,7 +25,8 @@ func graphOnlyStoreWith(t *testing.T, nodes string) (cfg string) {
 	}
 	for f, body := range map[string]string{
 		"pack.yaml":  "name: softy\nversion: 0.1.0\ngraph: graph.yaml\n",
-		"graph.yaml": "name: softy\nversion: 0.1.0\nschema: 1\nnodes:\n" + nodes,
+		"graph.yaml": "name: softy\nversion: 0.1.0\nschema: 2\nnodes:\n" + nodes,
+		"p.md":       "Plan.\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -75,7 +76,7 @@ func TestAPackThatHoldsAGraphAndARecipeServesTheLeavesThatPinNone(t *testing.T) 
 // The real graph names no repo: its leaves come from the project and the plan. An unpinned leaf the project
 // already has must stop the run at Prepare, before a run folder or a session, not at init or at expansion.
 func TestAnUnpinnedLeafTheGraphDoesNotNameStopsTheRunBeforeAnythingStarts(t *testing.T) {
-	cfg := graphOnlyStoreWith(t, "  - { id: ready, kind: tasks, from: tasks.md }\n")
+	cfg := graphOnlyStoreWith(t, "  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection, refusal], output: ygg.plan/v1 }\n  - { id: ready, kind: tasks, from: plan }\n")
 	project := treetest.Build(t, pinned("softy", "0.1.0", map[string]treetest.Pin{"repos/api": {}}))
 	_, err := Start(ctx, Options{Project: project, Config: cfg, Graph: "softy"})
 	if err == nil || !strings.Contains(err.Error(), "the leaf repos/api pins no realm") {

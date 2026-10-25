@@ -14,13 +14,15 @@ import (
 // reviewLoop is a loop with the check unit and one reviewer, spec, who runs as the scripted planner.
 const reviewLoop = `  - id: build
     kind: loop
+    input: [rejection, refusal, open_findings, check_results]
+    output: ygg.implement/v1
     repo: repos/app
     role: planner
     prompt: p.md
     attempts: 3
     checks: [unit]
     reviewers:
-      - { id: spec, role: planner, prompt: p.md }
+      - { id: spec, role: planner, prompt: p.md, input: [change, open_findings, check_results, rejection], output: ygg.review/v1 }
 `
 
 func startReview(t *testing.T, mode, script string) *run.Run {
@@ -35,8 +37,8 @@ func fixedFinding(proof string) string {
 }
 
 func TestAReviewerSeesItsFindingsAndClosesThemOnlyWithProof(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done v1") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "done v2") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done v1") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done v2") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [ " + majorFinding + " ] }\n" +
 		"    - result: { status: ok, report: [ " + fixedFinding("build.txt:1 now says what the brief asks; check unit passed") + " ] }\n"
 	r := startReview(t, "key-points", script)
@@ -47,14 +49,14 @@ func TestAReviewerSeesItsFindingsAndClosesThemOnlyWithProof(t *testing.T) {
 	if r.State.Loops["build"].State.Attempt != 2 || r.State.Attempts["build-spec"] != 2 {
 		t.Errorf("loop attempt %d, reviewer sessions %d; want 2 and 2", r.State.Loops["build"].State.Attempt, r.State.Attempts["build-spec"])
 	}
-	first, second := transcript(t, r, "build-spec-1"), transcript(t, r, "build-spec-2")
-	if !strings.Contains(first, "Your id is spec") || !strings.Contains(first, "The checks that passed on this work: unit.") || strings.Contains(first, "reported before") {
+	first, second := promptOf(t, r, "build-spec-1"), promptOf(t, r, "build-spec-2")
+	if !strings.Contains(first, "Your id is spec") || !strings.Contains(first, "## Input: check_results") || !strings.Contains(first, `"check": "unit",`+"\n"+`    "passed": true`) || strings.Contains(first, "reported before") {
 		t.Errorf("the first review was told:\n%s", first)
 	}
-	if !strings.Contains(second, "Findings you reported before") || !strings.Contains(second, `\"id\": \"spec-1\"`) {
+	if !strings.Contains(second, "## Input: open_findings\n\nThese are the findings you reported before") || !strings.Contains(second, `"id": "spec-1"`) {
 		t.Errorf("the second review wasn't shown its finding:\n%s", second)
 	}
-	if !strings.Contains(transcript(t, r, "build-2"), "- spec-1 (major, from spec) at build.txt:1") {
+	if p := promptOf(t, r, "build-2"); !strings.Contains(p, `"id": "spec-1"`) || !strings.Contains(p, `"location": "build.txt:1"`) {
 		t.Error("the second implementer attempt wasn't given the reviewer's finding")
 	}
 	text := ledgerText(t, r)
@@ -70,7 +72,7 @@ func TestAReviewerSeesItsFindingsAndClosesThemOnlyWithProof(t *testing.T) {
 }
 
 func TestReviewersRunReadOnlyAndTheImplementerDoesNot(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n  build-spec:\n    - result: { status: ok, report: [] }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startReview(t, "key-points", script)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
@@ -82,7 +84,7 @@ func TestReviewersRunReadOnlyAndTheImplementerDoesNot(t *testing.T) {
 
 // Backlog B-018: an ignored file is a change too.
 func TestAReviewerThatWritesAnIgnoredFileIsAHardStop(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write(".gitignore", "*.log") + ", " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write(".gitignore", "*.log") + ", " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - actions: [ " + write("notes.log", "I was here") + " ]\n      result: { status: ok, report: [] }\n"
 	r := startReview(t, "unattended", script)
 	out, err := Advance(context.Background(), r)
@@ -99,7 +101,7 @@ func TestAReviewerThatWritesAnIgnoredFileIsAHardStop(t *testing.T) {
 }
 
 func TestIgnoredFilesThatWereThereBeforeAreNotTheReadersDoing(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write(".gitignore", "*.log") + ", " + write("build.txt", "done") + ", " + write("cache.log", "left by the build") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write(".gitignore", "*.log") + ", " + write("build.txt", "done") + ", " + write("cache.log", "left by the build") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startReview(t, "key-points", script)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -109,8 +111,8 @@ func TestIgnoredFilesThatWereThereBeforeAreNotTheReadersDoing(t *testing.T) {
 
 // Backlog B-018, for a read-only agent node.
 func TestAReadOnlyRoleThatWritesAnIgnoredFileIsAHardStop(t *testing.T) {
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: look, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true }\n"
-	script := "steps:\n  a:\n    - actions: [ " + write(".gitignore", "*.log") + " ]\n      result: { status: ok }\n  look:\n    - actions: [ " + write("notes.log", "I was here") + " ]\n      result: { status: ok }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: look, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true, input: [rejection], output: ygg.implement/v1 }\n"
+	script := "steps:\n  a:\n    - actions: [ " + write(".gitignore", "*.log") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n  look:\n    - actions: [ " + write("notes.log", "I was here") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r := start(t, "key-points", "", nodes, script)
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GatePolicyViolation {
@@ -120,7 +122,7 @@ func TestAReadOnlyRoleThatWritesAnIgnoredFileIsAHardStop(t *testing.T) {
 
 // Review I1: a read-only session that changed the leaf and then failed is checked all the same.
 func TestAReviewerThatWritesAnIgnoredFileAndFailsAsAnAgentIsAHardStop(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write(".gitignore", "*.log") + ", " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write(".gitignore", "*.log") + ", " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - actions: [ " + write("notes.log", "I was here") + " ]\n      error: the session timed out\n" +
 		"    - result: { status: ok, report: [] }\n"
 	r := startReview(t, "unattended", script)
@@ -134,8 +136,8 @@ func TestAReviewerThatWritesAnIgnoredFileAndFailsAsAnAgentIsAHardStop(t *testing
 }
 
 func TestAReadOnlyRoleThatWritesAnIgnoredFileAndFailsIsAHardStop(t *testing.T) {
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n  - { id: look, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true }\n"
-	script := "steps:\n  a:\n    - actions: [ " + write(".gitignore", "*.log") + " ]\n      result: { status: ok }\n" +
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n  - { id: look, kind: agent, role: planner, prompt: p.md, repo: repos/app, read_only: true, input: [rejection], output: ygg.implement/v1 }\n"
+	script := "steps:\n  a:\n    - actions: [ " + write(".gitignore", "*.log") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  look:\n    - actions: [ " + write("notes.log", "I was here") + " ]\n      error: the session timed out\n"
 	r := start(t, "key-points", "", nodes, script)
 	out, err := Advance(context.Background(), r)
@@ -146,7 +148,7 @@ func TestAReadOnlyRoleThatWritesAnIgnoredFileAndFailsIsAHardStop(t *testing.T) {
 
 // A retry resets the leaf: a read-only session's leaf is compared before that, or the reset hides what it wrote.
 func TestAReviewerThatWritesAFileAndFailsTransientlyIsAHardStop(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - actions: [ " + write("notes.txt", "I was here") + " ]\n      error: HTTP 529 overloaded\n      kind: transient\n" +
 		"    - result: { status: ok, report: [] }\n"
 	w := &waits{}

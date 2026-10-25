@@ -1,0 +1,31 @@
+---
+title: "Photo Share plan"
+status: draft
+date: 2026-10-24
+related: ["../../specs/2026-10-24-photo-share.md"]
+---
+
+## Goal
+
+A family keeps photos and shares albums.
+
+## Order
+
+| Task | Leaf | Size | Depends on |
+| --- | --- | --- | --- |
+| photo-share-T001 | repos/api | M | nothing |
+| photo-share-T002 | repos/api | M | photo-share-T001 |
+
+## Decisions
+
+- **Decided 2026-10-24:** Accounts use email.
+  The brief names email.
+  (Owner decisions: email-sign-in)
+
+## Risks
+
+- The photo store may be slow.
+
+## Notes
+
+- One layer only.

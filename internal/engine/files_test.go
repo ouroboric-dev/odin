@@ -92,18 +92,3 @@ func TestReadingAFileRefusesOneOverTheLimit(t *testing.T) {
 		t.Errorf("readRegular(a file over the limit) = %d bytes, %v", len(b), err)
 	}
 }
-
-// A scratch input's files are read through the copy budget: one file bigger than what the budget has left
-// is refused with the budget's message (review M-1).
-func TestAScratchInputBiggerThanTheBudgetIsRefused(t *testing.T) {
-	project, ws := t.TempDir(), t.TempDir()
-	os.MkdirAll(filepath.Join(project, "docs"), 0o755)
-	os.WriteFile(filepath.Join(project, "docs", "a.md"), []byte("12345"), 0o644)
-	os.WriteFile(filepath.Join(project, "docs", "b.md"), []byte("678"), 0o644)
-	if err := copyTree(project, filepath.Join(project, "docs"), filepath.Join(ws, "docs"), &copyBudget{files: 10, bytes: 8}); err != nil {
-		t.Errorf("copyTree() within the budget = %v", err)
-	}
-	if err := copyTree(project, filepath.Join(project, "docs"), filepath.Join(ws, "again"), &copyBudget{files: 10, bytes: 7}); err == nil || !strings.Contains(err.Error(), "more than") {
-		t.Errorf("copyTree() over the budget = %v", err)
-	}
-}

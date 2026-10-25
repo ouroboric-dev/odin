@@ -11,8 +11,8 @@ import (
 // Spec §10.2 counts a reviewer's veto and an ignored dispute. The ledger names which raised a finding, and a
 // dispute that could not be used has an event of its own, so ygg metrics reads fields and parses no text.
 func TestTheLedgerSaysWhetherACheckOrAReviewerRaisedAFinding(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "done again") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done again") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [ " + majorFinding + " ] }\n" +
 		"    - result: { status: ok, report: [ " + fixedFinding("build.txt:1 now says what the brief asks; check unit passed") + " ] }\n"
 	r := startReview(t, "key-points", script)
@@ -36,19 +36,19 @@ func TestTheLedgerSaysWhetherACheckOrAReviewerRaisedAFinding(t *testing.T) {
 }
 
 func TestACheckFindingHasTheOriginCheck(t *testing.T) {
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok }\n" +
-		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r := startLoop(t, "key-points", script)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v", out, err)
 	}
-	if text := ledgerText(t, r); !strings.Contains(text, `"ygg.finding.id":"check-unit"`) || !strings.Contains(text, `"ygg.finding.origin":"check"`) {
+	if text := ledgerText(t, r); !strings.Contains(text, `"ygg.finding.id":"check-unit-result"`) || !strings.Contains(text, `"ygg.finding.origin":"check"`) {
 		t.Errorf("the check finding names no origin:\n%s", text)
 	}
 }
 
 func TestAnIgnoredDisputeIsADisputeIgnoredEventNotALoopAttemptWithText(t *testing.T) {
-	r := startDispute(t, disputeScript(`'{"disputes": [{"id": "spec-1"}]}'`, 2))
+	r := startDispute(t, disputeScript(notOpenDispute, 2))
 	Advance(context.Background(), r) //nolint:errcheck // the run's end is not what this test reads
 	text := ledgerText(t, r)
 	if !strings.Contains(text, `"event":"dispute_ignored"`) || !strings.Contains(text, `"ygg.note":"dispute ignored: `) {

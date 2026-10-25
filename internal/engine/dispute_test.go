@@ -2,33 +2,33 @@ package engine
 
 import (
 	"context"
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ouroboric-dev/gungnir"
+	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
-// printingCheck is a unit check that prints the test it ran when it passes, as the realms' test checks do.
+// printingCheck is a unit check that prints the test it ran when it passes. On the host it writes no typed result,
+// so it can't show that a test passed.
 const printingCheck = "checks:\n  unit: [sh, -c, \"grep -q done build.txt && echo 'ok TestFindIndex'\"]\n"
 
 // findIndexClaim is the finding of run 20261020-190818-5b02ff: a reviewer says a method does not exist.
 const findIndexClaim = `{ id: spec-1, source: spec, severity: blocker, location: "build.txt:1", claim: "findIndex is not a JavaScript method", status: open }`
 
 func disputeOf(check, test string) string {
-	return `'{"disputes": [{"id": "spec-1", "check": "` + check + `", "test": "` + test + `", "evidence": "curl showed findIndex is defined; TestFindIndex runs it"}]}'`
+	return `'{"summary": "disputed spec-1", "disputes": [{"id": "spec-1", "check": "` + check + `", "test": "` + test + `", "evidence": "curl showed findIndex is defined; TestFindIndex runs it"}]}'`
 }
 
 // disputeScript is a loop whose reviewer raises findIndexClaim in every session it gets, and whose
 // implementer disputes it with disputes in every attempt but the first.
 func disputeScript(disputes string, attempts int) string {
 	var b strings.Builder
-	b.WriteString("steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n")
+	b.WriteString("steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n")
 	for i := 2; i <= attempts; i++ {
 		b.WriteString("    - result: { status: ok, output: " + disputes + " }\n")
 	}
@@ -44,8 +44,18 @@ func startDispute(t *testing.T, script string) *run.Run {
 	return startWith(t, setup{mode: "key-points", pack: printingCheck, nodes: reviewLoop, script: script})
 }
 
-func TestADisputeSettledByAPassingCheckThatPrintsTheTestOverrulesTheFinding(t *testing.T) {
-	r := startDispute(t, disputeScript(disputeOf("unit", "TestFindIndex"), 3))
+// startTypedDispute is a dispute loop in a sandbox whose unit check writes its typed result: TestFindIndex is among
+// the tests that passed when it passes.
+func startTypedDispute(t *testing.T, script string) *run.Run {
+	t.Helper()
+	r, _ := startTyped(t, typedCheck(t, "unit", []string{"TestFindIndex", "TestSort"}, []schema.CheckFailure{{Kind: "test", Test: "TestBuild", Message: "build.txt is not done"}}), reviewLoop, script)
+	return r
+}
+
+// Ruling R23: a dispute holds when the check it names ran in this attempt and its typed result lists the test among
+// the tests that passed.
+func TestADisputeSettledByAPassingCheckThatListsTheTestOverrulesTheFinding(t *testing.T) {
+	r := startTypedDispute(t, disputeScript(disputeOf("unit", "TestFindIndex"), 3))
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusDone {
 		t.Fatalf("Advance() = %+v, %v; want done", out, err)
@@ -58,7 +68,7 @@ func TestADisputeSettledByAPassingCheckThatPrintsTheTestOverrulesTheFinding(t *t
 	if f == nil || f.Status != gungnir.FindingOverruled {
 		t.Fatalf("spec-1 = %+v; want overruled", f)
 	}
-	for _, want := range []string{"curl showed findIndex is defined", "check unit ran in attempt 2 and passed", "logs/build-2-unit.log"} {
+	for _, want := range []string{"curl showed findIndex is defined", "check unit ran in attempt 2 and TestFindIndex is among the tests that passed"} {
 		if !strings.Contains(f.Proof, want) {
 			t.Errorf("the proof lacks %q: %s", want, f.Proof)
 		}
@@ -80,8 +90,8 @@ func TestADisputeSettledByAPassingCheckThatPrintsTheTestOverrulesTheFinding(t *t
 	}
 }
 
-func TestADisputeWhoseTestIsNotInTheCheckOutputDoesNotHoldAndTheLoopEscalatesAsDisputed(t *testing.T) {
-	r := startDispute(t, disputeScript(disputeOf("unit", "TestNotRun"), 3))
+func TestADisputeWhoseTestIsNotAmongThePassedTestsDoesNotHoldAndTheLoopEscalatesAsDisputed(t *testing.T) {
+	r := startTypedDispute(t, disputeScript(disputeOf("unit", "TestNotRun"), 3))
 	out, err := Advance(context.Background(), r)
 	if err != nil || out.Status != run.StatusStopped || r.State.PendingGate != gungnir.GateEscalation {
 		t.Fatalf("Advance() = %+v, %v, gate %s; want a stop at escalation", out, err, r.State.PendingGate)
@@ -96,7 +106,7 @@ func TestADisputeWhoseTestIsNotInTheCheckOutputDoesNotHoldAndTheLoopEscalatesAsD
 	if !strings.Contains(transcript(t, r, "build-3"), "Your disputes that did not hold") || !strings.Contains(transcript(t, r, "build-3"), "TestNotRun") {
 		t.Error("the third attempt was not told the dispute did not hold, and why")
 	}
-	for _, want := range []string{"reviewer's claim: findIndex is not a JavaScript method", "implementer's evidence", "curl showed findIndex is defined", "does not name TestNotRun"} {
+	for _, want := range []string{"reviewer's claim: findIndex is not a JavaScript method", "implementer's evidence", "curl showed findIndex is defined", "TestNotRun is not among the tests that passed"} {
 		if !strings.Contains(rec.Escalation.Detail, want) {
 			t.Errorf("the escalation detail lacks %q:\n%s", want, rec.Escalation.Detail)
 		}
@@ -109,6 +119,18 @@ func TestADisputeWhoseTestIsNotInTheCheckOutputDoesNotHoldAndTheLoopEscalatesAsD
 	}
 	if !Approvable(r) || !Rejectable(r) {
 		t.Error("a disputed finding takes the operator's ruling: approve (overrule) or reject (send back)")
+	}
+}
+
+// On the host a check writes no typed result: it lists no passing test, so no dispute can hold on it.
+func TestADisputeOfACheckWithNoTypedResultDoesNotHold(t *testing.T) {
+	r := startDispute(t, disputeScript(disputeOf("unit", "TestFindIndex"), 3))
+	Advance(context.Background(), r) //nolint:errcheck // the run's end is not what this test reads
+	if got := r.State.Loops["build"].State.Book.Records["spec-1"]; got.Status != gungnir.FindingOpen {
+		t.Errorf("spec-1 = %+v; a check that lists no passing test settles no dispute", got)
+	}
+	if got := transcript(t, r, "build-3"); !strings.Contains(got, "its result lists no passing tests, so it can't show that TestFindIndex ran and passed") {
+		t.Errorf("the third attempt was not told why the dispute did not hold:\n%s", got)
 	}
 }
 
@@ -126,7 +148,7 @@ func TestADisputeThatNamesACheckTheLoopDoesNotRunStopsTheRunAtOnce(t *testing.T)
 		t.Error("the ledger lacks the escalation reason finding-disputed")
 	}
 	// The operator overrules: approve lets the work go on, and the finding stays on record.
-	if err := Approve(context.Background(), r, "build", "findIndex exists"); err != nil {
+	if err := Approve(context.Background(), r, "build", Note(r, "build", "findIndex exists")); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -136,48 +158,45 @@ func TestADisputeThatNamesACheckTheLoopDoesNotRunStopsTheRunAtOnce(t *testing.T)
 
 func TestADisputeOfACheckThatFailedDoesNotHoldAndSaysSo(t *testing.T) {
 	// Attempt 2 breaks the work, so unit fails in it, and the implementer disputes all the same.
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"    - actions: [ " + write("build.txt", "todo") + " ]\n      result: { status: ok, output: " + disputeOf("unit", "TestFindIndex") + " }\n" +
 		"    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: " + disputeOf("unit", "TestFindIndex") + " }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [ " + findIndexClaim + " ] }\n    - result: { status: ok, report: [ " + findIndexClaim + " ] }\n"
 	r := startWith(t, setup{mode: "key-points", pack: printingCheck, nodes: reviewLoop, script: script})
 	Advance(context.Background(), r) //nolint:errcheck // the run's end is not what this test reads
-	if got := transcript(t, r, "build-3"); !strings.Contains(got, "Your disputes that did not hold") || !strings.Contains(got, "check unit did not pass in attempt 2") {
+	if got := transcript(t, r, "build-3"); !strings.Contains(got, "Your disputes that did not hold") || !strings.Contains(got, "check unit failed in attempt 2 and names no failing test") {
 		t.Errorf("the third attempt was not told the check failed:\n%s", got)
 	}
-	if got := r.State.Loops["build"].State.Book.Records["spec-1"]; got.Closed != 3 {
-		t.Errorf("spec-1 = %+v; the dispute in attempt 2 settles nothing, and the one in attempt 3 overrules it", got)
+	// On the host the check writes no typed result, so the dispute in attempt 3 leaves spec-1 open too.
+	if got := r.State.Loops["build"].State.Book.Records["spec-1"]; got.Status != gungnir.FindingOpen {
+		t.Errorf("spec-1 = %+v; no dispute settles it", got)
 	}
 }
 
-func TestAMalformedDisputeIsIgnoredWithALedgerLine(t *testing.T) {
-	r := startDispute(t, disputeScript(`'{"disputes": [{"id": "spec-1"}]}'`, 2))
+// notOpenDispute disputes a finding no one raised. A malformed dispute is no longer ignored: the answer is not a
+// ygg.implement/v1 document, and that is an agent failure (typed-T15).
+const notOpenDispute = `'{"summary": "disputed", "disputes": [{"id": "spec-9", "check": "unit", "test": "TestFindIndex", "evidence": "it runs"}]}'`
+
+func TestADisputeOfAFindingThatIsNotOpenIsIgnoredWithALedgerLine(t *testing.T) {
+	r := startDispute(t, disputeScript(notOpenDispute, 2))
 	Advance(context.Background(), r) //nolint:errcheck // the run's end is not what this test reads
 	if text := ledgerText(t, r); !strings.Contains(text, "dispute ignored") {
 		t.Errorf("the ledger lacks a line for the ignored dispute:\n%s", text)
 	}
 }
 
-func TestLogNamesFindsATestAcrossBlocksAndStopsAtItsBound(t *testing.T) {
-	dir := t.TempDir()
-	put := func(name, text string) string {
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return p
+// A malformed dispute makes the implementer's answer no ygg.implement/v1 document: it is asked for once more, with the
+// errors, and then the attempt is an agent failure, and the next attempt is told why. Nothing is ignored silently.
+func TestAMalformedDisputeIsAnAgentFailure(t *testing.T) {
+	r := startDispute(t, disputeScript(`'{"summary": "disputed", "disputes": [{"id": "spec-1"}]}'`, 4))
+	Advance(context.Background(), r) //nolint:errcheck // the run's end is not what this test reads
+	if got := promptOf(t, r, "build-3"); !strings.Contains(got, "## Your answer could not be used") || !strings.Contains(got, "/disputes/0") {
+		t.Errorf("the second attempt's answer was not asked for again with its errors:\n%s", got)
 	}
-	filler := strings.Repeat("x", 64<<10-4) // the name straddles the first 64 KiB block
-	if ok, err := logNames(put("across.log", filler+"TestAcross\n"), "TestAcross"); err != nil || !ok {
-		t.Errorf("a name across two blocks: %v, %v", ok, err)
+	if got := transcript(t, r, "build-4"); !strings.Contains(got, "after being asked twice") || !strings.Contains(got, "/disputes/0") {
+		t.Errorf("the third attempt was not told the second answer could not be used:\n%s", got)
 	}
-	if ok, err := logNames(put("none.log", filler+"TestOther\n"), "TestAcross"); err != nil || ok {
-		t.Errorf("a name that is not there: %v, %v", ok, err)
-	}
-	if ok, err := logNames(put("late.log", strings.Repeat("y", maxLogRead)+"TestLate"), "TestLate"); err != nil || ok {
-		t.Errorf("a name past the bound is not read: %v, %v", ok, err)
-	}
-	if _, err := logNames(filepath.Join(dir, "missing.log"), "T"); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("a missing log: %v; want not-exist", err)
+	if text := ledgerText(t, r); strings.Contains(text, `"event":"dispute_ignored"`) {
+		t.Errorf("a malformed dispute was read and ignored:\n%s", text)
 	}
 }

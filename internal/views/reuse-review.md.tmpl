@@ -1,0 +1,23 @@
+{{- /* The reuse review of a plan (ygg.reuse-review/v1): its verdict and its findings. */ -}}
+{{front .Front}}
+{{with .Doc.Blocked}}## Blocked
+
+{{text .Reason}}
+
+{{end}}## Verdict
+
+{{text .Doc.Verdict}}
+
+## Findings
+
+{{range .Doc.Items}}- {{item (print "Task " .Task) 2}}
+  - {{item (print "Adds: " .Adds) 4}}
+  - {{item (print "Already done by: " .AlreadyDoneBy) 4}}
+  - {{item (print "Smallest change: " .SmallestChange) 4}}
+{{else}}None.
+{{end}}
+{{- with .Doc.Notes}}
+## Notes
+
+{{bullets .}}
+{{- end}}

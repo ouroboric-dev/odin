@@ -255,7 +255,8 @@ func writeProductStart(ctx context.Context, project string, runtime *realm.Realm
 // maxLeavesFile is the biggest leaves file Odin reads: a few leaves, each a few lines.
 const maxLeavesFile = 1 << 20
 
-// readLeaves reads and parses the leaves file n names.
+// readLeaves reads and parses the leaves file n names: the one Odin wrote from the spec's typed leaves when it
+// published the spec, read back as data Odin wrote, not as anything an agent wrote.
 func readLeaves(r *run.Run, n schema.Node) (*schema.Leaves, error) {
 	data, err := readLeavesFile(r, n.From)
 	switch {

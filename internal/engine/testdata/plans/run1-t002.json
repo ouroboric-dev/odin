@@ -1,0 +1,53 @@
+{
+  "title": "Photo Share auth",
+  "slug": "auth",
+  "goal": "A person makes an account and signs in.",
+  "decisions": [
+    {
+      "date": "2026-10-24",
+      "decision": "Accounts use email.",
+      "reason": "The brief names email.",
+      "cites": [
+        "email-sign-in"
+      ]
+    }
+  ],
+  "risks": [
+    "Password hashing may be slow in tests."
+  ],
+  "tasks": [
+    {
+      "id": "auth-T001",
+      "title": "The accounts table",
+      "criteria": [
+        "The migration makes the accounts table.",
+        "The email column is unique."
+      ],
+      "named_test": "repos/api/store/accounts_test.go:TestTheAccountsTable",
+      "layer": "repos/api",
+      "size": "S",
+      "depends_on": [],
+      "text": "Add the migration that makes the accounts table: id, email, password_hash and created_at."
+    },
+    {
+      "id": "auth-T002",
+      "title": "Sign up with an email and a password",
+      "criteria": [
+        "POST /api/auth/signup with a valid email and password answers 201 with the account's id and email.",
+        "A second signup with the same email answers 409.",
+        "A password under 12 characters answers 400 with weak_password, and no account is made."
+      ],
+      "named_test": "repos/api/auth/signup_test.go:TestSignup",
+      "layer": "repos/api",
+      "size": "M",
+      "depends_on": [
+        "auth-T001"
+      ],
+      "text": "---\ntitle: Sign up with an email and a password\nstatus: draft\n---\n## Brief\n\nAdd the signup route POST /api/auth/signup to the API. It takes an email and a password as JSON and makes an account.\n\n### The request\n\n```json\n{\"email\": \"ada@example.com\", \"password\": \"correct-horse-battery\"}\n```\n\n- The email is trimmed and lower-cased before anything else reads it. It must hold one @ with text on both sides, and be at most 254 characters.\n- The password is 12 to 128 characters. It is never logged, never returned and never stored in clear text: store an argon2id hash with a random salt of 16 bytes.\n- A body that is not JSON, or that holds a field other than email and password, answers 400 with {\"error\": \"bad_request\"}.\n\n### The answers\n\n- 201 with {\"id\": \"<uuid>\", \"email\": \"<the email as stored>\"} when the account is made. The answer sets no cookie: signing in is the next task.\n- 400 with {\"error\": \"invalid_email\"} or {\"error\": \"weak_password\"} when a field breaks its rule, and the account is not made.\n- 429 with {\"error\": \"too_many_requests\"} after 10 signups from one address in one minute.\n\n### Storage\n\nThe accounts table holds id (uuid, primary key), email (text, unique), password_hash (text) and created_at (timestamptz, set by the database). The migration that creates it is part of this task, and it runs before the route serves.\n\n#### Errors the route must not leak\n\nThe route never says whether an email is taken through timing: hash the password before the uniqueness check, every time. Log the request id and the answer's status, never the body.\n\nA second signup with the same email answers 409 and makes no second account.",
+      "contract": "openapi: 3.0.3\ninfo:\n  title: Photo Share auth\n  version: 1.0.0\npaths:\n  /api/auth/signup:\n    post:\n      summary: Make an account from an email and a password.\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              additionalProperties: false\n              required: [email, password]\n              properties:\n                email: { type: string, maxLength: 254 }\n                password: { type: string, minLength: 12, maxLength: 128 }\n      responses:\n        '201':\n          description: The account is made.\n          content:\n            application/json:\n              schema:\n                type: object\n                required: [id, email]\n                properties:\n                  id: { type: string, format: uuid }\n                  email: { type: string }\n        '400':\n          description: \"A field breaks its rule: bad_request, invalid_email or weak_password. A body like ```{}``` is bad_request.\"\n        '409':\n          description: The email has an account already.\n        '429':\n          description: Too many signups from one address.\n"
+    }
+  ],
+  "notes": [
+    "The run-1 T002 shape: its text and contract are what run 1 lost."
+  ]
+}

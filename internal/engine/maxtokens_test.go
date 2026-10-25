@@ -51,7 +51,7 @@ func tasksOf(tasks []gungnir.Task, node string) []gungnir.Task {
 
 func TestALoopSessionOverItsTokenLimitIsOneAttemptAndTheLoopGoesOn(t *testing.T) {
 	// The scripted agent counts sessions: the stopped first one never reaches it, so step 1 is a placeholder.
-	script := "steps:\n  build:\n    - result: { status: ok }\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, summary: built it }\n"
+	script := "steps:\n  build:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, summary: built it, output: '{\"summary\": \"done\"}' }\n"
 	r := startLoop(t, "unattended", script)
 	tasks := limited(r, map[string]int{"build": 1}, false)
 	out, err := Advance(context.Background(), r)
@@ -73,7 +73,7 @@ func TestALoopSessionOverItsTokenLimitIsOneAttemptAndTheLoopGoesOn(t *testing.T)
 }
 
 func TestAnAgentNodeOverItsTokenLimitFailsAndIsNotRetried(t *testing.T) {
-	script := "steps:\n  a:\n    - result: { status: ok }\n"
+	script := "steps:\n  a:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	w := &waits{}
 	r := startWith(t, setup{nodes: oneNode, script: script, hooks: hooks(w)})
 	tasks := limited(r, map[string]int{"a": 5}, true)
@@ -90,7 +90,7 @@ func TestAnAgentNodeOverItsTokenLimitFailsAndIsNotRetried(t *testing.T) {
 }
 
 func TestATokenLimitedSessionsUsageCountsInTheRunsTotals(t *testing.T) {
-	r := startWith(t, setup{nodes: oneNode, script: "steps:\n  a:\n    - result: { status: ok }\n"})
+	r := startWith(t, setup{nodes: oneNode, script: "steps:\n  a:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n"})
 	limited(r, map[string]int{"a": 1}, false)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusFailed {
 		t.Fatalf("Advance() = %+v, %v; want a failed node", out, err)
@@ -99,7 +99,7 @@ func TestATokenLimitedSessionsUsageCountsInTheRunsTotals(t *testing.T) {
 		t.Errorf("usage = %+v; the stopped session's tokens count against the caps", u)
 	}
 	// The same, for a session that ends with an error that carries its usage.
-	r = startWith(t, setup{nodes: oneNode, script: "steps:\n  a:\n    - result: { status: ok }\n"})
+	r = startWith(t, setup{nodes: oneNode, script: "steps:\n  a:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n"})
 	limited(r, map[string]int{"a": 1}, true)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusFailed {
 		t.Fatalf("Advance() = %+v, %v; want a failed node", out, err)
@@ -110,8 +110,8 @@ func TestATokenLimitedSessionsUsageCountsInTheRunsTotals(t *testing.T) {
 }
 
 func TestMaxTokensReachesTheTaskOfAnAgentNode(t *testing.T) {
-	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_tokens: 1234 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app }\n"
-	script := "steps:\n  a:\n    - result: { status: ok }\n  b:\n    - result: { status: ok }\n"
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_tokens: 1234, input: [rejection], output: ygg.implement/v1 }\n  - { id: b, kind: agent, role: planner, prompt: p.md, repo: repos/app, input: [rejection], output: ygg.implement/v1 }\n"
+	script := "steps:\n  a:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n  b:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n"
 	r := startWith(t, setup{nodes: nodes, script: script})
 	tasks := limited(r, nil, false)
 	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
@@ -124,8 +124,8 @@ func TestMaxTokensReachesTheTaskOfAnAgentNode(t *testing.T) {
 
 func TestMaxTokensReachesTheTasksOfALoopsImplementerAndReviewer(t *testing.T) {
 	nodes := strings.Replace(reviewLoop, "    attempts: 3\n", "    attempts: 3\n    max_tokens: 2000\n", 1)
-	nodes = strings.Replace(nodes, "prompt: p.md }\n", "prompt: p.md, max_tokens: 900 }\n", 1)
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
+	nodes = strings.Replace(nodes, "output: ygg.review/v1 }\n", "output: ygg.review/v1, max_tokens: 900 }\n", 1)
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
 		"  build-spec:\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{mode: "key-points", pack: unitCheck, nodes: nodes, script: script})
 	tasks := limited(r, nil, false)
@@ -139,8 +139,8 @@ func TestMaxTokensReachesTheTasksOfALoopsImplementerAndReviewer(t *testing.T) {
 
 func TestAReviewerSessionOverItsTokenLimitIsAskedOnceMoreAndNeverAHardStop(t *testing.T) {
 	nodes := strings.Replace(reviewLoop, "prompt: p.md }\n", "prompt: p.md, max_tokens: 900 }\n", 1)
-	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok }\n" +
-		"  build-spec:\n    - result: { status: ok }\n    - result: { status: ok, report: [] }\n"
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, output: '{\"summary\": \"done\"}' }\n" +
+		"  build-spec:\n    - result: { status: ok, output: '{\"summary\": \"done\"}' }\n    - result: { status: ok, report: [] }\n"
 	r := startWith(t, setup{mode: "key-points", pack: unitCheck, nodes: nodes, script: script})
 	tasks := limited(r, map[string]int{"build-spec": 1}, false)
 	out, err := Advance(context.Background(), r)

@@ -423,3 +423,36 @@ func TestTidyRemovesWhatChecksWroteAndKeepsIgnoredFilesAndEvidence(t *testing.T)
 		t.Error("Tidy erased the planted repository, which is the evidence")
 	}
 }
+
+// An exclude rule in the leaf's git dir keeps what it names out of a checkpoint and the scan's list, and a reset
+// keeps it; the rule is written once.
+func TestAnExcludedFolderIsNeverCommitted(t *testing.T) {
+	l := api(t)
+	for range 2 {
+		if err := l.repo.Exclude("/.ygg-inputs/"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(l.repo.GitDir, "info", "exclude"))
+	if err != nil || strings.Count(string(b), "/.ygg-inputs/\n") != 1 {
+		t.Fatalf("info/exclude = %q, %v; want the rule once", b, err)
+	}
+	write(t, l, ".ygg-inputs/change.md", "the change\n")
+	write(t, l, "src/app.go", "package app\n")
+	if files, err := l.Pending(ctx); err != nil || !slices.Equal(files, []string{"src/app.go"}) {
+		t.Errorf("Pending() = %v, %v", files, err)
+	}
+	sha, _, err := l.Checkpoint(ctx, "ygg: run1 node build attempt 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files, _ := l.repo.Run(ctx, "show", "--name-only", "--format=", sha); files != "src/app.go" {
+		t.Errorf("the checkpoint holds %q", files)
+	}
+	if err := l.Tidy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(l.Dir(), ".ygg-inputs", "change.md")); err != nil {
+		t.Errorf("a tidy removed the excluded file: %v", err)
+	}
+}

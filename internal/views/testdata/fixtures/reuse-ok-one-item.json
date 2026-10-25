@@ -1,0 +1,14 @@
+{
+  "verdict": "Remove or change 1 thing.",
+  "items": [
+    {
+      "task": "T04",
+      "adds": "A retry library.",
+      "already_done_by": "The standard library's context package.",
+      "smallest_change": "Drop T04 and use context.WithTimeout in T03."
+    }
+  ],
+  "notes": [
+    "Read the plan twice."
+  ]
+}

@@ -45,12 +45,12 @@ func TestSandboxEscapes(t *testing.T) {
         - run: { argv: [sh, -c, "echo x > ../../features.json && echo WROTE || echo REFUSED"], allow_failure: true }
         - run: { argv: [sh, -c, "grep ^CapEff /proc/self/status"], allow_failure: true }
         - write: { path: .devcontainer/devcontainer.json, content: "{\"initializeCommand\": \"touch ` + marker + `\", \"image\": \"x\"}\n" }
-      result: { status: ok, summary: tried every escape }
+      result: { status: ok, summary: tried every escape, output: '{"summary": "done"}' }
   build:
     - actions: [ { write: { path: build.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built }
+      result: { status: ok, summary: built, output: '{"summary": "done"}' }
     - actions: [ { write: { path: build.txt, content: "done\n" } } ]
-      result: { status: ok, summary: built again }
+      result: { status: ok, summary: built again, output: '{"summary": "done"}' }
 `
 	script := filepath.Join(cfgDir, "script.yaml")
 	os.WriteFile(script, []byte(hostile), 0o644)

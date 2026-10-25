@@ -2,8 +2,6 @@ package engine
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,21 +11,19 @@ import (
 
 // readyNodes are software's order: the plan in a scratch workspace, the tasks node that reads the leaves file,
 // init, and the plan gate.
-const readyNodes = "  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true }\n" +
-	"  - { id: ready, kind: tasks, from: tasks.md, leaves: docs/leaves.yaml, back_to: plan }\n" +
+const readyNodes = "  - { id: plan, kind: agent, role: planner, prompt: p.md, scratch: true, input: [rejection, refusal], output: ygg.plan/v1 }\n" +
+	"  - { id: ready, kind: tasks, from: plan, leaves: docs/leaves.yaml, back_to: plan }\n" +
 	initNode +
 	"  - { id: plan-gate, kind: gate, gate: plan }\n"
 
-const twoPlans = "steps:\n  plan:\n    - result: { status: ok, summary: planned }\n    - result: { status: ok, summary: planned again }\n"
+// twoPlans is a planner's two answers, each a ready plan for repos/api.
+var twoPlans = planScript(planOf(taskOf("p-T001", "repos/api", "S")), planOf(taskOf("p-T001", "repos/api", "S")))
 
-// readyRun starts a run of readyNodes with the leaves file and a ready plan for repos/api in the project.
+// readyRun starts a run of readyNodes with the leaves file in the project, whose planner plans for repos/api.
 func readyRun(t *testing.T, leaves string) *run.Run {
 	t.Helper()
 	r := startRealms(t, realmsSetup{nodes: readyNodes, script: twoPlans, realms: needyRealms()})
 	writeLeaves(t, r, leaves)
-	if err := os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte(readyPlan+taskMD("p-T1", "repos/api", "S", "nothing")), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	return r
 }
 

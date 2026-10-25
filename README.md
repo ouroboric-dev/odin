@@ -18,8 +18,8 @@ go vet ./...
 ```text
 ygg run     --graph <name|dir> [--project <dir>] [--config <factory.yaml>] [--brief <file>] [--mode <mode>]
 ygg resume  <run-id> [--project <dir>] [--mode <mode>]
-ygg approve <run-id> <gate> [--note <text>] [--project <dir>] [--mode <mode>]
-ygg reject  <run-id> <gate> --reason <text> [--project <dir>] [--mode <mode>]
+ygg approve <run-id> <gate> [--decisions <file> | --note <text>] [--project <dir>] [--mode <mode>]
+ygg reject  <run-id> <gate> (--decisions <file> | --reason <text>) [--project <dir>] [--mode <mode>]
 ygg status  <run-id> [--watch [--interval <duration>]] [--project <dir>]
 ygg grade   <run-id> [--task <id>] [--project <dir>]
 ygg metrics <run-id|first..last> [--json] [--project <dir>]

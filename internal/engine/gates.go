@@ -2,10 +2,10 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +13,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/gate"
+	"github.com/ouroboric-dev/odin/internal/mdsafe"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -30,13 +31,17 @@ func reachGate(ctx context.Context, r *run.Run, n schema.Node) (bool, error) {
 	var facts gate.Facts
 	var verdict *gungnir.Conformance
 	if n.DeviationFrom != "" {
-		v, err := readConformance(r, n.DeviationFrom)
+		v, err := loadOutput[gungnir.Conformance](r, n.DeviationFrom)
 		if err != nil {
 			return false, &nodeFailure{err}
 		}
-		verdict, facts.Deviation = &v, v.Deviation
+		// A blocked verdict checked nothing, so it stops the gate as a deviation does (ruling R14).
+		verdict, facts.Deviation = &v, v.Deviation || v.Blocked != nil
 		result := "no deviation"
-		if v.Deviation {
+		switch {
+		case v.Blocked != nil:
+			result = "blocked: " + firstLine(v.Blocked.Reason)
+		case v.Deviation:
 			result = "deviation: " + firstLine(v.Amendment)
 		}
 		if err := r.Log(gungnir.Event{Name: gungnir.EventConformanceChecked, Node: n.DeviationFrom, Attempt: attempt, Result: result}); err != nil {
@@ -52,6 +57,13 @@ func reachGate(ctx context.Context, r *run.Run, n schema.Node) (bool, error) {
 			return false, err
 		}
 	}
+	// A spec since the last gate that still misses an owner decision after it went back once stops the gate for a
+	// person (ownercheck.go), whatever the facts above say.
+	missing, err := uncitedSince(r, sinceLastGate(r))
+	if err != nil {
+		return false, &nodeFailure{err}
+	}
+	facts.Uncited = len(missing) > 0
 	action := gate.Decide(s.Mode, n.Gate, r.Setup.Config.Gates, facts)
 	file, err := writeGateFile(r, n, attempt, action, verdict, evidence)
 	if err != nil {
@@ -96,6 +108,20 @@ func contractNames(evidence string) string {
 	return " (" + strings.Join(names, ", ") + ")"
 }
 
+// sinceLastGate lists the nodes from the gate before the run's position up to it: what the gate at the position
+// decides on.
+func sinceLastGate(r *run.Run) []schema.Node {
+	nodes, at := r.Nodes(), r.State.Position
+	start := 0
+	for i := at - 1; i >= 0; i-- {
+		if nodes[i].Kind == schema.KindGate {
+			start = i + 1
+			break
+		}
+	}
+	return nodes[start:at]
+}
+
 // writeGateFile writes gates/<node>-<attempt>.md and returns its path relative to the run.
 func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, verdict *gungnir.Conformance, evidence string) (string, error) {
 	s := r.State
@@ -113,16 +139,17 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, v
 	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Decision: %s\n- Time: %s\n\n", s.ID, s.Mode, decision,
 		time.Now().UTC().Format(time.RFC3339))
 	b.WriteString("## What happened\n\n")
-	nodes := r.Nodes()
-	start := 0
-	for i := s.Position - 1; i >= 0; i-- {
-		if nodes[i].Kind == schema.KindGate {
-			start = i + 1
-			break
-		}
+	since := sinceLastGate(r)
+	for _, m := range since {
+		// A summary may be an agent's final answer, its words: it reads as its text (mdsafe).
+		b.WriteString("- " + mdsafe.Item(mdsafe.After(fmt.Sprintf("%s (%s, attempt %d): ", m.ID, m.Kind, s.Attempts[m.ID]), s.Summaries[m.ID]), 2) + "\n")
 	}
-	for _, m := range nodes[start:s.Position] {
-		fmt.Fprintf(&b, "- %s (%s, attempt %d): %s\n", m.ID, m.Kind, s.Attempts[m.ID], s.Summaries[m.ID])
+	for _, m := range since {
+		section, err := gateSection(r, m.ID)
+		if err != nil {
+			return "", &nodeFailure{err}
+		}
+		b.WriteString(section)
 	}
 	if verdict != nil {
 		b.WriteString("\n" + conformanceSection(*verdict))
@@ -141,13 +168,81 @@ func writeGateFile(r *run.Run, n schema.Node, attempt int, action gate.Action, v
 		fmt.Fprintf(&b, "\n## Blocked\n\nThe task %s is blocked, and the tasks that depend on it. Nothing is waiting for an approval. "+
 			"What the task did is kept on a ref for the operator (see the task's reason in the report).\n", n.Task)
 	} else if action != gate.Auto {
-		fmt.Fprintf(&b, "\n## Decide\n\n    ygg approve %s %s [--note \"...\"]\n    ygg reject %s %s --reason \"...\"\n\n"+
-			"A rejection re-runs %s with the reason.\n", s.ID, n.ID, s.ID, n.ID, n.Reruns)
+		cite := "."
+		if specAfter(r) {
+			cite = ", and the spec must cite each."
+		}
+		fmt.Fprintf(&b, "\n## Decide\n\n    ygg approve %s %s [--note \"...\" | --decisions <file>]\n    ygg reject %s %s --reason \"...\" | --decisions <file>\n\n"+
+			"A rejection re-runs %s with the reason. Either takes a decisions file instead (--decisions FILE, ygg.decisions/v1): "+
+			"decisions under ids of your own, answers to the design's open questions by their ids, and for a rejection the reason. "+
+			"The decisions hold for every later stage%s\n", s.ID, n.ID, s.ID, n.ID, n.Reruns, cite)
 	}
 	if err := os.MkdirAll(filepath.Join(r.Dir, "gates"), 0o755); err != nil {
 		return "", err
 	}
 	return rel, os.WriteFile(filepath.Join(r.Dir, rel), []byte(b.String()), 0o644)
+}
+
+// specAfter reports whether a node after the run's position writes a spec (ygg.spec/v1): the owner check then holds
+// that spec to the decisions given at the gate there.
+func specAfter(r *run.Run) bool {
+	return slices.ContainsFunc(r.Nodes()[r.State.Position+1:], func(m schema.Node) bool { return schema.Contract(m.Output) == schema.ContractSpec })
+}
+
+// gateSection is what a gate shows of the output node kept, for the person who decides there to read: a design's
+// open questions, the owner decisions a spec still does not cite after it went back once (ownercheck.go), and a reuse
+// review's verdict and its items. It is "" for any other output. The fields are made
+// safe as in a view (mdsafe), so none can pass for a section of the gate file.
+func gateSection(r *run.Run, node string) (string, error) {
+	var b strings.Builder
+	switch schema.Contract(r.State.Outputs[node].Contract) {
+	case schema.ContractDesign:
+		d, err := loadOutput[schema.Design](r, node)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("\n## Open questions of the design\n\n")
+		if d.Blocked != nil {
+			b.WriteString(mdsafe.Text("The design is blocked: "+d.Blocked.Reason) + "\n\n")
+		}
+		if len(d.OpenQuestions) == 0 {
+			b.WriteString("None.\n")
+		}
+		for _, q := range d.OpenQuestions {
+			b.WriteString("- " + mdsafe.Item(mdsafe.After(mdsafe.Line(q.ID)+": ", q.Question)+"\n(Who can answer: "+mdsafe.Line(q.WhoCanAnswer)+")", 2) + "\n")
+		}
+	case schema.ContractSpec:
+		missing, err := uncited(r, node)
+		if err != nil || len(missing) == 0 {
+			return "", err
+		}
+		fmt.Fprintf(&b, "\n## Owner decisions the spec does not cite\n\nThe spec %s does not cite these decisions of the product owner, "+
+			"although Odin sent it back once to cite them:\n\n", node)
+		for _, id := range missing {
+			b.WriteString("- " + mdsafe.Line(id) + "\n")
+		}
+		b.WriteString("\nApproving accepts the spec as it is. A rejection runs it again with your reason, and Odin checks it again.\n")
+	case schema.ContractReuseReview:
+		rv, err := loadOutput[schema.ReuseReview](r, node)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("\n## Reuse review\n\n")
+		if rv.Blocked != nil {
+			b.WriteString(mdsafe.Text("The reuse review is blocked: "+rv.Blocked.Reason) + "\n\n")
+		}
+		if rv.Verdict != "" {
+			b.WriteString(mdsafe.Text("The verdict: "+rv.Verdict) + "\n\n")
+		}
+		if len(rv.Items) == 0 {
+			b.WriteString("It lists no findings.\n")
+		}
+		for _, it := range rv.Items {
+			b.WriteString("- " + mdsafe.Item("Task "+it.Task, 2) + "\n  - " + mdsafe.Item("Adds: "+it.Adds, 4) + "\n  - " +
+				mdsafe.Item("Already done by: "+it.AlreadyDoneBy, 4) + "\n  - " + mdsafe.Item("Smallest change: "+it.SmallestChange, 4) + "\n")
+		}
+	}
+	return b.String(), nil
 }
 
 func pending(r *run.Run, gateID string) error {
@@ -160,14 +255,16 @@ func pending(r *run.Run, gateID string) error {
 	return nil
 }
 
-// Approve records the decision on the pending approval point, and Advance continues: past a gate
-// node; or, at a hard stop a node raised, with that node again. At policy-violation the leaf goes
-// back to its checkpoint first; at shrink-guard the move lands once without the guard.
-func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
+// Approve records the decision on the pending approval point, with what the person gave (d: decisions and answers,
+// no reason; empty for nothing), and Advance continues: past a gate node, whose decisions every later stage reads; or,
+// at a hard stop a node raised, with that node again. At policy-violation the leaf goes back to its checkpoint first;
+// at shrink-guard the move lands once without the guard. At a stop that runs a stage again, what the person gave is
+// the stage's rejection. The ledger's gate_approved event carries d.
+func Approve(ctx context.Context, r *run.Run, gateID string, d schema.Decisions) error {
 	if err := pending(r, gateID); err != nil {
 		return err
 	}
-	if err := checkNote(note); err != nil {
+	if err := checkGiven(r, d, false); err != nil {
 		return err
 	}
 	s := r.State
@@ -178,26 +275,64 @@ func Approve(ctx context.Context, r *run.Run, gateID, note string) error {
 				"fix the reviewer or its prompt, and then reject the stop to ask it again", n.ID)
 		}
 	}
-	if err := r.Log(gungnir.Event{Name: gungnir.EventGateApproved, Node: gateID, Gate: gateID, Note: note}); err != nil {
+	// The rejection of a stage this approval runs again, rendered before anything is recorded: at the secret stop the
+	// findings set at the stop and then what the person gave; at a blocked output's, what they gave.
+	var rejection string
+	var err error
+	switch {
+	case n.Kind == schema.KindPublish && s.PendingGate == gungnir.GateRealSecrets:
+		rejection, err = rejectionText(r, d, "", false)
+		if rejection != "" {
+			rejection = "\n\n" + rejection
+		}
+		rejection = s.Reasons[n.From] + rejection
+	case blockedStop(n, s.PendingGate):
+		rejection, err = rejectionText(r, d, blockedRetry, false)
+	}
+	if err != nil {
+		return err
+	}
+	if err := r.Log(gungnir.Event{Name: gungnir.EventGateApproved, Node: gateID, Gate: gateID, Note: noteOf(d)}); err != nil {
 		return err
 	}
 	switch {
 	case n.Kind == schema.KindGate:
-		// The note of a gate is the product owner's decision (spec §7.2); a note at any other stop is about
-		// that stop and stays on the event.
-		keepDecision(s, n.ID, note)
+		// What a person gives at a gate is the product owner's word (spec §7.2); what they give at any other stop is
+		// about that stop: on the event, and the rejection of a stage the stop runs again.
+		if err := keepDecisions(r, n.ID, d); err != nil {
+			return err
+		}
 		s.Position++
 	case n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation:
 		// The operator accepts the work with its findings open. They stay open in the ledger: only their
 		// source can close a finding.
 		rec := s.Loops[n.ID]
+		attempts := rec.State.Attempt // a loop stopped in its ladder (a blocked reviewer) is still in the attempt it judged
+		if rec.State.Phase == jormungandr.PhaseImplement {
+			attempts--
+		}
 		rec.State.Passed, rec.Escalation = true, nil
-		s.Summaries[n.ID] = fmt.Sprintf("accepted by the operator after %d attempt(s), with %d finding(s) open", rec.State.Attempt-1, len(rec.State.Book.Open()))
-		delete(s.Reasons, n.ID)
+		s.Summaries[n.ID] = fmt.Sprintf("accepted by the operator after %d attempt(s), with %d finding(s) open", attempts, len(rec.State.Book.Open()))
+		dropLoopReasons(s, n)
 		s.Position++
+	case n.Kind == schema.KindPublish && s.PendingGate == gungnir.GateRealSecrets:
+		// The founder's rule (2026-10-24): the output a scan stopped is kept as Odin validated it, so its source runs
+		// again, with the finding as its rejection (set at the stop, and what the person gave after it), and writes it
+		// again without what was found. Its new output is kept, published and scanned again; nothing is published while
+		// a finding stands.
+		s.Reasons[n.From] = rejection
+		if err := runAgainFrom(r, n.From, false); err != nil {
+			return err
+		}
+	case blockedStop(n, s.PendingGate):
+		// A blocked output (ruling R43; a plan at the tasks node, R44): its stage said what only a person can give,
+		// and what the person gave is the answer. The stage runs again with it as its rejection.
+		s.Reasons[n.From] = rejection
+		if err := runAgainFrom(r, n.From, false); err != nil {
+			return err
+		}
 	case run.Quarantines(s.PendingGate) && n.Repo == "":
-		// A node that works in the project, such as a publish: nothing in a leaf to put back. The person
-		// edited the workspace the stop names, and the node runs again.
+		// A node that works in the project: nothing in a leaf to put back, and the node runs again.
 	case run.Quarantines(s.PendingGate):
 		rec := s.Leaves[n.Repo]
 		l, err := r.Leaf(n.Repo)
@@ -225,10 +360,15 @@ func Rejectable(r *run.Run) bool {
 	return n.Kind == schema.KindGate || (n.Kind == schema.KindLoop && s.PendingGate == gungnir.GateEscalation)
 }
 
-// approvableReason is true for the reasons a person can rule on: attempts that ran out, and a dispute no
-// check settled. A reviewer whose answer can't be read is not one.
+// approvableReason is true for the reasons a person can rule on: attempts that ran out, a dispute no check
+// settled, and an implementer or a reviewer that answered it could not do its work. A reviewer whose answer
+// can't be read is not one: nobody can approve on its behalf.
 func approvableReason(reason string) bool {
-	return reason == jormungandr.ReasonExhausted || reason == jormungandr.ReasonDisputed
+	switch reason {
+	case jormungandr.ReasonExhausted, jormungandr.ReasonDisputed, jormungandr.ReasonBlocked, jormungandr.ReasonReviewerBlocked:
+		return true
+	}
+	return false
 }
 
 // Approvable reports whether the pending stop takes an approval. A loop that gave up because a
@@ -246,12 +386,14 @@ func Approvable(r *run.Run) bool {
 	return true
 }
 
-// Reject sends reason back (spec §7.2). At a gate it goes into the node the gate re-runs: Advance
-// re-runs it with the reason in its prompt, then reaches the gate again; every loop from that node up
-// to the gate starts over. At a loop that gave up (spec §7.3) the reason goes to the loop's implementer,
-// and the loop gets a full set of attempts again, with its findings. A hard stop a node raised takes
-// no rejection: approve it, or start a new run to drop the work.
-func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
+// Reject sends back what the person gave (spec §7.2): d, whose reason is required, with any decisions and answers,
+// rendered as the rejection (rejectionText). At a gate it goes into the node the gate re-runs: Advance re-runs it with
+// the rejection in its prompt, then reaches the gate again; every loop from that node up to the gate starts over; and
+// the decisions and answers are the gate's, which every later stage reads. At a loop that gave up (spec §7.3) the
+// rejection goes to the loop's implementer, and the loop gets a full set of attempts again, with its findings. A hard
+// stop a node raised takes no rejection: approve it, or start a new run to drop the work. The ledger's gate_rejected
+// event carries d.
+func Reject(ctx context.Context, r *run.Run, gateID string, d schema.Decisions) error {
 	if err := pending(r, gateID); err != nil {
 		return err
 	}
@@ -260,41 +402,77 @@ func Reject(ctx context.Context, r *run.Run, gateID, reason string) error {
 	if !Rejectable(r) {
 		return fmt.Errorf("%s stopped at the hard approval point %s, which takes approve; to drop the work, start a new run", gateID, s.PendingGate)
 	}
-	if strings.TrimSpace(reason) == "" {
-		return errors.New("a rejection needs a reason; it goes back to the node as input")
-	}
-	if err := r.Log(gungnir.Event{Name: gungnir.EventGateRejected, Node: gateID, Gate: gateID, Note: reason}); err != nil {
+	if err := checkGiven(r, d, true); err != nil {
 		return err
 	}
-	if n := nodes[s.Position]; n.Kind == schema.KindLoop {
+	n := nodes[s.Position]
+	reason, err := rejectionText(r, d, "", n.Kind == schema.KindGate) // a loop's stop is not a gate: its decisions are not kept
+	if err != nil {
+		return err
+	}
+	if err := r.Log(gungnir.Event{Name: gungnir.EventGateRejected, Node: gateID, Gate: gateID, Note: noteOf(d)}); err != nil {
+		return err
+	}
+	if n.Kind == schema.KindLoop {
 		rec := s.Loops[n.ID]
+		s.Reasons[loopRejectionKey(n, rec.Escalation)] = reason
 		rec.State.Extend(loopConfig(n))
 		rec.Escalation = nil
-		s.Reasons[n.ID] = reason
 	} else {
-		target := n.Reruns
-		s.Reasons[target] = reason
-		gate := s.Position
-		s.Position = indexOf(nodes, target)
-		// Every loop from the target up to the gate starts over: the work under a loop that passed changes
-		// when a node before it runs again (review I2).
-		past := map[string]bool{}
-		for _, m := range nodes[s.Position:gate] {
-			if m.Kind == schema.KindGate {
-				past[m.ID] = true
-			}
-			if m.Kind == schema.KindLoop {
-				delete(s.Loops, m.ID)
-			}
-			delete(s.Returns, m.ID) // a rejection is a fresh start: a refusal may go back again
+		s.Reasons[n.Reruns] = reason
+		if err := runAgainFrom(r, n.Reruns, true); err != nil {
+			return err
 		}
-		dropDecisions(s, past) // the run meets those gates again
-		if err := replan(r, nodes[s.Position:gate]); err != nil {
+		if err := keepDecisions(r, n.ID, d); err != nil {
 			return err
 		}
 	}
 	s.Pending, s.PendingGate, s.Status = "", "", run.StatusRunning
 	return r.Save()
+}
+
+// loopRejectionKey is the session a person's rejection of loop n's escalation e goes to: the reviewer's, for
+// reviewer-blocked and reviewer-unreadable, as the person answered the reviewer that could not answer (ruling R52,
+// amended); the implementer's, under the loop's id, otherwise.
+func loopRejectionKey(n schema.Node, e *run.Escalation) string {
+	if e != nil && (e.Reason == jormungandr.ReasonReviewerBlocked || e.Reason == jormungandr.ReasonUnreadable) && e.Reviewer != "" {
+		return n.SessionKey(schema.Reviewer{ID: e.Reviewer})
+	}
+	return n.ID
+}
+
+// runAgainFrom moves the run back from the node it stands at to target, which runs again with its reason in
+// s.Reasons. Every loop from the target up to where the run stood starts over: the work under a loop that passed
+// changes when a node before it runs again (review I2). The nodes before target are kept. A person's rejection at a
+// gate (rejected) drops what the gates in between were given, as the run meets them again; a re-run from a hard stop
+// (a secret, a blocked output) keeps it, since nobody went back on those decisions (ruling R50).
+func runAgainFrom(r *run.Run, target string, rejected bool) error {
+	s, nodes := r.State, r.Nodes()
+	at := s.Position
+	s.Position = indexOf(nodes, target)
+	past := map[string]bool{}
+	for _, m := range nodes[s.Position:at] {
+		if m.Kind == schema.KindGate {
+			past[m.ID] = true
+		}
+		if m.Kind == schema.KindLoop {
+			delete(s.Loops, m.ID)
+		}
+		delete(s.Returns, m.ID) // a rejection is a fresh start: a refusal may go back again
+	}
+	if rejected {
+		dropDecisions(s, past)
+	}
+	return replan(r, nodes[s.Position:at])
+}
+
+// blockedRetry is the rejection of a stage whose blocked output a person sent back with no note.
+const blockedRetry = "A person read the blocked reason and sent it back to try again."
+
+// blockedStop reports whether node n stopped at gate g for a blocked output of its source: a publish (ruling R43),
+// or the tasks node for a blocked plan (R44). Both stop at external-input: a person gives what the stage lacks.
+func blockedStop(n schema.Node, g gungnir.Gate) bool {
+	return (n.Kind == schema.KindPublish || n.Kind == schema.KindTasks) && g == gungnir.GateExternalInput
 }
 
 // hardStop is a node that stops the run at a hard approval point itself: work it left breaks a
@@ -322,12 +500,30 @@ func stopHard(r *run.Run, n schema.Node, h *hardStop) (Outcome, error) {
 	rel := filepath.Join("gates", fmt.Sprintf("%s-%d.md", n.ID, attempt))
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Hard stop at node %s (%s)\n\n", n.ID, h.gate)
-	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Time: %s\n\n## Why\n\n%v\n\n", s.ID, s.Mode,
-		time.Now().UTC().Format(time.RFC3339), h.err)
-	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\"]\n\n", s.ID, n.ID)
+	why := h.err.Error()
+	if blockedStop(n, h.gate) {
+		why = mdsafe.Text(why) // an agent's words
+	}
+	fmt.Fprintf(&b, "- Run: %s\n- Mode: %s\n- Time: %s\n\n## Why\n\n%s\n\n", s.ID, s.Mode,
+		time.Now().UTC().Format(time.RFC3339), why)
+	fmt.Fprintf(&b, "## Decide\n\n    ygg approve %s %s [--note \"...\" | --decisions <file>]\n\n", s.ID, n.ID)
 	switch {
+	case n.Kind == schema.KindPublish && h.gate == gungnir.GateRealSecrets:
+		fmt.Fprintf(&b, "Nothing was published, and nothing is while a finding stands. What the scan found is in the output of %s. "+
+			"Approving runs %s again, the node whose output this is, with the findings above (the rule and the place, never the text) as its rejection: "+
+			"its agent writes the output again without the flagged text, and Odin keeps it, publishes it and scans it again. "+
+			"The stages before %s are kept. To drop the work, start a new run.\n", n.From, n.From, n.From)
+	case blockedStop(n, h.gate):
+		if n.Kind == schema.KindTasks {
+			b.WriteString("No task was made. ")
+		} else {
+			b.WriteString("Nothing was published. ")
+		}
+		fmt.Fprintf(&b, "%s says above what it needs that only a person can give. Give it in the note: approving runs %s again, "+
+			"with the note as its rejection (with no note, it is told that a person read the blocked reason and sent it back to try again), "+
+			"and the stages before %s are kept.\n", n.From, n.From, n.From)
 	case run.Quarantines(h.gate) && n.Repo == "":
-		fmt.Fprintf(&b, "Nothing was published. The documents are in %s; remove what the scan found, and then approve: %s runs again.\n", filepath.Join(r.ScratchDir(n.From), "out"), n.ID)
+		fmt.Fprintf(&b, "Approving runs %s again.\n", n.ID)
 	case run.Quarantines(h.gate):
 		fmt.Fprintf(&b, "Until then the leaf %s stays as the node left it, for investigation. Approving puts it back to its last checkpoint and runs %s again; what the node wrote is not saved.\n", n.Repo, n.ID)
 	case h.gate == gungnir.GateBudgetCap && journalCap(h.err) && len(s.PendingSpend) > 0:

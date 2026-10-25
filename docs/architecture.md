@@ -42,11 +42,32 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   it as `start.sh` at the project's root, mode 0755, in a commit of its own, and adds `.data/` to the
   project's `.gitignore`; a `start.sh` that differs is replaced in a new commit, one that matches adds none,
   and a project with no product start keeps its own `start.sh`.
-- Runs the stages before the code: a scratch agent works in a workspace of its own (the brief, copies
-  of what it reads, an `out/` folder); `publish` copies its documents into the project and commits them,
-  after checking they are documents and hold no secret; `tasks` reads `tasks.md`, applies the Definition
-  of Ready and writes `features.json`; `init` creates the leaves the spec stage named from their realms'
-  templates and records the pins. Scratch sessions (the nodes marked `scratch: true`: the design, spec,
+- Runs the stages before the code: a scratch agent works in a workspace of its own (an `out/` folder for its
+  drafts, and the files of its inputs over the bound); `publish` commits its typed output into the project, after
+  checking it holds no secret: the output's JSON, the bytes Odin kept, beside its view, the Markdown Odin renders
+  from it (`internal/views`, change typed-boundaries: nothing reads a view back). The paths are the ones the
+  prompts gave: under the node's `to`, `1-product/design/<date>-<slug>`, `2-engineering/specs/<date>-<slug>`,
+  `2-engineering/plans/<date>-<slug>/{plan.json,plan.md,tasks.md}` and
+  `2-engineering/reviews/<date>-<slug>-reuse-review` (the slug of the plan it reviews), with the run's `date`. A
+  spec's publish also writes `leaves.yaml` from the spec's typed leaves. Each view starts with front matter Odin
+  writes (`title`, `status: draft`, `date`, `related`, which links the views of the outputs the node read), each
+  value a quoted scalar. A blocked output is not published: the publish stops the run at
+  `external-input` for a person, before any scan, with the node and its reason in the gate file, and approving runs the
+  source again with what the person gave as its `rejection` (with nothing given, that a person read the reason and
+  sent it back; ruling R43). When the secret scan finds something, nothing is published
+  and the run stops at the hard approval point; approving runs the source node again with the findings (the rule
+  and the place, never the text), and then what the person gave, as its `rejection`, and its new output is kept,
+  published and scanned again. A
+  publish node whose source declares no output, has no view, or takes no `rejection` is refused when the run
+  starts. `tasks` reads the plan node's kept output (`ygg.plan/v1`, as Odin validated it; nothing reads a `tasks.md`),
+  applies the Definition of Ready and writes `features.json` with every field of each task. A task that is not ready,
+  such as one whose text or contract is over its bound or whose contract is not OpenAPI, goes back to the planner as
+  its `refusal`; a blocked plan stops the run at `external-input` for a person, as at a publish, and what they give
+  at approval goes to the planner as its `rejection` (a second line, for a graph that reads the plan before publishing
+  it; R44). The `task` input of every session of a task holds its title, layer, criteria, named
+  test and dependencies, then its text under "What the plan says" and its contract under "The contract", in a
+  `yaml` fence, whole: Odin never cuts a task's words (B-176). `init` creates the leaves the spec stage named from
+  their realms' templates and records the pins. Scratch sessions (the nodes marked `scratch: true`: the design, spec,
   plan and reuse-review stages and the conformance check) run in a Gleipnir sandbox on the factory layer,
   the stack every session shares, never on a realm's stack; the model APIs of their adapters are their
   only egress. A loop's implementers and reviewers are no scratch sessions: they run in the leaf's
@@ -55,33 +76,73 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   merge gate or pointer move that refuses the work's checks sends it back into the loop that made it
   (`back_to`, a few times). An unattended run gives up a task whose loop gave up, keeps its work on a
   ref, and goes on with the tasks that do not depend on it.
-- Settles a disputed finding with a check (change disputed-findings). `loopSteps.Implement` returns the
-  implementer's whole answer; `loopSteps.Dispute` holds a dispute only when the named check ran and passed
-  in this attempt and its log (`logs/<node>-<attempt>-<check>.log`, read in blocks, at most 9 MiB) contains
-  the test id. `Record` writes `finding_overruled` for a finding that was overruled and, for a dispute that
-  could not be used, a `loop_attempt` line whose result begins `dispute ignored:` (the event list is closed).
-  A dispute no check of the loop can settle stops the run at escalation with the reason `finding-disputed`
-  (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve` accepts the
-  implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
+- Runs a loop on typed answers and typed checks (change typed-boundaries). `loopSteps.Implement` and
+  `loopSteps.Review` read the implementer's `ygg.implement/v1` answer and the reviewer's `ygg.review/v1` report
+  through the output channel, as every node does: asked for once more when it does not validate, and kept in
+  `outputs/<session>.json`. The ladder's checks are typed (`checks.Spec.Typed`, ruling R28) in a sandbox; on the
+  host a command takes no environment, so there a check writes no typed result. A failing check gives one
+  finding per failure its `ygg.check/v1` result lists, with the test's id and place, or the one finding
+  `check-<name>-result` when it lists none, is missing or contradicts the exit code. How the checks last ended
+  (each check's pass, the tests that failed and the tests that passed) is kept in the loop's record in
+  `run.json` (`LoopRecord.Checks`), and every session after them reads it as `check_results`, the same after a
+  resume. Exec nodes, generators, host runs and the deps bump run their commands untyped.
+- Settles a disputed finding with a check (change disputed-findings, ruling R23). Jormungandr's loop settles
+  each dispute on this attempt's check outcomes: it holds only when the named check ran in this attempt and its
+  typed result lists the test among the tests that passed, and not among those that failed. `Record` writes
+  `finding_overruled` for a finding that was overruled and, for a dispute that could not be used, a
+  `dispute_ignored` line. A dispute no check of the loop can settle stops the run at escalation with the reason
+  `finding-disputed` (exit 3, like `attempts-exhausted`); the gate file shows both sides and `ygg approve`
+  accepts the implementer's side. `ygg status` lists every overruled finding with the reviewer's claim, the
   implementer's evidence and the check run.
+- Stops for a person when a loop's agent says it could not do its work. An implementer that answers `blocked`
+  ends its attempt before any check or reviewer, and the loop escalates as `implementer-blocked` with the
+  reason; a reviewer that answers `blocked` twice in a row escalates as `reviewer-blocked`. Each reason has its
+  own words in the gate file. A rejection gives the loop its attempts again, with the reason as the implementer's
+  `rejection`; for a blocked reviewer or one whose answer can't be used twice (`reviewer-unreadable`), the reason is
+  that reviewer's `rejection`, and the checks and the reviewer run again on the same work. A loop and each of its
+  reviewers must declare `rejection`. An approval accepts the work as it is; `reviewer-unreadable` takes a rejection
+  only.
 - Puts the task's diff in every task reviewer's prompt (change review-diff). A read-only reviewer has no shell, so
   it cannot run `git diff`. Odin records the leaf's commit in the loop's record (`LoopRecord.Base`) when the loop
   starts, keeps it across resumes (a state without it records the leaf's commit when the loop next runs), and
-  `loopSteps.Review` adds a section "The change" after the task block: the files with their line counts, then the
+  a reviewer that declares `change` gets it as that input: the files with their line counts, then the
   patch from the base to the leaf's commit. Host git computes it with hooks, external diff drivers and text
   conversion off, so nothing in the leaf runs. The patch is filled greedily up to `maxChangeBytes` (200 KB): a file
   that does not fit is left out whole and named, and later files that fit are shown. A binary file (a NUL byte) is
   named, not shown. A diff that cannot be computed gives one line and a `loop_attempt` line `change not computed:`;
   the review goes on. Scratch reviewers outside the loop do not get it.
-- Gives the note of a gate approval to every later session (spec §7.2, finding F1). `Approve` refuses a note
-  with a control character (the rule of `ygg-proof-run.sh`) or a line or paragraph separator (U+2028, U+2029),
-  and keeps a note that is not blank in `State.Decisions`, as `{gate, note}` in the order given, only when the
-  stopped node is a gate: a note at an escalation, `policy-violation` or `shrink-guard` stays on the
-  `gate_approved` event. A second approval of the same gate, after a `back_to` return past it, replaces the
-  gate's note; a blank one keeps it, since the earlier decision still holds. `decisionsBlock`
-  (`internal/engine/decisions.go`) writes "The product owner's decisions" after the brief in the prompt of an
-  agent, a scratch agent, an implementer and each reviewer. A rejection that goes back past gates drops their
-  notes; a resume keeps them from `run.json`.
+- Takes a person's gate decisions as data (spec §7.2, change typed-boundaries, `internal/engine/decisions.go`).
+  `ygg approve RUN GATE --decisions FILE` and `ygg reject RUN GATE --decisions FILE` read a `ygg.decisions/v1` file
+  (a regular file, never a symbolic link, at most 64 KiB, no key twice in one object): decisions under ids the operator chooses and keeps across
+  runs, answers to this run's design's open questions by their ids, and for a rejection the reason, which it needs
+  and an approval may not hold. `--note TEXT` is shorthand for a file with one decision under the next free id, `note-<gate>`, then
+  `note-<gate>-2` and on (ruling R47, so a gate met again can take a new note), and
+  `--reason TEXT` for a file with only the reason; each is one line (the rule of `ygg-proof-run.sh`), and a file
+  with a shorthand is refused. `Approve` and `Reject` check what is given before anything is recorded: the contract
+  (unique decision ids, a note of at most 4 KiB); each answer names an open question of a design the run kept,
+  once (ruling R45); and a decision id already kept, at any gate, is given with its text or not at all ("decision X
+  was already given as …; give a new id", ruling R46(3)). The `gate_approved` or `gate_rejected` event carries the
+  file as one line of JSON in its note; `ygg report` shows it as its ids and its reason's first line.
+  At a gate node the decisions and answers are the product owner's, kept in `State.Decisions` as
+  `{gate, decisions}` in the order given; a gate met again (a `back_to` return past it, a rejection there and then an
+  approval) adds what is new to what it was given, an answer given again replacing the earlier one, and nothing given
+  keeps it. At any other stop they stay on the event. A session that declares `decisions` gets every gate's decisions and then
+  their answers as the lists of `ygg.decisions/v1`, each with its id and its gate, an answer with its question.
+  Every stage that runs again after a person decided (a gate's or a loop's rejection, the secret-scan stop, a
+  blocked output) gets as its `rejection` what they gave, rendered by one function (`rejectionText`): the reason,
+  each decision with its id (under "The product owner's decisions" at a gate node, "What the person said" at any
+  other stop), each answer with its question, every field made safe. A rejection that goes back past
+  gates drops their decisions; a resume keeps them from `run.json`.
+- Checks that the spec cites every owner decision (design §4, `internal/engine/ownercheck.go`). Right after an
+  agent node keeps a `ygg.spec/v1` output, before the conformance review, the ids of every decision in
+  `State.Decisions` must each be cited by one of the spec's decisions or deviations. A spec that misses some goes
+  back to its own node once, with "the spec does not cite the product owner's decisions IDS: cite each in a decision
+  or a deviation" as its `refusal` and a `node_returned` event (`State.Returns` counts it; a rejection that runs the
+  spec again starts it over). A node's `rejection` and `refusal` are dropped only once its output passes the check,
+  so the spec run again still has the person's reason. A second miss stops the next gate in every mode, whose file lists the ids under "Owner
+  decisions the spec does not cite"; with no gate after the spec, the node fails. A blocked spec is left to its
+  publish, and an open question with no answer stays allowed. A spec node that does not declare `decisions` and
+  `refusal` is refused when the run starts.
 - Starts each leaf's sandbox on its realm's stack, with the services `services.For` gives the leaf (spec
   §6.1, §9.2, §9.4): for its realm and the realm of each leaf it consumes, the runtime realm's provider of
   each need, under the name it has in the runtime realm's pack, and the services an older pack names itself.
@@ -97,10 +158,39 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   order, on its acceptance stack and with the services `services.For` gives every leaf of the project, in
   a snapshot of its own at `snapshot/<node>/<realm>`; the first failure is the move's, and a project where
   no realm has the check is refused. What a leaf's working copy holds beyond its commits never reaches it.
-- Reads the design-conformance verdict (`out/conformance.json` of a scratch reviewer that reviews another
-  scratch agent's output, which it finds as `reviewed/`) and gives it to the spec gate: a deviation stops the
-  gate in every mode, with the proposed amendment in the gate file; a verdict that cannot be read is asked
-  for once more and then stops the run, never a pass (spec §4.2, §4.6).
+- Reads every agent session's output through one channel (change typed-boundaries): the document the
+  session handed to the `submit` tool, or else its whole final answer as exactly one JSON document, decoded
+  against the node's contract. An output that does not validate is asked for once more, in a new session told
+  each error; a second one fails the node. Nothing is read out of prose. The output that validated is kept in
+  `outputs/<node>.json` of the run folder, with its hash in `run.json`, and a later stage reads it from there.
+  A run started before this change keeps no outputs, and a resume refuses it.
+- Reads the design-conformance verdict (the `ygg.conformance/v1` output of a scratch reviewer that reviews
+  another scratch agent's output, which it reads as its input) and gives it to the spec gate: a deviation
+  stops the gate in every mode, with the proposed amendment in the gate file, and so does a verdict that says
+  the reviewer is blocked, with its reason (spec §4.2, §4.6). A gate file also shows what a person decides on
+  there: the open questions of a design, and the verdict and the items of a reuse review, of the nodes since
+  the gate before.
+- Builds every session's prompt from the inputs its node declares (change typed-boundaries, `promptFor` in
+  `internal/engine/prompt.go`): the role's prompt file and its skills, as they are; for a scratch node, a note on
+  its workspace; one section `## Input: <name>` for each input, in the declared order; then how to hand back the
+  answer (`jormungandr.AnswerInstructions`, or a reviewer's `ReviewRequest`), through `submit` when the role's
+  adapter has it. The brief passes as it is, but for a code fence it leaves open, which is closed. Every other input is rendered from its typed value (`inputs.go`): an
+  earlier node's kept output field by field in its schema's order, under `### <field>`, a list of strings as
+  bullets and anything nested as a JSON block; the task with its text and its contract whole, the contract in a
+  fence no run of backticks in it can close; the change, the open findings and the check results from the loop;
+  the date from Odin's clock (`Setup.Clock`). No line of a field's text can start a heading, front matter or an
+  HTML block: one that starts with `#`, `---` or `<`, after any blockquote or list markers, or that underlines, is
+  indented four spaces,
+  and a fence it leaves open (read as CommonMark reads one) is closed. Prompts, views and gate files share this
+  one rule (`internal/mdsafe`).
+  A declared input with no value fails the node before any session; `decisions`, `rejection`, `refusal`,
+  `open_findings` and `check_results` may be empty, and say "None.". An input over 96 KiB goes to a file the
+  section names: `inputs/<name>.md` in a scratch workspace, and in a repo `.ygg-inputs/<name>.md`, which the repo's
+  git ignores by a rule in its git dir (`git.Repo.Exclude`) and which Odin removes after the session, before the
+  checkpoint, and on every other way out (ruling R36). A loop with no base commit gives its reviewers a change that
+  says so. A scratch workspace holds `out/` and those files, and nothing of the project. A loop's
+  sessions declare its own sources (`change`, `open_findings`, `check_results`) wherever the loop is (ruling R37),
+  and get exactly what they declare. A foreach body's input that names a body node names the task's copy of it.
 - Checks the graphs with `ygg doctor`: each pack in `graphs.dir` must load, hold a graph and have the
   name of its folder, or `--graph <name>` could not find it. When `graphs.dir` is `realms.dir`, a pack with
   no graph is a realm and is not an error. It warns when `factory.yaml` has no `graphs`

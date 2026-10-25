@@ -16,22 +16,18 @@ import (
 var contractTaskShape = strings.Replace(taskShape, "      - { id: move, kind: pointer, realm: leaf }\n",
 	"      - { id: contract-gate, kind: gate, gate: pointer-contract }\n      - { id: move, kind: pointer, realm: leaf }\n", 1)
 
-// contractTaskRun is a plan of two tasks that depend on nothing: p-T1 changes the api leaf's contract, which
-// the web leaf reads, and p-T2 builds web.txt.
+// contractTaskRun is a plan of two tasks that depend on nothing: p-T001 changes the api leaf's contract, which
+// the web leaf reads, and p-T002 builds web.txt.
 func contractTaskRun(t *testing.T, mode, nodes string) *run.Run {
 	t.Helper()
 	noOasdiff(t)
-	script := "steps:\n  p-t1-implement:\n    - actions:\n" +
+	script := "steps:\n  p-t001-implement:\n    - actions:\n" +
 		"        - write: { path: api.txt, content: \"done\\n\" }\n" +
 		"        - write: { path: api.openapi.yaml, content: \"openapi: 3.0.3\\ninfo: { title: T, version: 2.0.0 }\\n\" }\n" +
-		"      result: { status: ok, summary: wrote the contract }\n" + writeStep("p-t2-implement", "web.txt")
-	r := startRealms(t, realmsSetup{mode: mode, nodes: nodes, script: script,
+		"      result: { status: ok, summary: wrote the contract, output: '{\"summary\": \"done\"}' }\n" + writeStep("p-t002-implement", "web.txt")
+	r := startRealms(t, realmsSetup{mode: mode, nodes: nodes, script: withPlan(planOf(taskOf("p-T001", "repos/api", "S"), taskOf("p-T002", "repos/web", "S")), script),
 		realms: []realmFiles{recipeRealm("midgard-react", "0.1.0", "web.txt", "Web implementer prompt."), recipeRealm("helheim-go", "0.2.0", "api.txt", "API implementer prompt.")},
 		leaves: map[string]string{"repos/api": "helheim-go", "repos/web": "midgard-react"}})
-	plan := "# Tasks\n\n" + taskMD("p-T1", "repos/api", "S", "nothing") + taskMD("p-T2", "repos/web", "S", "nothing")
-	if err := os.WriteFile(filepath.Join(r.Project, "tasks.md"), []byte(plan), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	imp := &routing.Impact{Schema: routing.ImpactSchema, Bound: "lower", Contracts: []routing.ContractEntry{
 		{ID: "contract:repos/api/api.openapi.yaml", Path: "repos/api/api.openapi.yaml", Owner: "repos/api",
 			Readers: routing.Reached{Extracted: []string{"web"}, Inferred: []string{}}}},
@@ -39,7 +35,7 @@ func contractTaskRun(t *testing.T, mode, nodes string) *run.Run {
 	if err := routing.WriteImpact(r.Project, imp); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"add", "tasks.md", routing.ImpactFile}, {"commit", "-q", "-m", "plan and impact index"}} {
+	for _, args := range [][]string{{"add", routing.ImpactFile}, {"commit", "-q", "-m", "the impact index"}} {
 		if _, err := git.Run(bg, r.Project, args...); err != nil {
 			t.Fatal(err)
 		}
@@ -58,20 +54,20 @@ func TestAnUnattendedRunBlocksTheTaskWhoseMoveChangesAContractAndGoesOn(t *testi
 	for _, f := range r.State.Features {
 		status[f.ID] = f.Status
 	}
-	if status["p-T1"] != schema.TaskBlocked || status["p-T2"] != schema.TaskDone {
-		t.Errorf("task statuses = %v, want p-T1 blocked and p-T2 done", status)
+	if status["p-T001"] != schema.TaskBlocked || status["p-T002"] != schema.TaskDone {
+		t.Errorf("task statuses = %v, want p-T001 blocked and p-T002 done", status)
 	}
 	why := r.State.Features[0].Why
-	for _, want := range []string{"changes a contract", "not in the approved spec", "repos/api/api.openapi.yaml", "gates/p-t1-contract-gate-1.md"} {
+	for _, want := range []string{"changes a contract", "not in the approved spec", "repos/api/api.openapi.yaml", "gates/p-t001-contract-gate-1.md"} {
 		if !strings.Contains(why, want) {
 			t.Errorf("task 1's reason lacks %q: %q", want, why)
 		}
 	}
-	if got := strings.Join(taskEvents(t, r), ", "); got != "task_started p-t1, task_blocked p-t1, task_started p-t2, task_done p-t2" {
+	if got := strings.Join(taskEvents(t, r), ", "); got != "task_started p-t001, task_blocked p-t001, task_started p-t002, task_done p-t002" {
 		t.Errorf("task events = %s", got)
 	}
 	text := ledgerText(t, r)
-	for _, want := range []string{`"event":"pointer_contract_checked"`, `"ygg.verdict":"fail"`, `"ygg.result":"done, with 1 task(s) blocked: p-T1"`} {
+	for _, want := range []string{`"event":"pointer_contract_checked"`, `"ygg.verdict":"fail"`, `"ygg.result":"done, with 1 task(s) blocked: p-T001"`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the ledger lacks %s:\n%s", want, text)
 		}
@@ -82,7 +78,7 @@ func TestAnUnattendedRunBlocksTheTaskWhoseMoveChangesAContractAndGoesOn(t *testi
 	if r.State.Pending != "" || r.State.PendingGate != "" {
 		t.Errorf("the run is still pending at %s (%s)", r.State.Pending, r.State.PendingGate)
 	}
-	b, err := os.ReadFile(filepath.Join(r.Dir, "gates", "p-t1-contract-gate-1.md"))
+	b, err := os.ReadFile(filepath.Join(r.Dir, "gates", "p-t001-contract-gate-1.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +122,7 @@ func TestAContractGateOutsideATaskStillStopsUnattended(t *testing.T) {
 func TestAContractGateInATaskStopsInKeyPoints(t *testing.T) {
 	r := contractTaskRun(t, "key-points", contractTaskShape)
 	out, err := Advance(bg, r)
-	if err != nil || out.Status != run.StatusStopped || out.Gate != "p-t1-contract-gate" {
+	if err != nil || out.Status != run.StatusStopped || out.Gate != "p-t001-contract-gate" {
 		t.Fatalf("Advance() = %+v, %v; want a stop at the gate", out, err)
 	}
 	if r.State.Features[0].Status == schema.TaskBlocked {

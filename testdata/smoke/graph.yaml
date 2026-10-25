@@ -3,11 +3,11 @@
 # cents. Run it with a factory.yaml whose implementer is claude-code and whose reviewer is opencode.
 name: smoke
 version: 0.1.0
-schema: 1
+schema: 2
 nodes:
-  - { id: hello, kind: agent, role: implementer, prompt: prompts/hello.md, repo: repos/app, max_turns: 8, timeout: 5m }
+  - { id: hello, kind: agent, role: implementer, prompt: prompts/hello.md, repo: repos/app, max_turns: 8, timeout: 5m, input: [rejection], output: ygg.implement/v1 }
   - { id: check, kind: exec, run: [grep, -q, hello, hello.txt], repo: repos/app }
-  - { id: review, kind: agent, role: reviewer, prompt: prompts/review.md, repo: repos/app, read_only: true, max_turns: 6, timeout: 5m }
+  - { id: review, kind: agent, role: reviewer, prompt: prompts/review.md, repo: repos/app, read_only: true, max_turns: 6, timeout: 5m, input: [rejection], output: ygg.implement/v1 }
   - { id: feature-gate, kind: gate, gate: feature }
   - { id: merge-gate, kind: gate, gate: merge }
   - { id: merge, kind: merge, repo: repos/app, checks: [unit] }

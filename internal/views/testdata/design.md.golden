@@ -1,0 +1,53 @@
+---
+title: "Photo Share design"
+status: draft
+date: 2026-10-24
+related: []
+---
+
+## Summary
+
+Photo Share lets a family keep photos in albums and share an album by link.
+
+## Goals, non-goals and success criteria
+
+### Goals
+
+A person uploads photos, groups them in albums and shares an album with a link.
+
+### Non-goals
+
+No editing of photos, because the brief asks for storage and sharing only.
+
+### Success criteria
+
+A page of 50 photos shows within two seconds on a phone.
+
+## Context and constraints
+
+The users are a family. They use phones. We assumed one language, English.
+
+## The product at user level
+
+A person signs in, makes an album and adds photos. A wrong link shows a page that says the album is gone.
+
+## Decisions
+
+- **Decided 2026-10-24:** An album link works until its owner turns it off.
+  The brief does not say how long a link lives, and a family reopens old links.
+  (Owner decisions: links-last)
+- **Decided 2026-10-24:** Only the owner deletes photos.
+  Guests only look.
+
+## Open questions
+
+- **q1:** May guests download photos?
+  (Who can answer: The product owner)
+- **q2:** How many photos may one album hold?
+  (Who can answer: The product owner)
+- **q3:** Is a second language needed?
+  (Who can answer: The family)
+
+## Notes
+
+- The brief names no budget.

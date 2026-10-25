@@ -61,9 +61,11 @@ func TestARunOfTheToyRealmsBuildsAProductFromTwoRealms(t *testing.T) {
 	}
 
 	// The documents of the three stages are in the project, committed by Odin.
-	for _, f := range []string{"docs/1-product/design.md", "docs/2-engineering/specs/spec.md", "docs/leaves.yaml", "docs/2-engineering/plans/2026-10-17-gallery/tasks.md"} {
-		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
-			t.Errorf("%s was not published: %v", f, err)
+	for _, f := range []string{"docs/1-product/design/*-gallery.json", "docs/1-product/design/*-gallery.md", "docs/2-engineering/specs/*-gallery.json",
+		"docs/2-engineering/specs/*-gallery.md", "docs/leaves.yaml", "docs/2-engineering/plans/*-gallery/plan.json", "docs/2-engineering/plans/*-gallery/plan.md",
+		"docs/2-engineering/plans/*-gallery/tasks.md"} {
+		if m, _ := filepath.Glob(filepath.Join(dir, f)); len(m) != 1 {
+			t.Errorf("%s was not published: %v", f, m)
 		}
 	}
 	// The plan with a mistake went back to the planner once.
@@ -141,8 +143,8 @@ func TestAnUnattendedRunOfTheToyRealmsGivesUpATaskAndExitsFive(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Task 2's implementer builds nothing, twice, so its loop gives up; task 4 depends on it.
-	broken := strings.Replace(string(script), "    - actions: [ { write: { path: web.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 } }\n",
-		"    - result: { status: ok, summary: did nothing }\n    - result: { status: ok, summary: did nothing again }\n", 1)
+	broken := strings.Replace(string(script), "    - actions: [ { write: { path: web.txt, content: \"done\\n\" } } ]\n      result: { status: ok, summary: built the page, usage: { in: 2000, out: 200, turns: 4 }, output: '{\"summary\": \"done\"}' }\n",
+		"    - result: { status: ok, summary: did nothing, output: '{\"summary\": \"done\"}' }\n    - result: { status: ok, summary: did nothing again, output: '{\"summary\": \"done\"}' }\n", 1)
 	if broken == string(script) {
 		t.Fatal("the script was not changed")
 	}
@@ -155,7 +157,7 @@ func TestAnUnattendedRunOfTheToyRealmsGivesUpATaskAndExitsFive(t *testing.T) {
 	if code != ExitBlocked {
 		t.Fatalf("exit %d, want %d:\n%s%s", code, ExitBlocked, out, errOut)
 	}
-	for _, want := range []string{"is done, with 2 task(s) given up", "gallery-T2:", "gallery-T4: it depends on gallery-T2, which is blocked"} {
+	for _, want := range []string{"is done, with 2 task(s) given up", "gallery-T002:", "gallery-T004: it depends on gallery-T002, which is blocked"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the output lacks %q:\n%s", want, out)
 		}
@@ -168,11 +170,11 @@ func TestAnUnattendedRunOfTheToyRealmsGivesUpATaskAndExitsFive(t *testing.T) {
 	for _, f := range feats.Tasks {
 		got[f.ID] = f.Status
 	}
-	if got["gallery-T1"] != schema.TaskDone || got["gallery-T3"] != schema.TaskDone || got["gallery-T2"] != schema.TaskBlocked || got["gallery-T4"] != schema.TaskBlocked {
+	if got["gallery-T001"] != schema.TaskDone || got["gallery-T003"] != schema.TaskDone || got["gallery-T002"] != schema.TaskBlocked || got["gallery-T004"] != schema.TaskBlocked {
 		t.Errorf("task statuses = %v; the API tasks go on, and the web tasks are given up", got)
 	}
 	_, status, _ := ygg(t, "status", runID(t, dir), "--project", dir)
-	if !strings.Contains(status, "blocked:  gallery-T2:") || !strings.Contains(status, "tasks:    4 (2 done, 0 doing, 0 to do, 2 blocked)") {
+	if !strings.Contains(status, "blocked:  gallery-T002:") || !strings.Contains(status, "tasks:    4 (2 done, 0 doing, 0 to do, 2 blocked)") {
 		t.Errorf("status:\n%s", status)
 	}
 }
