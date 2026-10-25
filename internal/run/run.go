@@ -60,7 +60,8 @@ type Hooks struct {
 // Setup is everything a run needs, loaded and checked.
 type Setup struct {
 	Config       *schema.Factory
-	ConfigPath   string // absolute
+	Models       *schema.ModelList // factory.yaml's model list, or nil without a models section
+	ConfigPath   string            // absolute
 	ConfigSHA256 string
 	GraphPack    *realm.Realm // the graph pack: --graph, loaded. It is also the realm of the leaves that pin none, when it holds a recipe
 	Realms       *realm.Set   // the realms of the run: one for each realm a leaf of the project pins, each loaded once, and the graph pack when it holds a recipe
@@ -112,6 +113,15 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		return nil, err
 	}
 	s.ConfigSHA256 = sum(cfgData)
+	if m := s.Config.Models; m != nil {
+		data, err := os.ReadFile(m.File)
+		if err != nil {
+			return nil, fmt.Errorf("the model list: %w", err)
+		}
+		if s.Models, err = schema.ParseModels(m.File, data); err != nil {
+			return nil, err
+		}
+	}
 	// ParseFactory checked the gate overrides against the file's own mode. A --mode switch needs no
 	// second check: design: auto, the one loosening, applies only in unattended mode (gate.Decide).
 	s.Mode = s.Config.Mode
@@ -391,7 +401,7 @@ func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 				return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
 			}
 			if s.Agents[n.Role] == nil {
-				a, err := agents.New(s.Config.Roles[n.Role], filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy})
+				a, err := agents.New(s.Config.Roles[n.Role], filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy, Models: s.Models})
 				if err != nil {
 					return fmt.Errorf("role %s: %w", n.Role, err)
 				}
@@ -424,7 +434,7 @@ func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
 	if !ok {
 		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, node, role, s.ConfigPath)
 	}
-	if s.Agents[role], err = agents.New(r, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy}); err != nil {
+	if s.Agents[role], err = agents.New(r, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy, Models: s.Models}); err != nil {
 		return fmt.Errorf("role %s: %w", role, err)
 	}
 	return nil

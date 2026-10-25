@@ -220,7 +220,7 @@ func TestAScratchSandboxStartsOnTheFactoryLayerWithTheModelAPIsAsItsOnlyEgress(t
 	if scratch.Stack != "" {
 		t.Errorf("the scratch sandbox starts on the stack %q, want none: the factory layer alone", scratch.Stack)
 	}
-	want := slices.Clone(agents.Hosts("claude-code"))
+	want := slices.Clone(agents.Hosts("claude-code", "sonnet"))
 	slices.Sort(want)
 	if !slices.Equal(scratch.Egress, want) {
 		t.Errorf("the scratch egress is %v, want only the model API hosts %v", scratch.Egress, want)

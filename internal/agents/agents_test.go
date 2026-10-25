@@ -92,7 +92,7 @@ func TestNewBuildsEachAdapterAndRefusesWhatItCannotTighten(t *testing.T) {
 }
 
 func TestHostsAreWhatTheModelAPIsNeed(t *testing.T) {
-	if !slices.Equal(Hosts("claude-code"), []string{"api.anthropic.com"}) || !slices.Equal(Hosts("opencode"), []string{"openrouter.ai"}) || Hosts("scripted") != nil {
-		t.Errorf("hosts = %v %v %v", Hosts("claude-code"), Hosts("opencode"), Hosts("scripted"))
+	if !slices.Equal(Hosts("claude-code", "sonnet"), []string{"api.anthropic.com"}) || !slices.Equal(Hosts("opencode", "openrouter/x/y"), []string{"openrouter.ai"}) || Hosts("scripted", "") != nil {
+		t.Errorf("hosts = %v %v %v", Hosts("claude-code", "sonnet"), Hosts("opencode", "openrouter/x/y"), Hosts("scripted", ""))
 	}
 }

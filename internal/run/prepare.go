@@ -47,7 +47,7 @@ func (s *Setup) prepareSandbox(initAhead bool) error {
 	var hosts []string
 	for _, n := range s.Graph.All() {
 		for _, role := range nodeRoles(n) {
-			hosts = append(hosts, agents.Hosts(s.Config.Roles[role].Agent)...)
+			hosts = append(hosts, agents.Hosts(s.Config.Roles[role].Agent, s.Config.Roles[role].Model)...)
 		}
 	}
 	hosts = sortedUnique(hosts)
