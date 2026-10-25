@@ -201,3 +201,35 @@ func TestAStoppedRunWithNoLockIsJudged(t *testing.T) {
 		t.Errorf("status = %s; a score does not change the run", after.Status)
 	}
 }
+
+func TestAJudgementIsKeptWhenTheRecordCannotBeRebuilt(t *testing.T) {
+	dir, id, runDir := scored(t)
+	if err := os.Mkdir(filepath.Join(runDir, "record.json"), 0o755); err != nil { // the rebuild cannot rename over a folder
+		t.Fatal(err)
+	}
+	code, _, errOut := ygg(t, "score", id, "--project", dir, "--score", "4", "--well", "a", "--wrong", "b")
+	if code != ExitFailed {
+		t.Errorf("exit %d, want %d: the judgement is kept, the command did not finish", code, ExitFailed)
+	}
+	for _, want := range []string{"judgement was recorded", "could not be rebuilt", "ygg record " + id} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr %q does not say %q", errOut, want)
+		}
+	}
+	if js := readJudgements(t, runDir); len(js) != 1 || js[0].Score != 4 {
+		t.Errorf("judgements.json = %+v, want the judgement kept", js)
+	}
+	if n := len(judgedLines(t, runDir)); n != 1 {
+		t.Errorf("%d judged lines, want 1", n)
+	}
+	// The retry the message names works once the cause is gone, and adds no second line.
+	if err := os.Remove(filepath.Join(runDir, "record.json")); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, e := ygg(t, "record", id, "--project", dir); code != ExitDone {
+		t.Fatalf("record: exit %d, %s", code, e)
+	}
+	if n := len(judgedLines(t, runDir)); n != 1 {
+		t.Errorf("%d judged lines after the retry, want 1", n)
+	}
+}

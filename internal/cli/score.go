@@ -99,7 +99,9 @@ func (c *command) score(args []string) int {
 	}
 	path, err := metrics.WriteRecord(dir)
 	if err != nil {
-		return c.refuse(err)
+		// The judgement is in the ledger and in judgements.json: running score again would log it twice.
+		fmt.Fprintf(c.err, "ygg: the judgement was recorded (judgements.json and the ledger), but record.json could not be rebuilt: %v\nRun: ygg record %s\n", err, id)
+		return ExitFailed
 	}
 	what := "run " + id
 	if j.Task != "" {
