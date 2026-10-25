@@ -33,7 +33,7 @@ type server struct {
 // New returns the client for the server the list names.
 func New(list *schema.ModelList, client *http.Client) Server {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &server{list: list, client: client, interval: time.Second, timeout: 300 * time.Second}
 }
@@ -48,24 +48,32 @@ type entry struct {
 }
 
 func (s *server) Ready(ctx context.Context, name string) error {
+	if strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return fmt.Errorf("model %q: the name holds control characters", name)
+	}
 	e, err := s.find(ctx, name)
 	if err != nil {
 		return err
 	}
-	if e.Status.Value == "loaded" {
-		return nil
-	}
+	// The gate reads the allow file, so every successful path writes it.
 	if err := s.allow(name); err != nil {
 		return fmt.Errorf("model %q: write the allow file: %w", name, err)
+	}
+	if e.Status.Value == "loaded" {
+		return nil
 	}
 	if err := s.load(ctx, name); err != nil {
 		return err
 	}
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	for {
 		e, err := s.find(ctx, name)
 		if err != nil {
+			if parent.Err() != nil {
+				return fmt.Errorf("model %q: %w", name, parent.Err())
+			}
 			if ctx.Err() != nil {
 				return fmt.Errorf("model %q: not loaded within %s (status wanted: loaded)", name, s.timeout)
 			}
@@ -83,6 +91,9 @@ func (s *server) Ready(ctx context.Context, name string) error {
 		}
 		select {
 		case <-ctx.Done():
+			if parent.Err() != nil {
+				return fmt.Errorf("model %q: %w", name, parent.Err())
+			}
 			return fmt.Errorf("model %q: not loaded within %s (status %q, wanted loaded)", name, s.timeout, e.Status.Value)
 		case <-time.After(s.interval):
 		}
@@ -101,7 +112,7 @@ func (s *server) find(ctx context.Context, name string) (entry, error) {
 			name, s.list.HostURL(), err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return entry{}, fmt.Errorf("model %q: read the model list: %w", name, err)
 	}

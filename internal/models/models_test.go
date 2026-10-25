@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -155,6 +156,29 @@ func TestReadySkipsALoadedModel(t *testing.T) {
 	}
 	if f.loads != 0 {
 		t.Fatalf("loads = %d", f.loads)
+	}
+	b, err := os.ReadFile(filepath.Join(s.list.Server.State, "allowed"))
+	if err != nil || string(b) != "qwen-a\n" {
+		t.Fatalf("allow file = %q, %v", b, err)
+	}
+}
+
+func TestReadyReturnsACancelledContext(t *testing.T) {
+	f := &fake{status: "loading"}
+	s, _ := setup(t, f)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	err := s.Ready(ctx, "qwen-a")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestReadyRefusesANameWithControlCharacters(t *testing.T) {
+	f := &fake{status: "loaded"}
+	s, _ := setup(t, f)
+	if err := s.Ready(context.Background(), "qwen-a\nevil"); err == nil {
+		t.Fatal("accepted")
 	}
 }
 
