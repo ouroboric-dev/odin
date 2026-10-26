@@ -86,3 +86,15 @@ func TestDoctorModelsAddsNothingWithoutALocalRole(t *testing.T) {
 		t.Errorf("doctor:\n%s", out)
 	}
 }
+
+func TestDoctorModelsWarnsWhenRolesNameMoreThanOneModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"data":[]}`)) }))
+	defer srv.Close()
+	dir, config := localProject(t, "local/qwen3.8-27b", serverPort(t, srv), "true")
+	b, _ := os.ReadFile(config)
+	os.WriteFile(config, []byte(strings.Replace(string(b), "roles:\n", "roles:\n  other: { agent: opencode, model: local/mtp-27b }\n", 1)), 0o644)
+	_, out, _ := ygg(t, "doctor", "--project", dir, "--config", config)
+	if !strings.Contains(out, "WARN  models: ") || !strings.Contains(out, "only one") || strings.Contains(out, "OK    models") {
+		t.Errorf("doctor:\n%s", out)
+	}
+}

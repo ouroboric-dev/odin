@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +15,9 @@ import (
 	"github.com/ouroboric-dev/gleipnir/sandbox"
 	"github.com/ouroboric-dev/gungnir/schema"
 )
+
+// shellSafePath is what ygg models server prints unquoted for a path: nothing a shell reads as syntax.
+var shellSafePath = regexp.MustCompile(`^/[A-Za-z0-9._/@+-]*$`)
 
 // models runs ygg models: the commands the umbrella's scripts/ygg-models.sh asks of the list of local models,
 // so a shell never parses YAML (local-models spec §3.2, §3.3, §3.4).
@@ -46,8 +50,14 @@ func (c *command) models(args []string) int {
 			return ExitDone
 		}
 		// ParseModels checked each value: a name of a DNS label, ports in range, clean absolute paths. A shell reads
-		// them unquoted.
+		// them unquoted, and a clean path may still hold a newline, a space or $(…): the two paths are refused unless
+		// they are plain.
 		s := list.Server
+		for _, kv := range [][2]string{{"weights", s.Weights}, {"state", s.State}} {
+			if !shellSafePath.MatchString(kv[1]) {
+				return c.refuse(fmt.Errorf("%s: server %s %q has characters a shell could misread; use a path of letters, digits and . _ / @ + - only, without spaces or special characters (a symlink works)", pos[0], kv[0], kv[1]))
+			}
+		}
 		fmt.Fprintf(c.out, "NAME=%s\nNETWORK=%s\nPORT=%d\nHOST_PORT=%d\nWEIGHTS=%s\nSTATE=%s\n", s.Name, s.Network, s.Port, s.HostPort, s.Weights, s.State)
 		return ExitDone
 	case "image":
@@ -137,6 +147,10 @@ func (c *command) checkModels(f *schema.Factory, report func(level, what, msg st
 			ok = false
 		}
 	}
+	if ok && len(names) > 1 {
+		report("WARN", "models", fmt.Sprintf("the roles name %d local models, %s; a run may use only one, and refuses a graph that names more", len(names), strings.Join(slices.Sorted(slices.Values(names)), ", ")))
+		ok = false
+	}
 	if ok {
 		report("OK", "models", fmt.Sprintf("%s serves %s at %s", list.Server.Name, strings.Join(slices.Sorted(slices.Values(names)), ", "), list.HostURL()))
 	}
@@ -176,9 +190,18 @@ func (c *command) networkInternal(engine, network string) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, d.Podman, "network", "inspect", "--format", "{{.Internal}}", network)
 	cmd.Env = d.Env()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			return "", err
+		}
+		if strings.Contains(msg, "not found") || strings.Contains(msg, "no such network") {
+			msg += " (create it: scripts/ygg-models.sh start)"
+		}
+		return "", fmt.Errorf("%w: %s", err, msg)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

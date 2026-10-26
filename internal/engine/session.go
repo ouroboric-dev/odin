@@ -270,8 +270,9 @@ func warnBudget(r *run.Run, node string) error {
 	return nil
 }
 
-// billed marks the part of a session's cost that its adapter bills to a paid API, which a local model never does, and which is what the dollar caps
-// count (spec §7.4). A subscription's session has a cost figure, what it would cost on the API, and bills nothing.
+// billed sets the part of a session's cost that a paid API billed: the dollar caps count that part (spec §7.4).
+// A local model bills nothing. A subscription's session has a cost figure, what it would cost on the API, and bills
+// nothing either.
 func billed(adapter, model string, u gungnir.Usage) gungnir.Usage {
 	if schema.PaidModel(adapter, model) {
 		u.BilledUSD = u.CostUSD

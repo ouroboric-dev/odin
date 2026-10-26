@@ -200,7 +200,7 @@ func TestLocalResumeLoadsTheModel(t *testing.T) {
 	}
 	// Ready ran before the resume touched a sandbox: the leftover was still up, and nothing new had started.
 	if len(l.server.ups) != 1 || l.server.ups[0] != 1 || len(l.fake.Downs) != 1 || len(l.fake.Ups) != 1 {
-		t.Errorf("at Ready %d sandboxes had come up; after: ups %d, downs %d", l.server.ups[0], len(l.fake.Ups), len(l.fake.Downs))
+		t.Errorf("at Ready, sandboxes up %v; after: ups %d, downs %d", l.server.ups, len(l.fake.Ups), len(l.fake.Downs))
 	}
 
 	// A resume whose server is down is refused, and leaves the run as it was.
@@ -332,4 +332,54 @@ func TestLocalDoneRunNeedsNoModel(t *testing.T) {
 	if len(l.server.calls) != 0 {
 		t.Errorf("Ready calls = %v; a done run asks the server nothing", l.server.calls)
 	}
+}
+
+// Export runs no session: opening a failed local run the way it does asks the model server nothing, and a resume
+// still asks it once.
+func TestLocalExportOpenNeedsNoModelServer(t *testing.T) {
+	l := newLocalSetup(t, "alpha")
+	cfg := l.config(t, scriptedRole(t), "{ agent: opencode, model: local/alpha }", "")
+	r, err := Start(ctx, Options{Project: l.project, Config: cfg, Graph: toySandbox(t), Hooks: l.hooks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := r.State.ID
+	r.State.Status = StatusFailed
+	if err := r.Save(); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	l.server.calls, l.server.err = nil, errors.New("the model server does not answer")
+	r2, err := OpenForExport(ctx, l.project, id, l.hooks)
+	if err != nil {
+		t.Fatalf("OpenForExport() = %v; an export needs no model server", err)
+	}
+	r2.Close()
+	if len(l.server.calls) != 0 {
+		t.Errorf("Ready calls = %v; an export asks the server nothing", l.server.calls)
+	}
+	l.server.err = nil
+	r3, err := OpenWith(ctx, l.project, id, "", l.hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r3.Close()
+	if strings.Join(l.server.calls, ",") != "alpha" {
+		t.Errorf("Ready calls on resume = %v, want one for alpha", l.server.calls)
+	}
+}
+
+// A model list is read for a local role only: a config that has a models section and no local role in the graph
+// loads without the list.
+func TestPrepareReadsNoModelListWithoutALocalRole(t *testing.T) {
+	l := newLocalSetup(t, "alpha")
+	cfg := l.config(t, scriptedRole(t), scriptedRole(t), "")
+	if err := os.Remove(l.list); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Start(ctx, Options{Project: l.project, Config: cfg, Graph: toySandbox(t), Hooks: l.hooks})
+	if err != nil {
+		t.Fatalf("Start() = %v; no role is local, so the list is not read", err)
+	}
+	r.Close()
 }

@@ -248,12 +248,20 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   a killed `ygg` left (label `ygg.grader`) and removes the ones no live run holds.
 - Serves the local models' list to the scripts (local-models spec §3.2 to §3.4): `ygg models preset FILE` prints
   llama-server's preset INI, `ygg models server FILE` prints NAME, NETWORK, PORT, HOST_PORT, WEIGHTS and STATE as
-  `KEY=value` lines (`schema.ParseModels` checked every value, so a shell reads them unquoted), `ygg models image`
+  `KEY=value` lines (`schema.ParseModels` checked every value, and the command refuses a WEIGHTS or STATE path
+  that is not plain, `^/[A-Za-z0-9._/@+-]*$`, so a shell reads the lines unquoted; a symlink serves a path with
+  spaces), `ygg models image`
   prints the tag of the model server's image without building it, and `ygg models build [--cuda-arch N]` builds the
   image (`Driver.BuildModels`) and prints the tag. `ygg doctor` checks each local role (`checkModels`): the list
   not holding the model is an error; a server that does not answer at the host URL (it names
   `scripts/ygg-models.sh start`), or a model network that `podman network inspect` does not call internal, is a
-  warning. A config with no local role adds no line.
+  warning, and so are roles that name more than one local model (a run may use only one). A config with no local role
+  adds no line.
+- Runs one local model per run (local-models spec §3.9). `Prepare` reads the model list only when a graph role is
+  local, and refuses a graph whose local roles name more than one model, or one the list lacks. `Start` and a resume
+  (`Open`, `OpenWith`: resume, approve, reject) call `Ready` on the model server before any sandbox starts, so no
+  session's time limit pays for the load; a done run and the bridge's export (`OpenForExport`) run no session and never
+  call it. The leaf and scratch sandboxes join the model network; the snapshot, grader and deps sandboxes never do.
 - Finds, in `ygg doctor`, the empty pods that compose leaves behind when a sandbox goes (named
   `pod_ygg<run id>...`, no label), reports their number and removes the ones no live run or bump holds. A
   pod is tied to its run by its name starting with the run's prefix, so a pod that matches no run of the

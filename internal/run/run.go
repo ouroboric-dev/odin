@@ -117,15 +117,6 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 		return nil, err
 	}
 	s.ConfigSHA256 = sum(cfgData)
-	if m := s.Config.Models; m != nil {
-		data, err := os.ReadFile(m.File)
-		if err != nil {
-			return nil, fmt.Errorf("the model list: %w", err)
-		}
-		if s.Models, err = schema.ParseModels(m.File, data); err != nil {
-			return nil, err
-		}
-	}
 	// ParseFactory checked the gate overrides against the file's own mode. A --mode switch needs no
 	// second check: design: auto, the one loosening, applies only in unattended mode (gate.Decide).
 	s.Mode = s.Config.Mode
@@ -1239,6 +1230,16 @@ func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, err
 
 // OpenWith is Open with parts replaced, for tests.
 func OpenWith(ctx context.Context, project, id string, mode gungnir.Mode, h Hooks) (*Run, error) {
+	return openRun(ctx, project, id, mode, h, true)
+}
+
+// OpenForExport is Open for a caller that runs no session, such as the bridge's export: it does not ready the
+// run's local model, so a model server that is down does not stop it. h replaces parts, for tests.
+func OpenForExport(ctx context.Context, project, id string, h Hooks) (*Run, error) {
+	return openRun(ctx, project, id, "", h, false)
+}
+
+func openRun(ctx context.Context, project, id string, mode gungnir.Mode, h Hooks, ready bool) (*Run, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("%q is not a run id", id)
 	}
@@ -1254,7 +1255,7 @@ func OpenWith(ctx context.Context, project, id string, mode gungnir.Mode, h Hook
 	if err != nil {
 		return nil, err
 	}
-	r, err := open(ctx, project, dir, mode, h)
+	r, err := open(ctx, project, dir, mode, h, ready)
 	if err != nil {
 		unlock()
 		return nil, err
@@ -1263,7 +1264,7 @@ func OpenWith(ctx context.Context, project, id string, mode gungnir.Mode, h Hook
 	return r, nil
 }
 
-func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) (*Run, error) {
+func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks, ready bool) (*Run, error) {
 	s, err := LoadState(dir)
 	if err != nil {
 		return nil, err
@@ -1307,8 +1308,8 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 		return nil, fmt.Errorf("%s/run.json: %w", dir, err)
 	}
 	// The model again, as a start readies it, before the resume changes anything: a server that is down leaves
-	// the run as it was. A done run starts no session, so it needs no model.
-	if s.Status != StatusDone {
+	// the run as it was. A done run starts no session, so it needs no model, and nor does an export (ready false).
+	if ready && s.Status != StatusDone {
 		if err := setup.readyModel(ctx); err != nil {
 			return nil, err
 		}

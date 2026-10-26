@@ -62,3 +62,36 @@ func TestModelsBuildPrintsTheTag(t *testing.T) {
 		t.Errorf("a bad architecture: exit %d", code)
 	}
 }
+
+// A shell reads the lines unquoted, so a value that is not a plain path is refused with nothing on stdout.
+func TestModelsServerRefusesAPathAShellCouldMisread(t *testing.T) {
+	list, err := os.ReadFile("testdata/models/models.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"weights", "state"} {
+		for name, bad := range map[string]string{
+			"newline":  `/abs/x\nNAME=evil`,
+			"space":    `/abs/my weights`,
+			"subshell": `/abs/$(id)`,
+			"backtick": "/abs/`id`",
+		} {
+			body := strings.Replace(string(list), key+": /abs/"+map[string]string{"weights": "weights", "state": "state"}[key], key+": \""+bad+"\"", 1)
+			if body == string(list) {
+				t.Fatal("the fixture changed")
+			}
+			f := t.TempDir() + "/models.yaml"
+			os.WriteFile(f, []byte(body), 0o644)
+			code, out, errOut := ygg(t, "models", "server", f)
+			if code != ExitRefused || out != "" || !strings.Contains(errOut, key) {
+				t.Errorf("%s with a %s: exit %d, stdout %q, stderr %q; want a refusal naming the key", key, name, code, out, errOut)
+			}
+		}
+	}
+	good := strings.Replace(string(list), "weights: /abs/weights", "weights: /srv/ygg_models/w-1.0@x+y", 1)
+	f := t.TempDir() + "/models.yaml"
+	os.WriteFile(f, []byte(good), 0o644)
+	if code, out, _ := ygg(t, "models", "server", f); code != ExitDone || !strings.Contains(out, "WEIGHTS=/srv/ygg_models/w-1.0@x+y\n") {
+		t.Errorf("a plain path: exit %d, stdout %q", code, out)
+	}
+}

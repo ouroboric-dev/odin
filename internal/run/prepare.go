@@ -83,8 +83,18 @@ func (s *Setup) prepareLocal() error {
 			if !ok || slices.Contains(byModel[name], role) {
 				continue
 			}
-			if s.Models == nil {
+			if s.Config.Models == nil {
 				return fmt.Errorf("role %s names local/%s, and %s names no model list (models: file:)", role, name, s.ConfigPath)
+			}
+			if s.Models == nil { // read for the first local role only: a config with no local role needs no list
+				m := s.Config.Models
+				data, err := os.ReadFile(m.File)
+				if err != nil {
+					return fmt.Errorf("the model list: %w", err)
+				}
+				if s.Models, err = schema.ParseModels(m.File, data); err != nil {
+					return err
+				}
 			}
 			if _, ok := s.Models.Models[name]; !ok {
 				return fmt.Errorf("role %s names local/%s, which the model list %s does not hold", role, name, s.Config.Models.File)

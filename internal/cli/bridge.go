@@ -217,7 +217,7 @@ func (c *command) exportProduct(project, dst string) error {
 	if s == nil {
 		return errors.New("the run left no record to export a product from")
 	}
-	r, err := run.Open(c.ctx, project, s.ID, "")
+	r, err := run.OpenForExport(c.ctx, project, s.ID, run.Hooks{})
 	if err != nil {
 		return err
 	}
