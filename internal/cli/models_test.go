@@ -95,3 +95,39 @@ func TestModelsServerRefusesAPathAShellCouldMisread(t *testing.T) {
 		t.Errorf("a plain path: exit %d, stdout %q", code, out)
 	}
 }
+
+const modelsList = "testdata/models/models.yaml" // weights /abs/weights, state /abs/state
+
+func TestModelsServerWithConfigPrintsEnginePaths(t *testing.T) {
+	_, config := project(t, "script.yaml", sandboxExtra+"  mounts:\n    - { host: /abs, engine: /mnt/wsl/ygg-bind }\n")
+	code, out, errOut := ygg(t, "models", "server", "--config", config, modelsList)
+	want := "NAME=ygg-models\nNETWORK=ygg-models\nPORT=8089\nHOST_PORT=8088\nWEIGHTS=/abs/weights\nSTATE=/abs/state\n" +
+		"ENGINE_WEIGHTS=/mnt/wsl/ygg-bind/weights\nENGINE_STATE=/mnt/wsl/ygg-bind/state\n"
+	if code != ExitDone || out != want {
+		t.Errorf("exit %d, stderr %q, stdout:\n%s\nwant:\n%s", code, errOut, out, want)
+	}
+}
+
+func TestModelsServerWithConfigRefusesAPathNoMountCovers(t *testing.T) {
+	_, config := project(t, "script.yaml", sandboxExtra+"  mounts:\n    - { host: /elsewhere, engine: /mnt/e }\n")
+	code, out, errOut := ygg(t, "models", "server", "--config", config, modelsList)
+	if code != ExitRefused || out != "" || !strings.Contains(errOut, "weights") || !strings.Contains(errOut, "sandbox.mounts") || !strings.Contains(errOut, "/elsewhere") {
+		t.Errorf("exit %d, stdout %q, stderr %q; want a refusal naming the key, sandbox.mounts and the host sides", code, out, errOut)
+	}
+}
+
+func TestModelsServerWithConfigRefusesNoSandboxSection(t *testing.T) {
+	_, config := project(t, "script.yaml", "")
+	code, out, errOut := ygg(t, "models", "server", "--config", config, modelsList)
+	if code != ExitRefused || out != "" || !strings.Contains(errOut, "sandbox") {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+func TestModelsServerWithConfigRefusesAnEnginePathAShellCouldMisread(t *testing.T) {
+	_, config := project(t, "script.yaml", sandboxExtra+"  mounts:\n    - { host: /abs, engine: '/mnt/my bind' }\n")
+	code, out, errOut := ygg(t, "models", "server", "--config", config, modelsList)
+	if code != ExitRefused || out != "" || !strings.Contains(errOut, "weights") {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}

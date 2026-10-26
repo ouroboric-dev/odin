@@ -23,7 +23,8 @@ var shellSafePath = regexp.MustCompile(`^/[A-Za-z0-9._/@+-]*$`)
 // so a shell never parses YAML (local-models spec §3.2, §3.3, §3.4).
 //
 //	ygg models preset FILE   llama-server's preset INI, on stdout
-//	ygg models server FILE   the server's six settings as KEY=value lines
+//	ygg models server FILE [--config FACTORY]   the server's six settings as KEY=value lines; with a config,
+//	                         also ENGINE_WEIGHTS and ENGINE_STATE, mapped through its sandbox.mounts
 //	ygg models image         the tag of the model server's image, without building it
 //	ygg models build         builds the image; the one command of a model that pulls and builds
 func (c *command) models(args []string) int {
@@ -33,7 +34,11 @@ func (c *command) models(args []string) int {
 	}
 	switch args[0] {
 	case "preset", "server":
-		_, pos, ok := c.parse("models "+args[0], args[1:], 1, nil)
+		f, pos, ok := c.parse("models "+args[0], args[1:], 1, func(fs *flag.FlagSet, f *flags) {
+			if args[0] == "server" {
+				fs.StringVar(&f.config, "config", "", "the factory config: also print the paths as the engine sees them")
+			}
+		})
 		if !ok {
 			return ExitRefused
 		}
@@ -58,7 +63,14 @@ func (c *command) models(args []string) int {
 				return c.refuse(fmt.Errorf("%s: server %s %q has characters a shell could misread; use a path of letters, digits and . _ / @ + - only, without spaces or special characters (a symlink works)", pos[0], kv[0], kv[1]))
 			}
 		}
+		engine, err := c.enginePaths(f.config, [][2]string{{"weights", s.Weights}, {"state", s.State}})
+		if err != nil {
+			return c.refuse(err)
+		}
 		fmt.Fprintf(c.out, "NAME=%s\nNETWORK=%s\nPORT=%d\nHOST_PORT=%d\nWEIGHTS=%s\nSTATE=%s\n", s.Name, s.Network, s.Port, s.HostPort, s.Weights, s.State)
+		if f.config != "" {
+			fmt.Fprintf(c.out, "ENGINE_WEIGHTS=%s\nENGINE_STATE=%s\n", engine[0], engine[1])
+		}
 		return ExitDone
 	case "image":
 		if _, _, ok := c.parse("models image", args[1:], 0, nil); !ok {
@@ -71,6 +83,41 @@ func (c *command) models(args []string) int {
 	}
 	fmt.Fprint(c.err, usage)
 	return ExitRefused
+}
+
+// enginePaths maps the model server's host paths through the factory's sandbox.mounts, as the sandbox driver maps
+// the paths it mounts (sandbox.Config.MapPath): the engine, a Podman machine, mounts only what it sees. With no
+// config it maps nothing. A factory with no sandbox section, a path no mount covers, or a mapped path a shell could
+// misread is an error.
+func (c *command) enginePaths(config string, paths [][2]string) ([]string, error) {
+	if config == "" {
+		return nil, nil
+	}
+	cfg, err := schema.LoadFactory(config)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Sandbox == nil {
+		return nil, fmt.Errorf("%s has no sandbox section: the server's folders are mounted through sandbox.mounts", config)
+	}
+	var sc sandbox.Config
+	var hosts []string
+	for _, m := range cfg.Sandbox.Mounts {
+		sc.Mounts = append(sc.Mounts, sandbox.PathMap{Host: m.Host, Engine: m.Engine})
+		hosts = append(hosts, m.Host)
+	}
+	var out []string
+	for _, kv := range paths {
+		p, err := sc.MapPath(kv[1])
+		if err != nil {
+			return nil, fmt.Errorf("%s: server %s %q is under none of %s's sandbox.mounts (host sides: %s); the folder must be under one of them: %v", config, kv[0], kv[1], config, strings.Join(hosts, ", "), err)
+		}
+		if !shellSafePath.MatchString(p) {
+			return nil, fmt.Errorf("%s: server %s %q maps to %q, which has characters a shell could misread; use an engine path of letters, digits and . _ / @ + - only", config, kv[0], kv[1], p)
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 func (c *command) modelsBuild(args []string) int {

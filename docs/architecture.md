@@ -250,7 +250,10 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   llama-server's preset INI, `ygg models server FILE` prints NAME, NETWORK, PORT, HOST_PORT, WEIGHTS and STATE as
   `KEY=value` lines (`schema.ParseModels` checked every value, and the command refuses a WEIGHTS or STATE path
   that is not plain, `^/[A-Za-z0-9._/@+-]*$`, so a shell reads the lines unquoted; a symlink serves a path with
-  spaces), `ygg models image`
+  spaces); with `--config FACTORY` it adds `ENGINE_WEIGHTS` and `ENGINE_STATE`, those two paths mapped through the
+  factory's `sandbox.mounts` with `sandbox.Config.MapPath` (the Podman machine sees host files only through them),
+  and refuses, with nothing on stdout, a factory with no sandbox section, a path no mount covers, or a mapped path
+  that is not plain; `models.Ready` still writes `<state>/allowed` on the host path), `ygg models image`
   prints the tag of the model server's image without building it, and `ygg models build [--cuda-arch N]` builds the
   image (`Driver.BuildModels`) and prints the tag. `ygg doctor` checks each local role (`checkModels`): the list
   not holding the model is an error; a server that does not answer at the host URL (it names
