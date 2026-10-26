@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/ouroboric-dev/gleipnir v0.0.0-20261026000617-d1a5eb7d1297
-	github.com/ouroboric-dev/gungnir v0.0.0-20261026000349-8ff73cdf4630
+	github.com/ouroboric-dev/gungnir v0.0.0-20261026021159-5935d579d134
 	github.com/ouroboric-dev/havamal v0.0.0-20261024200105-144be35b94e2
 	github.com/ouroboric-dev/jormungandr v0.0.0-20261024230244-43894bd371c4
 	github.com/yuin/goldmark v1.7.4

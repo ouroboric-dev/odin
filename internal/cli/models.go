@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ var shellSafePath = regexp.MustCompile(`^/[A-Za-z0-9._/@+-]*$`)
 //	ygg models preset FILE   llama-server's preset INI, on stdout
 //	ygg models server FILE [--config FACTORY]   the server's six settings as KEY=value lines; with a config,
 //	                         also ENGINE_WEIGHTS and ENGINE_STATE, mapped through its sandbox.mounts
+//	ygg models sources FILE   one line per file to download: <model> <repo> <revision or main> <path>, by model name
 //	ygg models image         the tag of the model server's image, without building it
 //	ygg models build         builds the image; the one command of a model that pulls and builds
 func (c *command) models(args []string) int {
@@ -33,7 +35,7 @@ func (c *command) models(args []string) int {
 		return ExitRefused
 	}
 	switch args[0] {
-	case "preset", "server":
+	case "preset", "server", "sources":
 		f, pos, ok := c.parse("models "+args[0], args[1:], 1, func(fs *flag.FlagSet, f *flags) {
 			if args[0] == "server" {
 				fs.StringVar(&f.config, "config", "", "the factory config: also print the paths as the engine sees them")
@@ -52,6 +54,27 @@ func (c *command) models(args []string) int {
 		}
 		if args[0] == "preset" {
 			c.out.Write(list.Preset())
+			return ExitDone
+		}
+		if args[0] == "sources" {
+			names := make([]string, 0, len(list.Models))
+			for name := range list.Models {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				d := list.Models[name].Download
+				if d == nil {
+					continue
+				}
+				rev := d.Revision
+				if rev == "" {
+					rev = "main"
+				}
+				for _, file := range d.Files {
+					fmt.Fprintf(c.out, "%s %s %s %s\n", name, d.Repo, rev, file)
+				}
+			}
 			return ExitDone
 		}
 		// ParseModels checked each value: a name of a DNS label, ports in range, clean absolute paths. A shell reads

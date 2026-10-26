@@ -131,3 +131,34 @@ func TestModelsServerWithConfigRefusesAnEnginePathAShellCouldMisread(t *testing.
 		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }
+
+func TestModelsSourcesPrintsOneLinePerFile(t *testing.T) {
+	list, err := os.ReadFile("testdata/models/models.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// qwen3.8-27b sorts after mtp-27b: the one with no download prints nothing, the other has no revision.
+	body := strings.Replace(string(list), "    file: model.gguf\n", "    file: model.gguf\n    download:\n      repo: acme/qwen-gguf\n      revision: abc123\n      files: [model.gguf, sub/extra.bin]\n", 1)
+	body = strings.Replace(body, "    file: mtp.gguf\n", "    file: mtp.gguf\n    download:\n      repo: acme/mtp\n      files: [mtp.gguf]\n", 1)
+	f := t.TempDir() + "/models.yaml"
+	os.WriteFile(f, []byte(body), 0o644)
+	code, out, errOut := ygg(t, "models", "sources", f)
+	want := "mtp-27b acme/mtp main mtp.gguf\nqwen3.8-27b acme/qwen-gguf abc123 model.gguf\nqwen3.8-27b acme/qwen-gguf abc123 sub/extra.bin\n"
+	if code != ExitDone || out != want {
+		t.Errorf("exit %d, stderr %q, stdout:\n%s\nwant:\n%s", code, errOut, out, want)
+	}
+	if code, out, _ := ygg(t, "models", "sources", "testdata/models/models.yaml"); code != ExitDone || out != "" {
+		t.Errorf("no download: exit %d, stdout %q", code, out)
+	}
+}
+
+func TestModelsSourcesRefusesABadList(t *testing.T) {
+	bad := t.TempDir() + "/models.yaml"
+	os.WriteFile(bad, []byte("server: {}\n"), 0o644)
+	if code, out, _ := ygg(t, "models", "sources", bad); code != ExitRefused || out != "" {
+		t.Errorf("bad list: exit %d, stdout %q", code, out)
+	}
+	if code, out, _ := ygg(t, "models", "sources"); code != ExitRefused || out != "" {
+		t.Errorf("no file: exit %d, stdout %q", code, out)
+	}
+}
