@@ -25,15 +25,16 @@ func (d Duration) Round() time.Duration { return time.Duration(d).Round(time.Sec
 
 // Usage is what sessions used. Cost is the sum of the sessions' own cost fields.
 type Usage struct {
-	InTok        int64   `json:"in_tokens"`
-	OutTok       int64   `json:"out_tokens"`
-	CacheTok     int64   `json:"cache_read_tokens"`
-	Turns        int64   `json:"turns"`
-	CostUSD      float64 `json:"cost_usd"`
-	EstimatedUSD float64 `json:"estimated_usd"` // of CostUSD: sessions whose adapter estimated the cost
-	BilledUSD    float64 `json:"billed_usd"`    // of CostUSD: what a paid API billed. The rest is what subscription sessions would cost on the API
-	Sessions     int     `json:"sessions"`
-	Unpriced     int     `json:"unpriced_sessions"` // sessions with tokens and no cost: their cost is unknown, not zero (B-107)
+	InTok         int64   `json:"in_tokens"`
+	OutTok        int64   `json:"out_tokens"`
+	CacheTok      int64   `json:"cache_read_tokens"`
+	Turns         int64   `json:"turns"`
+	CostUSD       float64 `json:"cost_usd"`
+	EstimatedUSD  float64 `json:"estimated_usd"` // of CostUSD: sessions whose adapter estimated the cost
+	BilledUSD     float64 `json:"billed_usd"`    // of CostUSD: what a paid API billed. The rest is what subscription sessions would cost on the API
+	Sessions      int     `json:"sessions"`
+	LocalSessions int     `json:"local_sessions,omitempty"` // of Sessions: those a local model ran, which bill nothing
+	Unpriced      int     `json:"unpriced_sessions"`        // sessions with tokens and no cost: their cost is unknown, not zero (B-107)
 }
 
 func (u *Usage) add(o Usage) {
@@ -45,6 +46,7 @@ func (u *Usage) add(o Usage) {
 	u.EstimatedUSD += o.EstimatedUSD
 	u.BilledUSD += o.BilledUSD
 	u.Sessions += o.Sessions
+	u.LocalSessions += o.LocalSessions
 	u.Unpriced += o.Unpriced
 }
 

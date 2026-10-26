@@ -62,6 +62,7 @@ func (c *command) doctor(args []string) int {
 		checkBudget(factory, report)
 		checkPrices(factory, report)
 		checkGrader(factory, report)
+		c.checkModels(factory, report)
 		settled = c.checkSandbox(f.project, factory, report)
 	}
 	runs := filepath.Join(f.project, ".factory", "runs")

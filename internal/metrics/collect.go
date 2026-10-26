@@ -163,8 +163,11 @@ func sessionUsage(e gungnir.Event) (Usage, bool) {
 	if e.CostEstimated {
 		u.EstimatedUSD = e.CostUSD
 	}
-	if schema.PaidAPI(e.Adapter) {
+	if schema.PaidModel(e.Adapter, e.Model) {
 		u.BilledUSD = e.CostUSD
+	}
+	if _, local := schema.LocalModel(e.Model); local || e.Provider == "local" {
+		u.LocalSessions = 1
 	}
 	if e.CostUSD == 0 && (e.InputTokens > 0 || e.OutputTokens > 0) && e.Adapter != "scripted" {
 		u.Unpriced = 1

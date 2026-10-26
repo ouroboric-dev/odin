@@ -133,7 +133,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 		case errors.As(runErr, &se):
 			spent = se.Usage
 		}
-		if err := r.Spend(sp.key, billed(role.Agent, spent)); err != nil {
+		if err := r.Spend(sp.key, billed(role.Agent, role.Model, spent)); err != nil {
 			// The journal can't record the spend, so the run stops at budget-cap (review I4). The leaf goes
 			// back to its checkpoint first, as for a retry, so a resume or an approval doesn't refuse it as
 			// changed while the run waited.
@@ -270,10 +270,11 @@ func warnBudget(r *run.Run, node string) error {
 	return nil
 }
 
-// billed marks the part of a session's cost that its adapter bills to a paid API, which is what the dollar caps
-// count (spec §7.4). A subscription's session has a cost figure, what it would cost on the API, and bills nothing.
-func billed(adapter string, u gungnir.Usage) gungnir.Usage {
-	if schema.PaidAPI(adapter) {
+// billed sets the part of a session's cost that a paid API billed: the dollar caps count that part (spec §7.4).
+// A local model bills nothing. A subscription's session has a cost figure, what it would cost on the API, and bills
+// nothing either.
+func billed(adapter, model string, u gungnir.Usage) gungnir.Usage {
+	if schema.PaidModel(adapter, model) {
 		u.BilledUSD = u.CostUSD
 	}
 	return u

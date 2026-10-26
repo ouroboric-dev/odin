@@ -3,6 +3,7 @@ package run
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -27,6 +28,9 @@ type SandboxSetup struct {
 	Engine string
 	Config sandbox.Config
 	Hosts  []string // the model APIs of the roles the graph uses: every sandbox of the run opens them, and a scratch session opens nothing else
+	// Models is the shared model server, when a role the graph uses runs a local model: a leaf's and a scratch
+	// session's sandbox join its network. A snapshot's, the grader's and ygg deps' never do (local-models spec §3.9).
+	Models *gungnir.ModelServer
 }
 
 // prepareSandbox sets up the sandbox of a run, and refuses a graph that would run outside it. With initAhead, a
@@ -47,11 +51,15 @@ func (s *Setup) prepareSandbox(initAhead bool) error {
 	var hosts []string
 	for _, n := range s.Graph.All() {
 		for _, role := range nodeRoles(n) {
-			hosts = append(hosts, agents.Hosts(s.Config.Roles[role].Agent)...)
+			hosts = append(hosts, agents.Hosts(s.Config.Roles[role].Agent, s.Config.Roles[role].Model)...)
 		}
 	}
 	hosts = sortedUnique(hosts)
 	s.Sandbox = &SandboxSetup{Engine: s.Config.Sandbox.Engine, Config: cfg, Hosts: hosts}
+	if s.LocalModel != "" {
+		srv := s.Models.Server
+		s.Sandbox.Models = &gungnir.ModelServer{Network: srv.Network, Name: srv.Name, Port: srv.Port}
+	}
 	// A leaf of another realm starts on that realm's stack, so every leaf of the run must have one
 	// before anything starts, not when its sandbox comes up.
 	for _, p := range s.Leaves() {
@@ -59,6 +67,51 @@ func (s *Setup) prepareSandbox(initAhead bool) error {
 		if _, _, _, err := s.SandboxFor(p); err != nil && !(initAhead && errors.As(err, &unmet)) {
 			return err
 		}
+	}
+	return nil
+}
+
+// prepareLocal finds the one local model the roles the graph uses name, and refuses two, or one the model list
+// lacks (local-models spec §3.9, §5.2): the allow file names one model, and the server holds one loaded for the
+// run (design §5.5). A role the graph does not use counts for nothing. A resume runs it again, so a model gone
+// from the list since the run started refuses the resume.
+func (s *Setup) prepareLocal() error {
+	byModel := map[string][]string{} // a model: the roles that name it, in the graph's order
+	for _, n := range s.Graph.All() {
+		for _, role := range nodeRoles(n) {
+			name, ok := schema.LocalModel(s.Config.Roles[role].Model)
+			if !ok || slices.Contains(byModel[name], role) {
+				continue
+			}
+			if s.Config.Models == nil {
+				return fmt.Errorf("role %s names local/%s, and %s names no model list (models: file:)", role, name, s.ConfigPath)
+			}
+			if s.Models == nil { // read for the first local role only: a config with no local role needs no list
+				m := s.Config.Models
+				data, err := os.ReadFile(m.File)
+				if err != nil {
+					return fmt.Errorf("the model list: %w", err)
+				}
+				if s.Models, err = schema.ParseModels(m.File, data); err != nil {
+					return err
+				}
+			}
+			if _, ok := s.Models.Models[name]; !ok {
+				return fmt.Errorf("role %s names local/%s, which the model list %s does not hold", role, name, s.Config.Models.File)
+			}
+			byModel[name] = append(byModel[name], role)
+		}
+	}
+	names := slices.Sorted(maps.Keys(byModel))
+	if len(names) > 1 {
+		parts := make([]string, len(names))
+		for i, name := range names {
+			parts[i] = fmt.Sprintf("local/%s (%s)", name, strings.Join(byModel[name], ", "))
+		}
+		return fmt.Errorf("the graph's local roles name %d models, %s; a run uses one local model, so give those roles the same one", len(names), strings.Join(parts, " and "))
+	}
+	if len(names) == 1 {
+		s.LocalModel = names[0]
 	}
 	return nil
 }

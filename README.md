@@ -32,6 +32,7 @@ ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <m
 ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
+ygg models  preset <models.yaml> | server <models.yaml> | image | build [--cuda-arch <list>] [--config <factory.yaml>]
 ```
 
 Exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused (the provider's quota is
@@ -39,7 +40,7 @@ used up), 5 done with tasks given up (unattended).
 
 `factory.yaml` must set both budget caps, `per_run` and `per_day`, each with `tokens` and `turns`.
 The factory ships no defaults, so a config without them runs nothing.
-When any role bills a paid API (an OpenCode role), the caps also count dollars, and they count what the API billed. The
+When any role bills a paid API (an OpenCode role on OpenRouter; a local one bills nothing), the caps also count dollars, and they count what the API billed. The
 cost figure of a Claude Code session is what it would cost on the API; the subscription charges nothing for it, so it does
 not count against `usd`. `ygg status` and `ygg metrics` show both.
 

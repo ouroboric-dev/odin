@@ -44,6 +44,9 @@ func (r *Run) WriteText(w io.Writer) {
 		cost += fmt.Sprintf("; %d sessions had tokens and no cost, so this is a floor", u.Unpriced)
 	}
 	line(w, "cost:", "%s", cost)
+	if u.LocalSessions > 0 {
+		line(w, "local:", "%d sessions on local models", u.LocalSessions)
+	}
 	l := r.Loops
 	line(w, "loops:", "%d ended: first pass %s, %.2f attempts on average, %d gave up", l.Finished, ratio(l.FirstPass, "", "no loop has ended"), l.AvgAttempts, l.GaveUp)
 	empty := "no reviewer has run"

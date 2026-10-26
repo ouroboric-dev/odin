@@ -1,0 +1,24 @@
+server:
+  name: ygg-models
+  network: ygg-models
+  port: 8089
+  host_port: 8088
+  weights: /abs/weights
+  state: /abs/state
+models:
+  qwen3.8-27b:
+    file: model.gguf
+    context: 102400
+    output: 32768
+    args:
+      reasoning-effort: low
+      n-gpu-layers: "999"
+    price: { input: 0.10, output: 0.40 }
+  mtp-27b:
+    file: mtp.gguf
+    context: 65536
+    output: 8192
+    args:
+      n-gpu-layers: "99"
+      flash-attn: "true"
+    price: { input: 0.2, output: 0.8, cache_read: 0.05 }

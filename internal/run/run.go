@@ -24,6 +24,7 @@ import (
 	"github.com/ouroboric-dev/odin/internal/leaf"
 	"github.com/ouroboric-dev/odin/internal/ledger"
 	"github.com/ouroboric-dev/odin/internal/lock"
+	"github.com/ouroboric-dev/odin/internal/models"
 	"github.com/ouroboric-dev/odin/internal/plan"
 	"github.com/ouroboric-dev/odin/internal/realm"
 	"github.com/ouroboric-dev/odin/internal/remote"
@@ -46,7 +47,7 @@ type Options struct {
 }
 
 // Hooks replace parts of a run in tests: the skill libraries, the sandbox driver, the clock that
-// decides which day a session's spend belongs to, and the retry policy with its wait.
+// decides which day a session's spend belongs to, the retry policy with its wait, and the model server.
 type Hooks struct {
 	Libs       *skills.Libraries
 	NewSandbox NewSandbox
@@ -55,12 +56,15 @@ type Hooks struct {
 	Now        func() time.Time
 	Backoff    *jormungandr.Backoff
 	Sleep      func(ctx context.Context, d time.Duration) error
+	NewModels  NewModels
 }
 
 // Setup is everything a run needs, loaded and checked.
 type Setup struct {
 	Config       *schema.Factory
-	ConfigPath   string // absolute
+	Models       *schema.ModelList // factory.yaml's model list, or nil without a models section
+	LocalModel   string            // the one local model the graph's roles name, without local/; "" for none
+	ConfigPath   string            // absolute
 	ConfigSHA256 string
 	GraphPack    *realm.Realm // the graph pack: --graph, loaded. It is also the realm of the leaves that pin none, when it holds a recipe
 	Realms       *realm.Set   // the realms of the run: one for each realm a leaf of the project pins, each loaded once, and the graph pack when it holds a recipe
@@ -78,6 +82,7 @@ type Setup struct {
 	Sandbox      *SandboxSetup            // nil: no sandbox section, so leaf commands run on the host
 	newSandbox   NewSandbox
 	newGrader    NewGrader
+	newModels    NewModels
 	releaser     Releaser
 	Journal      *budget.Journal // where every session's usage is recorded, and the per-day cap is summed
 	Backoff      jormungandr.Backoff
@@ -159,6 +164,10 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 			return nil, err
 		}
 	}
+	// The local model before the nodes: the graph's local roles name one, and the list holds it.
+	if err := s.prepareLocal(); err != nil {
+		return nil, err
+	}
 	for _, n := range s.Graph.Nodes {
 		if err := s.checkNode(ctx, graphPath, n); err != nil {
 			return nil, err
@@ -198,7 +207,7 @@ func Prepare(ctx context.Context, o Options) (*Setup, error) {
 	if err := s.prepareBudget(o.Hooks); err != nil {
 		return nil, err
 	}
-	s.newSandbox, s.newGrader, s.releaser = o.Hooks.NewSandbox, o.Hooks.NewGrader, o.Hooks.Releaser
+	s.newSandbox, s.newGrader, s.releaser, s.newModels = o.Hooks.NewSandbox, o.Hooks.NewGrader, o.Hooks.Releaser, o.Hooks.NewModels
 	if err := s.prepareSandbox(s.initAhead(o.Resume)); err != nil {
 		return nil, err
 	}
@@ -391,7 +400,7 @@ func (s *Setup) checkBody(graphPath string, fe schema.Node) error {
 				return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, n.ID, n.Role, s.ConfigPath)
 			}
 			if s.Agents[n.Role] == nil {
-				a, err := agents.New(s.Config.Roles[n.Role], filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy})
+				a, err := agents.New(s.Config.Roles[n.Role], filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy, Models: s.Models})
 				if err != nil {
 					return fmt.Errorf("role %s: %w", n.Role, err)
 				}
@@ -424,7 +433,7 @@ func (s *Setup) checkSession(graphPath, node, role, prompt string) error {
 	if !ok {
 		return fmt.Errorf("%s: node %s uses role %s, which %s doesn't define", graphPath, node, role, s.ConfigPath)
 	}
-	if s.Agents[role], err = agents.New(r, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy}); err != nil {
+	if s.Agents[role], err = agents.New(r, filepath.Dir(s.ConfigPath), agents.Options{Privacy: s.Config.Privacy, Models: s.Models}); err != nil {
 		return fmt.Errorf("role %s: %w", role, err)
 	}
 	return nil
@@ -980,12 +989,33 @@ type Failed struct {
 func (f *Failed) Error() string { return fmt.Sprintf("run %s failed: %v", f.ID, f.Err) }
 func (f *Failed) Unwrap() error { return f.Err }
 
+// NewModels builds the client of the model server the list names. Tests replace it with a fake.
+type NewModels func(list *schema.ModelList) models.Server
+
+// readyModel allows the run's local model on the model server and has it loaded, before any sandbox of the run
+// starts (local-models spec §3.9): no session's time limit pays for the load. A run with no local role asks
+// the server nothing.
+func (s *Setup) readyModel(ctx context.Context) error {
+	if s.LocalModel == "" {
+		return nil
+	}
+	open := s.newModels
+	if open == nil {
+		open = func(list *schema.ModelList) models.Server { return models.New(list, nil) }
+	}
+	return open(s.Models).Ready(ctx, s.LocalModel)
+}
+
 // Start prepares a new run, then creates its directory, run.json and first ledger line, creates
-// the leaves the project lacks, and starts the run's branch in every leaf. If Prepare refuses, or
-// the run can't be recorded, nothing is left behind. A failure after that is a *Failed.
+// the leaves the project lacks, and starts the run's branch in every leaf. If Prepare refuses, the
+// model server can't ready the run's local model, or the run can't be recorded, nothing is left behind.
+// A failure after that is a *Failed.
 func Start(ctx context.Context, o Options) (*Run, error) {
 	setup, err := Prepare(ctx, o)
 	if err != nil {
+		return nil, err
+	}
+	if err := setup.readyModel(ctx); err != nil {
 		return nil, err
 	}
 	project := setup.Project.Dir
@@ -1200,6 +1230,16 @@ func Open(ctx context.Context, project, id string, mode gungnir.Mode) (*Run, err
 
 // OpenWith is Open with parts replaced, for tests.
 func OpenWith(ctx context.Context, project, id string, mode gungnir.Mode, h Hooks) (*Run, error) {
+	return openRun(ctx, project, id, mode, h, true)
+}
+
+// OpenForExport is Open for a caller that runs no session, such as the bridge's export: it does not ready the
+// run's local model, so a model server that is down does not stop it. h replaces parts, for tests.
+func OpenForExport(ctx context.Context, project, id string, h Hooks) (*Run, error) {
+	return openRun(ctx, project, id, "", h, false)
+}
+
+func openRun(ctx context.Context, project, id string, mode gungnir.Mode, h Hooks, ready bool) (*Run, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("%q is not a run id", id)
 	}
@@ -1215,7 +1255,7 @@ func OpenWith(ctx context.Context, project, id string, mode gungnir.Mode, h Hook
 	if err != nil {
 		return nil, err
 	}
-	r, err := open(ctx, project, dir, mode, h)
+	r, err := open(ctx, project, dir, mode, h, ready)
 	if err != nil {
 		unlock()
 		return nil, err
@@ -1224,7 +1264,7 @@ func OpenWith(ctx context.Context, project, id string, mode gungnir.Mode, h Hook
 	return r, nil
 }
 
-func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) (*Run, error) {
+func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks, ready bool) (*Run, error) {
 	s, err := LoadState(dir)
 	if err != nil {
 		return nil, err
@@ -1266,6 +1306,13 @@ func open(ctx context.Context, project, dir string, mode gungnir.Mode, h Hooks) 
 	}
 	if err := s.check(setup); err != nil {
 		return nil, fmt.Errorf("%s/run.json: %w", dir, err)
+	}
+	// The model again, as a start readies it, before the resume changes anything: a server that is down leaves
+	// the run as it was. A done run starts no session, so it needs no model, and nor does an export (ready false).
+	if ready && s.Status != StatusDone {
+		if err := setup.readyModel(ctx); err != nil {
+			return nil, err
+		}
 	}
 	l, err := ledger.Open(filepath.Join(dir, "ledger.jsonl"), s.Ledger)
 	if err != nil {
