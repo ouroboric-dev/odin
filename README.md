@@ -32,7 +32,7 @@ ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <m
 ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
 ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
 ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
-ygg models  preset <models.yaml> | server <models.yaml> | image | build [--cuda-arch <list>] [--config <factory.yaml>]
+ygg models  preset <models.yaml> | server <models.yaml> | sources <models.yaml> | image | build [--cuda-arch <list>] [--config <factory.yaml>]
 ```
 
 Exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused (the provider's quota is
