@@ -167,11 +167,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 			return res, runErr
 		}
 		if kind != "" {
-			ev.Name, ev.Result = gungnir.EventNodeFailed, fmt.Sprintf("the agent reported %s: %s", res.Status, res.Summary)
-			if runErr != nil {
-				ev.Result = runErr.Error()
-			}
-			if err := r.Log(ev); err != nil {
+			if err := r.Log(failedEvent(ev, res, runErr)); err != nil {
 				return stop(err)
 			}
 			return res, runErr
@@ -182,11 +178,29 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 	if fatal != nil {
 		return gungnir.Result{}, gungnir.Event{}, fatal
 	}
-	var af *jormungandr.AgentFailure
-	if capped > 0 && errors.As(err, &af) {
-		return res, done, &turnLimit{AgentFailure: af, turns: capped}
+	if capped > 0 {
+		var af *jormungandr.AgentFailure
+		if errors.As(err, &af) {
+			return res, done, &turnLimit{AgentFailure: af, turns: capped}
+		}
+		// The run was interrupted as the session came back capped: no repair follows, so the session is logged here,
+		// as any failed one is, and its usage stays in the ledger as in run.json.
+		if lerr := r.Log(failedEvent(done, res, nil)); lerr != nil {
+			return gungnir.Result{}, gungnir.Event{}, errors.Join(err, lerr)
+		}
+		return res, gungnir.Event{}, err
 	}
 	return res, done, err
+}
+
+// failedEvent is ev, the event of a session that failed, as its node_failed line: what the agent reported, or the
+// error the session ended with.
+func failedEvent(ev gungnir.Event, res gungnir.Result, runErr error) gungnir.Event {
+	ev.Name, ev.Result = gungnir.EventNodeFailed, fmt.Sprintf("the agent reported %s: %s", res.Status, res.Summary)
+	if runErr != nil {
+		ev.Result = runErr.Error()
+	}
+	return ev
 }
 
 // turnLimit is a session with a contract that reached its turn cap, turns, without handing back its output: an
