@@ -407,3 +407,37 @@ func TestALoopReviewerIsToldItsTurnBudgetAfterItsReviewRequest(t *testing.T) {
 		t.Errorf("the implementer, with no max_turns, was told a turn budget:\n%s", got)
 	}
 }
+
+// errCapper reports a turn limit as an error, as gungnir allows (a *gungnir.SessionError of kind turn-limit), and then
+// cancels the run, as an operator's interrupt that lands as the session ends.
+type errCapper struct {
+	gungnir.Agent
+	cancel context.CancelFunc
+}
+
+func (c errCapper) Run(context.Context, gungnir.Task) (gungnir.Result, error) {
+	c.cancel()
+	return gungnir.Result{}, &gungnir.SessionError{Kind: gungnir.FailureTurnLimit, Err: errors.New("the agent stopped at 20 turns"),
+		Usage: gungnir.Usage{InTok: 77, Turns: 20}}
+}
+
+// A capped session reported as an error and interrupted as it ends is logged with that error, not an empty report.
+func TestACappedSessionErrorInterruptedAsItEndsIsLoggedWithItsError(t *testing.T) {
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 20, input: [rejection], output: ygg.implement/v1 }\n"
+	r := startWith(t, setup{nodes: nodes, script: "steps:\n  a:\n    - result: { status: ok, output: '{\"summary\": \"unused\"}' }\n"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.Setup.Agents["planner"] = errCapper{Agent: r.Setup.Agents["planner"], cancel: cancel}
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusFailed {
+		t.Fatalf("Advance() = %+v, %v; want a run failed by the interrupt", out, err)
+	}
+	text := ledgerText(t, r)
+	if n := strings.Count(text, `"event":"node_failed"`); n != 1 {
+		t.Fatalf("want one node_failed line (%d found):\n%s", n, text)
+	}
+	failed := text[strings.Index(text, `"event":"node_failed"`):]
+	failed = failed[:strings.Index(failed, "\n")]
+	if !strings.Contains(failed, `"ygg.result":"the agent stopped at 20 turns"`) || !strings.Contains(failed, `"gen_ai.usage.input_tokens":77`) {
+		t.Errorf("the node_failed line lacks the session's error or its usage:\n%s", failed)
+	}
+}

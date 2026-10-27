@@ -59,7 +59,8 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 	role := r.Setup.Config.Roles[sp.role]
 	var fatal error // an error of Odin's own, or a cap found at the try, which must never read as a failure of the agent
 	var done gungnir.Event
-	capped := 0 // the turn cap of a try that reached it without handing back its output
+	capped := 0         // the turn cap of a try that reached it without handing back its output
+	var cappedErr error // and the error that try ended with, when it reported its turn limit as one
 	meter := r.Meter()
 	retrier := jormungandr.Retrier{Backoff: r.Setup.Backoff, Meter: meter, Sleep: r.Setup.Sleep,
 		OnRetry: func(try int, wait time.Duration, why string) error {
@@ -74,7 +75,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 				Note: fmt.Sprintf("try %d failed for a reason that is not the agent's; it runs again in %s: %s", try, wait, why)})
 		}}
 	res, err := retrier.Do(ctx, func(ctx context.Context, _ int) (gungnir.Result, error) {
-		capped = 0
+		capped, cappedErr = 0, nil
 		stop := func(err error) (gungnir.Result, error) {
 			fatal = err
 			return gungnir.Result{}, &gungnir.SessionError{Kind: gungnir.FailureInfra, Err: err}
@@ -163,7 +164,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 		kind, _ := jormungandr.Classify(res, runErr)
 		if kind == gungnir.FailureTurnLimit && sp.output != "" {
 			// An output not handed back: sessionWithOutput logs it, as output_refused or as the node failed.
-			done, capped = ev, turns
+			done, capped, cappedErr = ev, turns, runErr
 			return res, runErr
 		}
 		if kind != "" {
@@ -185,7 +186,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 		}
 		// The run was interrupted as the session came back capped: no repair follows, so the session is logged here,
 		// as any failed one is, and its usage stays in the ledger as in run.json.
-		if lerr := r.Log(failedEvent(done, res, nil)); lerr != nil {
+		if lerr := r.Log(failedEvent(done, res, cappedErr)); lerr != nil {
 			return gungnir.Result{}, gungnir.Event{}, errors.Join(err, lerr)
 		}
 		return res, gungnir.Event{}, err

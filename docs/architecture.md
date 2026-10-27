@@ -165,7 +165,9 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   (`turn-limit`, which the adapters report with its last text as its notes) is refused the same way: its
   `output_refused` line names the cap and has the note `turn-limit`, and the new session is told, under "Your
   earlier session ran out of turns", its notes (cut to 16K characters, in a code block they cannot close) in
-  place of errors it did not make; a repair that reaches its cap too fails the node. Nothing is read out of prose. The output that validated is kept in
+  place of errors it did not make, as a record of the work and not as instructions; a repair that reaches its cap
+  too fails the node. A node with no `max_turns` of its own is capped at the turns the run's caps still allow: it is
+  told no budget, and its `output_refused` line names that cap. Nothing is read out of prose. The output that validated is kept in
   `outputs/<node>.json` of the run folder, with its hash in `run.json`, and a later stage reads it from there.
   A run started before this change keeps no outputs, and a resume refuses it.
 - Reads the design-conformance verdict (the `ygg.conformance/v1` output of a scratch reviewer that reviews
