@@ -96,10 +96,17 @@ func (c *command) models(args []string) int {
 		}
 		return ExitDone
 	case "image":
-		if _, _, ok := c.parse("models image", args[1:], 0, nil); !ok {
+		arch := ""
+		if _, _, ok := c.parse("models image", args[1:], 0, func(fs *flag.FlagSet, f *flags) {
+			fs.StringVar(&arch, "cuda-arch", "", "the CUDA architectures the image is built for, as in models build (default 89)")
+		}); !ok {
 			return ExitRefused
 		}
-		fmt.Fprintln(c.out, sandbox.ModelsImage())
+		tag, err := sandbox.ModelsImageFor(arch)
+		if err != nil {
+			return c.refuse(err)
+		}
+		fmt.Fprintln(c.out, tag)
 		return ExitDone
 	case "build":
 		return c.modelsBuild(args[1:])
