@@ -53,7 +53,9 @@ func TestTheRecordCountsRefusalsByRoleAndModel(t *testing.T) {
 	f.log(3, refused("gallery-t1-implement-quality", "reviewer", "opencode", "qwen", 1))
 	f.log(3, session("gallery-t1-implement-quality", "reviewer", "opencode", "qwen", 10, 1, 1, 0.01, false))
 	f.log(3, repaired("gallery-t1-implement-quality", "reviewer", "opencode", "qwen", schema.ContractReview))
-	f.log(4, refused("gallery-t1-implement-quality", "reviewer", "opencode", "qwen", 2))
+	capped := refused("gallery-t1-implement-quality", "reviewer", "opencode", "qwen", 2)
+	capped.Result, capped.Note = "the session reached its turn cap (20 turns) before handing back its output", NoteTurnLimit
+	f.log(4, capped) // a session at its turn cap: a refusal, and a turn limit too
 	f.log(5, session("gallery-t1-implement", "implementer", "claude-code", "sonnet", 10, 1, 1, 0.01, false))
 	// A later line of the same key that names another role does not take the blocked answer from the session that wrote it.
 	f.log(6, gungnir.Event{Name: gungnir.EventRetry, Node: "gallery-t1-implement", Role: "reviewer", Adapter: "opencode", Model: "qwen"})
@@ -66,6 +68,14 @@ func TestTheRecordCountsRefusalsByRoleAndModel(t *testing.T) {
 	h := r.Harness
 	if want := map[string]int{"planner claude-code opus": 1, "reviewer opencode qwen": 2}; !reflect.DeepEqual(h.Refused, want) {
 		t.Errorf("refused = %v, want %v", h.Refused, want)
+	}
+	if want := map[string]int{"reviewer opencode qwen": 1}; !reflect.DeepEqual(h.TurnLimited, want) {
+		t.Errorf("turn limited = %v, want %v", h.TurnLimited, want)
+	}
+	for k, n := range h.TurnLimited {
+		if n > h.Refused[k] {
+			t.Errorf("%s: %d turn limits, above its %d refused outputs", k, n, h.Refused[k])
+		}
 	}
 	if want := map[string]int{"planner claude-code opus": 1, "reviewer opencode qwen": 1}; !reflect.DeepEqual(h.Repaired, want) {
 		t.Errorf("repaired = %v, want %v", h.Repaired, want)
@@ -99,7 +109,7 @@ func TestAnEmptyHarnessHasItsLists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode() = %v", err)
 	}
-	for _, want := range []string{`"refused": {}`, `"repaired": {}`, `"blocked": []`, `"notes": []`, `"questions_left_to_spec": 0`} {
+	for _, want := range []string{`"refused": {}`, `"turn_limited": {}`, `"repaired": {}`, `"blocked": []`, `"notes": []`, `"questions_left_to_spec": 0`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("the record lacks %s:\n%s", want, b)
 		}

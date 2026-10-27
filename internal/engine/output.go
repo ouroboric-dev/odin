@@ -15,6 +15,7 @@ import (
 	"github.com/ouroboric-dev/gungnir/schema"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/mdsafe"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -108,7 +109,7 @@ func sessionWithOutput[T any](ctx context.Context, r *run.Run, sp sessionSpec) (
 		refused.Name = gungnir.EventOutputRefused
 		var section string
 		if tl != nil {
-			refused.Result, refused.Note = turnCapReached(tl.turns), string(gungnir.FailureTurnLimit)
+			refused.Result, refused.Note = turnCapReached(tl.turns), metrics.NoteTurnLimit
 			section = turnLimitSection(sp.output, tl.turns, res.Output)
 		} else {
 			refused.Result, refused.Note = fmt.Sprintf("the output is not a valid %s", sp.output), firstLine(rerr.Error())
