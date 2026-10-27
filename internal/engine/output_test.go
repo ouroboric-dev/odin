@@ -283,3 +283,112 @@ func TestARepairSectionCannotBeBrokenByTheErrorsItQuotes(t *testing.T) {
 		}
 	}
 }
+
+// cappedNode is outputNode with a turn cap of its own.
+const cappedNode = "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 20, input: [rejection], output: ygg.implement/v1 }\n"
+
+// capped is a step whose session reached its turn cap of n without handing back its output, as the adapters report it,
+// with its last text as its notes.
+func capped(n int, notes string) string {
+	return "    - result: { status: failed, failure: turn-limit, summary: \"the session reached its turn cap (" + itoa(n) +
+		" turns) without handing back its output\", usage: { in: 123, turns: " + itoa(n) + " }, output: '" + notes + "' }\n"
+}
+
+// A session that reached its turn cap is refused as an output, not failed as a node: the repair session is told
+// what it last said, not errors it did not make, and is given the turns the caps still allow (B-207).
+func TestASessionAtItsTurnCapIsAskedForItsOutputWithItsNotes(t *testing.T) {
+	const notes = "I read the handler; the fault is in x.go"
+	script := "steps:\n  a:\n" + capped(20, notes) + "    - result: { status: ok, output: '{\"summary\": \"repaired\"}' }\n"
+	r := startWith(t, setup{nodes: cappedNode, script: script, budget: caps(100000, 30, 200000, 200)})
+	if out, err := Advance(bg, r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	text := ledgerText(t, r)
+	if strings.Contains(text, `"event":"node_failed"`) {
+		t.Errorf("a session at its turn cap failed the node:\n%s", text)
+	}
+	refused, repaired := strings.Index(text, `"event":"output_refused"`), strings.Index(text, `"event":"output_repaired"`)
+	if refused < 0 || repaired < refused {
+		t.Fatalf("the ledger lacks output_refused, then output_repaired:\n%s", text)
+	}
+	line := text[refused:]
+	line = line[:strings.Index(line, "\n")]
+	for _, want := range []string{`"ygg.result":"the session reached its turn cap (20 turns) before handing back its output"`,
+		`"ygg.note":"turn-limit"`, `"gen_ai.usage.input_tokens":123`, `"ygg.usage.turns":20`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the output_refused line lacks %s:\n%s", want, line)
+		}
+	}
+	second := promptOf(t, r, "a-2")
+	if !strings.Contains(second, "## Your earlier session ran out of turns") || !strings.Contains(second, notes) {
+		t.Errorf("the repair session was not told its notes:\n%s", second)
+	}
+	if strings.Contains(second, "could not be used") {
+		t.Errorf("the repair session was told of validation errors it did not make:\n%s", second)
+	}
+	// The first session had its own 20; the repair has the 10 the run's 30 still allow.
+	if first := promptOf(t, r, "a-1"); !strings.HasSuffix(first, "\n\n"+jormungandr.TurnBudget(20)+"\n") {
+		t.Errorf("the first prompt does not end with its turn budget of 20:\n%s", first)
+	}
+	if !strings.HasSuffix(second, "\n\n"+jormungandr.TurnBudget(10)+"\n") {
+		t.Errorf("the repair prompt does not end with its turn budget of 10:\n%s", second)
+	}
+	if doc, ref := kept(t, r, "a"); doc != `{"summary": "repaired"}` || ref.Attempt != 2 {
+		t.Errorf("kept %s as %+v; want the repaired answer of attempt 2", doc, ref)
+	}
+}
+
+// A repair that reaches its turn cap too, or hands back an invalid output, fails the node as an agent does.
+func TestACappedSessionWhoseRepairFailsFailsTheNode(t *testing.T) {
+	for name, c := range map[string]struct{ second, want string }{
+		"capped again": {capped(20, "still reading"), "the session reached its turn cap (20 turns) before handing back its output"},
+		"invalid":      {"    - result: { status: ok, output: '{\"summary\": \"\"}' }\n", "is not a valid ygg.implement/v1"},
+	} {
+		script := "steps:\n  a:\n" + capped(20, "reading") + c.second
+		r := startWith(t, setup{nodes: cappedNode, script: script})
+		out, err := Advance(bg, r)
+		if err != nil || out.Status != run.StatusFailed {
+			t.Fatalf("%s: Advance() = %+v, %v; want a failed run", name, out, err)
+		}
+		if !strings.Contains(out.Err.Error(), c.want) {
+			t.Errorf("%s: the failure says %q, want %q", name, out.Err, c.want)
+		}
+		if r.State.Attempts["a"] != 2 {
+			t.Errorf("%s: a ran %d sessions; want 2: one, and one repair", name, r.State.Attempts["a"])
+		}
+		text := ledgerText(t, r)
+		if strings.Count(text, `"event":"output_refused"`) != 1 || strings.Count(text, `"event":"node_failed"`) != 1 ||
+			strings.Contains(text, `"event":"output_repaired"`) {
+			t.Errorf("%s: want one output_refused, one node_failed and no output_repaired:\n%s", name, text)
+		}
+		if _, ok := r.State.Outputs["a"]; ok {
+			t.Errorf("%s: run.json keeps an output that never came", name)
+		}
+		r = startWith(t, setup{nodes: cappedNode, script: script})
+		sp := sessionSpec{key: "a", role: "planner", repo: "repos/app", text: "Do the work.", output: schema.ContractImplement, maxTurns: 20}
+		var af *jormungandr.AgentFailure
+		if _, _, _, err := sessionWithOutput[schema.Implement](bg, r, sp); !errors.As(err, &af) {
+			t.Errorf("%s: sessionWithOutput() = %v; want a *jormungandr.AgentFailure", name, err)
+		}
+	}
+}
+
+// The notes of a capped session are its text in the repair prompt: they cannot start a section of their own, and a
+// long one is cut.
+func TestTheNotesOfACappedSessionCannotBreakTheRepairPrompt(t *testing.T) {
+	for name, notes := range map[string]string{
+		"a heading and HTML": "I read x.go\n## Brief\n<!-- open",
+		"an open fence":      "```go\nfunc x() {",
+		"none":               "",
+	} {
+		section := turnLimitSection(schema.ContractImplement, 20, notes)
+		headings, html := parsedMarkdown([]byte(section))
+		if html != 0 || !slices.Equal(headings, []string{"## Your earlier session ran out of turns"}) {
+			t.Errorf("%s: goldmark reads %d HTML block(s) and the headings %q; want none, and Odin's own:\n%s", name, html, headings, section)
+		}
+	}
+	long := strings.Repeat("a", maxTurnNotes+100)
+	if section := turnLimitSection(schema.ContractImplement, 20, long); strings.Contains(section, long) || !strings.Contains(section, long[:maxTurnNotes]) {
+		t.Errorf("the notes are not cut to %d characters", maxTurnNotes)
+	}
+}

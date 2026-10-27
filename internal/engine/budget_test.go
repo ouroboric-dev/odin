@@ -194,6 +194,17 @@ func TestASessionIsGivenOnlyTheTurnsTheCapsStillAllow(t *testing.T) {
 	if turns["a"] != 10 || turns["b"] != 2 || turns["c"] != 7 {
 		t.Errorf("max turns given = %v, want a:10 b:2 c:7", turns)
 	}
+	// The prompt's turn budget is the cap the session was given, after its answer section; a node with no max_turns
+	// of its own has none, though the caps bound it.
+	for n, want := range map[string]int{"a": 10, "b": 2} {
+		if got := promptOf(t, r, n+"-1"); !strings.HasSuffix(got, "\n\n"+jormungandr.TurnBudget(want)+"\n") ||
+			!strings.Contains(got, "## Your answer\n\n") {
+			t.Errorf("the prompt of %s does not end with its answer and its turn budget of %d:\n%s", n, want, got)
+		}
+	}
+	if got := promptOf(t, r, "c-1"); strings.Contains(got, "turns; each model step is one") {
+		t.Errorf("the prompt of c, which has no max_turns, has a turn budget:\n%s", got)
+	}
 }
 
 func TestTheLedgerWarnsOnceWhenACapIsEightyPercentUsed(t *testing.T) {

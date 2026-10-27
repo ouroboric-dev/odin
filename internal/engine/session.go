@@ -52,11 +52,14 @@ func startSession(r *run.Run, key string) (int, error) {
 // is retried with a backoff, not as a loop attempt. It returns the result of the session that
 // succeeded and the ledger event for it, which the caller completes and logs. Any error is one of
 // jormungandr's: a cap, a used-up quota, retries that ran out, an agent failure, or an infrastructure
-// failure; or an error of Odin's own.
+// failure; or an error of Odin's own. A session with a contract that reached its turn cap without handing
+// back its output is a *turnLimit, an agent failure that is not logged here: it returns the session's result,
+// whose output holds its notes, and its event, and sessionWithOutput logs it.
 func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, gungnir.Event, error) {
 	role := r.Setup.Config.Roles[sp.role]
 	var fatal error // an error of Odin's own, or a cap found at the try, which must never read as a failure of the agent
 	var done gungnir.Event
+	capped := 0 // the turn cap of a try that reached it without handing back its output
 	meter := r.Meter()
 	retrier := jormungandr.Retrier{Backoff: r.Setup.Backoff, Meter: meter, Sleep: r.Setup.Sleep,
 		OnRetry: func(try int, wait time.Duration, why string) error {
@@ -71,6 +74,7 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 				Note: fmt.Sprintf("try %d failed for a reason that is not the agent's; it runs again in %s: %s", try, wait, why)})
 		}}
 	res, err := retrier.Do(ctx, func(ctx context.Context, _ int) (gungnir.Result, error) {
+		capped = 0
 		stop := func(err error) (gungnir.Result, error) {
 			fatal = err
 			return gungnir.Result{}, &gungnir.SessionError{Kind: gungnir.FailureInfra, Err: err}
@@ -110,8 +114,10 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 			// A sandbox that won't start is not a failure of the agent, and is not retried here (spec §12).
 			return stop(sandboxStart(err))
 		}
-		task := gungnir.Task{Role: sp.role, Node: sp.key, Attempt: attempt, Prompt: sp.text, Workdir: workdir,
-			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turnsFor(sp.maxTurns, left), MaxTokens: sp.maxTokens, Timeout: sp.timeout,
+		// The prompt names the turns this try is given, which only the try knows (withTurnBudget).
+		turns := turnsFor(sp.maxTurns, left)
+		task := gungnir.Task{Role: sp.role, Node: sp.key, Attempt: attempt, Prompt: withTurnBudget(sp.text, sp.maxTurns, turns), Workdir: workdir,
+			Model: role.Model, ReadOnly: sp.readOnly, MaxTurns: turns, MaxTokens: sp.maxTokens, Timeout: sp.timeout,
 			TranscriptDir: filepath.Join(r.Dir, "transcripts"), Output: string(sp.output), Sandbox: runner}
 		actx, cancel := ctx, context.CancelFunc(func() {})
 		if task.Timeout > 0 {
@@ -155,6 +161,11 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 			ev.Provider, ev.CLIVersion = res.Provider, res.CLIVersion
 		}
 		kind, _ := jormungandr.Classify(res, runErr)
+		if kind == gungnir.FailureTurnLimit && sp.output != "" {
+			// An output not handed back: sessionWithOutput logs it, as output_refused or as the node failed.
+			done, capped = ev, turns
+			return res, runErr
+		}
 		if kind != "" {
 			ev.Name, ev.Result = gungnir.EventNodeFailed, fmt.Sprintf("the agent reported %s: %s", res.Status, res.Summary)
 			if runErr != nil {
@@ -171,8 +182,21 @@ func session(ctx context.Context, r *run.Run, sp sessionSpec) (gungnir.Result, g
 	if fatal != nil {
 		return gungnir.Result{}, gungnir.Event{}, fatal
 	}
+	var af *jormungandr.AgentFailure
+	if capped > 0 && errors.As(err, &af) {
+		return res, done, &turnLimit{AgentFailure: af, turns: capped}
+	}
 	return res, done, err
 }
+
+// turnLimit is a session with a contract that reached its turn cap, turns, without handing back its output: an
+// agent failure, which sessionWithOutput asks once more for the output of, with the session's notes (B-207).
+type turnLimit struct {
+	*jormungandr.AgentFailure
+	turns int
+}
+
+func (e *turnLimit) Unwrap() error { return e.AgentFailure }
 
 // setAside puts the session's leaf back to its checkpoint, what the session left saved or discarded
 // as DiscardWork says. A read-only session's leaf is compared first: the reset would hide what it

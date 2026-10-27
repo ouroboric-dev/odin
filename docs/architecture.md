@@ -161,7 +161,11 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Reads every agent session's output through one channel (change typed-boundaries): the document the
   session handed to the `submit` tool, or else its whole final answer as exactly one JSON document, decoded
   against the node's contract. An output that does not validate is asked for once more, in a new session told
-  each error; a second one fails the node. Nothing is read out of prose. The output that validated is kept in
+  each error; a second one fails the node. A session that reached its turn cap without handing back its output
+  (`turn-limit`, which the adapters report with its last text as its notes) is refused the same way: its
+  `output_refused` line names the cap and has the note `turn-limit`, and the new session is told, under "Your
+  earlier session ran out of turns", its notes (cut to 16K characters, in a code block they cannot close) in
+  place of errors it did not make; a repair that reaches its cap too fails the node. Nothing is read out of prose. The output that validated is kept in
   `outputs/<node>.json` of the run folder, with its hash in `run.json`, and a later stage reads it from there.
   A run started before this change keeps no outputs, and a resume refuses it.
 - Reads the design-conformance verdict (the `ygg.conformance/v1` output of a scratch reviewer that reviews
@@ -174,7 +178,9 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   `internal/engine/prompt.go`): the role's prompt file and its skills, as they are; for a scratch node, a note on
   its workspace; one section `## Input: <name>` for each input, in the declared order; then how to hand back the
   answer (`jormungandr.AnswerInstructions`, or a reviewer's `ReviewRequest`), through `submit` when the role's
-  adapter has it. The brief passes as it is, but for a code fence it leaves open, which is closed. Every other input is rendered from its typed value (`inputs.go`): an
+  adapter has it. A session of a node with its own `max_turns` is told its turn budget after that
+  (`jormungandr.TurnBudget`), with the cap it is given: its `max_turns`, bounded by the turns the caps still allow
+  (`turnsFor`), which the session adds when it starts, so a repair session is told its own. The brief passes as it is, but for a code fence it leaves open, which is closed. Every other input is rendered from its typed value (`inputs.go`): an
   earlier node's kept output field by field in its schema's order, under `### <field>`, a list of strings as
   bullets and anything nested as a JSON block; the task with its text and its contract whole, the contract in a
   fence no run of backticks in it can close; the change, the open findings and the check results from the loop;
