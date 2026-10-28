@@ -47,6 +47,31 @@ func TestModelsImagePrintsTheTagAlone(t *testing.T) {
 	}
 }
 
+func TestModelsImageTakesTheCUDAArchitectureLikeBuild(t *testing.T) {
+	def := sandbox.ModelsImage() + "\n"
+	for _, arch := range []string{"89", ""} {
+		args := []string{"models", "image"}
+		if arch != "" {
+			args = append(args, "--cuda-arch", arch)
+		}
+		if code, out, _ := ygg(t, args...); code != ExitDone || out != def {
+			t.Errorf("arch %q: exit %d, stdout %q, want %q", arch, code, out, def)
+		}
+	}
+	want, err := sandbox.ModelsImageFor("86")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := ygg(t, "models", "image", "--cuda-arch", "86")
+	if code != ExitDone || out != want+"\n" || out == def {
+		t.Errorf("exit %d, stdout %q, want %q and not the default %q", code, out, want, def)
+	}
+	code, out, errOut := ygg(t, "models", "image", "--cuda-arch", "x;y")
+	if code != ExitRefused || out != "" || !strings.Contains(errOut, "CUDA architecture") {
+		t.Errorf("a bad architecture: exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
 func TestModelsBuildPrintsTheTag(t *testing.T) {
 	log := stubEngine(t)
 	_, config := project(t, "script.yaml", sandboxExtra)

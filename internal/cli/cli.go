@@ -49,7 +49,7 @@ const usage = `usage:
   ygg bridge  --config <factory.yaml> --graph <name|dir> [--work <dir>] [--mode <mode>]   (started by the Harbor adapter)
   ygg deps bump <package> <version> --canary <leaf> [--rollout <leaf>]... [--host] [--project <dir>] [--config <factory.yaml>]
   ygg doctor  [--project <dir>] [--config <factory.yaml>] [--root <dir>]
-  ygg models  preset <models.yaml> | server <models.yaml> [--config <factory.yaml>] | sources <models.yaml> | image | build [--cuda-arch <list>] [--config <factory.yaml>]
+  ygg models  preset <models.yaml> | server <models.yaml> [--config <factory.yaml>] | sources <models.yaml> | image [--cuda-arch <list>] | build [--cuda-arch <list>] [--config <factory.yaml>]
   ygg sandbox build (--realm <name|dir>)... | --all [--config <factory.yaml>]
 exit codes: 0 done, 1 a node failed, 2 refused, 3 stopped at an approval point, 4 paused: the provider's quota is used up,
   5 done, with tasks given up (unattended)

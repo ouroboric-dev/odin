@@ -263,8 +263,9 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   and refuses, with nothing on stdout, a factory with no sandbox section, a path no mount covers, or a mapped path
   that is not plain; `models.Ready` still writes `<state>/allowed` on the host path), `ygg models sources FILE` prints, for each model in sorted name order and each file of its `download` in the list's
   order, the line `<model> <repo> <revision or main> <path>` (a model with no `download` prints nothing; a bad list is
-  refused with nothing on stdout), for the setup script to fetch; `ygg models image`
-  prints the tag of the model server's image without building it, and `ygg models build [--cuda-arch N]` builds the
+  refused with nothing on stdout), for the setup script to fetch; `ygg models image [--cuda-arch N]`
+  prints the tag of the model server's image without building it (the tag `build` with the same value prints: another
+  architecture gives another tag), and `ygg models build [--cuda-arch N]` builds the
   image (`Driver.BuildModels`) and prints the tag. `ygg doctor` checks each local role (`checkModels`): the list
   not holding the model is an error; a server that does not answer at the host URL (it names
   `scripts/ygg-models.sh start`), or a model network that `podman network inspect` does not call internal, is a
