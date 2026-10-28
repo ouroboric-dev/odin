@@ -35,7 +35,8 @@ const (
 // the answer, a document of the session's contract, through the submit tool when the role's adapter has it. extra
 // holds the values only the caller has: the task's change, the open findings and the check results. A declared
 // input with no value is a *nodeFailure, before any session starts. An input over maxInlineInput is written to
-// the session's workspace, and its section names the file.
+// the session's workspace, and its section names the file. The session adds its turn budget after the answer, when
+// it knows the turns it is given (withTurnBudget).
 func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]string) (_ string, err error) {
 	who, role, realm, file, skillNames, output := n.ID, n.Role, n.Realm, n.Prompt, n.Skills, n.Output
 	if rv != nil {
@@ -105,6 +106,18 @@ func promptFor(r *run.Run, n schema.Node, rv *schema.Reviewer, extra map[string]
 		return "", err
 	}
 	return text + "\n\n## Your answer\n\n" + answer + "\n", nil
+}
+
+// withTurnBudget is text, a session's whole prompt, with the line that tells it its turn budget at its end, after
+// its answer section (jormungandr.TurnBudget). turns is the cap the session is given: its node's max_turns, node,
+// bounded by the turns the caps still allow (turnsFor). A node with no max_turns of its own runs to its adapter's
+// limit, and gets no line, even when the caps bound it.
+func withTurnBudget(text string, node, turns int) string {
+	line := jormungandr.TurnBudget(turns)
+	if node <= 0 || line == "" {
+		return text
+	}
+	return strings.TrimRight(text, "\n") + "\n\n" + line + "\n"
 }
 
 // sessionInputs lists the inputs of a session of node n, or of its reviewer rv when rv is set, in order: what it

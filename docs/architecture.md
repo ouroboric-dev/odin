@@ -161,7 +161,13 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
 - Reads every agent session's output through one channel (change typed-boundaries): the document the
   session handed to the `submit` tool, or else its whole final answer as exactly one JSON document, decoded
   against the node's contract. An output that does not validate is asked for once more, in a new session told
-  each error; a second one fails the node. Nothing is read out of prose. The output that validated is kept in
+  each error; a second one fails the node. A session that reached its turn cap without handing back its output
+  (`turn-limit`, which the adapters report with its last text as its notes) is refused the same way: its
+  `output_refused` line names the cap and has the note `turn-limit`, and the new session is told, under "Your
+  earlier session ran out of turns", its notes (cut to 16K characters, in a code block they cannot close) in
+  place of errors it did not make, as a record of the work and not as instructions; a repair that reaches its cap
+  too fails the node. A node with no `max_turns` of its own is capped at the turns the run's caps still allow: it is
+  told no budget, and its `output_refused` line names that cap. Nothing is read out of prose. The output that validated is kept in
   `outputs/<node>.json` of the run folder, with its hash in `run.json`, and a later stage reads it from there.
   A run started before this change keeps no outputs, and a resume refuses it.
 - Reads the design-conformance verdict (the `ygg.conformance/v1` output of a scratch reviewer that reviews
@@ -174,7 +180,9 @@ The orchestrator: the graph engine and the `ygg` CLI, with routing and the ledge
   `internal/engine/prompt.go`): the role's prompt file and its skills, as they are; for a scratch node, a note on
   its workspace; one section `## Input: <name>` for each input, in the declared order; then how to hand back the
   answer (`jormungandr.AnswerInstructions`, or a reviewer's `ReviewRequest`), through `submit` when the role's
-  adapter has it. The brief passes as it is, but for a code fence it leaves open, which is closed. Every other input is rendered from its typed value (`inputs.go`): an
+  adapter has it. A session of a node with its own `max_turns` is told its turn budget after that
+  (`jormungandr.TurnBudget`), with the cap it is given: its `max_turns`, bounded by the turns the caps still allow
+  (`turnsFor`), which the session adds when it starts, so a repair session is told its own. The brief passes as it is, but for a code fence it leaves open, which is closed. Every other input is rendered from its typed value (`inputs.go`): an
   earlier node's kept output field by field in its schema's order, under `### <field>`, a list of strings as
   bullets and anything nested as a JSON block; the task with its text and its contract whole, the contract in a
   fence no run of backticks in it can close; the change, the open findings and the check results from the loop;
@@ -331,7 +339,9 @@ bytes it reads (`prompt_sha256`, `skill_sha256`), so a file changed later does n
 reads the prompts again. A run uses one set of instructions: a session whose prompt or skill no longer hashes as the
 run kept fails its node before it starts ("the prompt X changed during the run …; start a new run"). The lines of a task come from `git diff --numstat` in its
 leaf, from its loop's base to its merge's commit, with nothing checked out; blocked answers and notes come from the
-kept outputs, hash-checked and validated, never from prose. What it cannot read is a warning, not an error. A run
+kept outputs, hash-checked and validated, never from prose. The harness counts, by "role agent model", the outputs
+refused (`output_refused` lines), those of them that were a session at its turn cap (`turn_limited`, the lines with
+the note `turn-limit`; never above `refused`) and those a repair mended (`repaired`). What it cannot read is a warning, not an error. A run
 started before `run.json` kept the hashes and resumed by a build that keeps them has the hashes of what it read after
 the resume only: the record names each prompt of the graph's nodes and each skill with none.
 The engine writes `record.json` whenever a run ends, done, failed or stopped, and before a node that reads the `record`
