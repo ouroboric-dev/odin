@@ -18,6 +18,11 @@ import (
 // maxOutput is the most bytes of a kept output the record reads: the engine's own bound on an output.
 const maxOutput = 1 << 20
 
+// NoteTurnLimit is the note of an output_refused line whose session reached its turn cap before handing back its
+// output (failure kind turn-limit), in place of a first validation error. The engine writes it, and the harness
+// counts it.
+const NoteTurnLimit = string(gungnir.FailureTurnLimit)
+
 // HarnessItem is a blocked reason or a note, and the session that wrote it.
 type HarnessItem struct {
 	Node  string `json:"node"` // the session key: a node's id, or a loop's and its reviewer's
@@ -28,23 +33,25 @@ type HarnessItem struct {
 }
 
 // Harness is where the harness got in a model's way: outputs that broke their contract and went back for repair,
-// the ones a repair mended, every blocked answer and every note, and the design's questions no person answered,
-// which the spec then had to decide.
+// those of them that were a session at its turn cap, the ones a repair mended, every blocked answer and every note,
+// and the design's questions no person answered, which the spec then had to decide.
 type Harness struct {
-	Refused             map[string]int `json:"refused"`  // "role agent model": its outputs that broke their contract
-	Repaired            map[string]int `json:"repaired"` // "role agent model": its refused outputs a repair session mended
+	Refused             map[string]int `json:"refused"`      // "role agent model": its outputs that broke their contract
+	TurnLimited         map[string]int `json:"turn_limited"` // "role agent model": its refused outputs that were a session at its turn cap
+	Repaired            map[string]int `json:"repaired"`     // "role agent model": its refused outputs a repair session mended
 	Blocked             []HarnessItem  `json:"blocked"`
 	Notes               []HarnessItem  `json:"notes"`
 	QuestionsLeftToSpec int            `json:"questions_left_to_spec"`
 }
 
 func newHarness() Harness {
-	return Harness{Refused: map[string]int{}, Repaired: map[string]int{}, Blocked: []HarnessItem{}, Notes: []HarnessItem{}}
+	return Harness{Refused: map[string]int{}, TurnLimited: map[string]int{}, Repaired: map[string]int{}, Blocked: []HarnessItem{}, Notes: []HarnessItem{}}
 }
 
-// harness counts the refused and repaired outputs from the ledger, and reads the blocked answers, the notes and
-// the design's open questions from the outputs Odin kept, never from an agent's prose. A kept output that is not
-// as Odin kept it is left out, with a warning.
+// harness counts the refused and repaired outputs from the ledger, and the refused ones whose note marks a turn
+// limit (NoteTurnLimit) apart too, and reads the blocked answers, the notes and the design's open questions from
+// the outputs Odin kept, never from an agent's prose. A kept output that is not as Odin kept it is left out, with a
+// warning.
 func (r *Run) harness(dir string, state *record, events []gungnir.Event) {
 	h := newHarness()
 	// The session that wrote a kept output is its key's last node_finished line; a key with none (a session the
@@ -55,6 +62,9 @@ func (r *Run) harness(dir string, state *record, events []gungnir.Event) {
 		switch e.Name {
 		case gungnir.EventOutputRefused:
 			h.Refused[key]++
+			if e.Note == NoteTurnLimit {
+				h.TurnLimited[key]++
+			}
 		case gungnir.EventOutputRepaired:
 			h.Repaired[key]++
 		}

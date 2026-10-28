@@ -13,6 +13,7 @@ import (
 	"github.com/ouroboric-dev/gungnir"
 	"github.com/ouroboric-dev/jormungandr"
 	"github.com/ouroboric-dev/odin/internal/budget"
+	"github.com/ouroboric-dev/odin/internal/metrics"
 	"github.com/ouroboric-dev/odin/internal/run"
 )
 
@@ -194,6 +195,17 @@ func TestASessionIsGivenOnlyTheTurnsTheCapsStillAllow(t *testing.T) {
 	if turns["a"] != 10 || turns["b"] != 2 || turns["c"] != 7 {
 		t.Errorf("max turns given = %v, want a:10 b:2 c:7", turns)
 	}
+	// The prompt's turn budget is the cap the session was given, after its answer section; a node with no max_turns
+	// of its own has none, though the caps bound it.
+	for n, want := range map[string]int{"a": 10, "b": 2} {
+		if got := promptOf(t, r, n+"-1"); !strings.HasSuffix(got, "\n\n"+jormungandr.TurnBudget(want)+"\n") ||
+			!strings.Contains(got, "## Your answer\n\n") {
+			t.Errorf("the prompt of %s does not end with its answer and its turn budget of %d:\n%s", n, want, got)
+		}
+	}
+	if got := promptOf(t, r, "c-1"); strings.Contains(got, "turns; each model step is one") {
+		t.Errorf("the prompt of c, which has no max_turns, has a turn budget:\n%s", got)
+	}
 }
 
 func TestTheLedgerWarnsOnceWhenACapIsEightyPercentUsed(t *testing.T) {
@@ -325,5 +337,107 @@ func TestASessionTheCapsLeaveNoTurnsForDoesNotStart(t *testing.T) {
 	}
 	if strings.Contains(ledgerText(t, r), `"event":"node_started"`) {
 		t.Errorf("the ledger says a session started that never did:\n%s", ledgerText(t, r))
+	}
+}
+
+// interrupter runs its agent, and then cancels the run, as an operator's interrupt that lands as the session ends.
+type interrupter struct {
+	gungnir.Agent
+	cancel context.CancelFunc
+}
+
+func (i interrupter) Run(ctx context.Context, t gungnir.Task) (gungnir.Result, error) {
+	res, err := i.Agent.Run(ctx, t)
+	i.cancel()
+	return res, err
+}
+
+// A session that comes back at its turn cap as the run is interrupted is logged as any failed session is: its
+// usage is on its node_failed line, and the ledger adds up to what run.json counts.
+func TestACappedSessionInterruptedAsItEndsIsLogged(t *testing.T) {
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 20, input: [rejection], output: ygg.implement/v1 }\n"
+	script := "steps:\n  a:\n    - result: { status: failed, failure: turn-limit, summary: \"the session reached its turn cap (20 turns) without handing back its output\", " +
+		"usage: { in: 123, out: 4, turns: 20 }, output: 'reading' }\n"
+	r := startWith(t, setup{nodes: nodes, script: script})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.Setup.Agents["planner"] = interrupter{Agent: r.Setup.Agents["planner"], cancel: cancel}
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusFailed {
+		t.Fatalf("Advance() = %+v, %v; want a run failed by the interrupt", out, err)
+	}
+	text := ledgerText(t, r)
+	if n := strings.Count(text, `"event":"node_failed"`); n != 1 || strings.Contains(text, `"event":"output_refused"`) {
+		t.Fatalf("want one node_failed line and no output_refused (%d found):\n%s", n, text)
+	}
+	failed := text[strings.Index(text, `"event":"node_failed"`):]
+	failed = failed[:strings.Index(failed, "\n")]
+	if !strings.Contains(failed, `"gen_ai.usage.input_tokens":123`) || !strings.Contains(failed, `"ygg.usage.turns":20`) {
+		t.Errorf("the node_failed line lacks the session's usage:\n%s", failed)
+	}
+	m, err := metrics.Collect(r.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range m.Warnings {
+		if strings.Contains(w, "add up to") {
+			t.Errorf("the ledger and run.json disagree: %s", w)
+		}
+	}
+}
+
+// A loop's reviewer with max_turns is told its turn budget after its review request, with the turns the caps still
+// allow; the implementer, with no max_turns of its own, is told none.
+func TestALoopReviewerIsToldItsTurnBudgetAfterItsReviewRequest(t *testing.T) {
+	nodes := strings.Replace(typedLoop, "output: ygg.review/v1 }", "output: ygg.review/v1, max_turns: 12 }", 1)
+	script := "steps:\n  build:\n    - actions: [ " + write("build.txt", "done") + " ]\n      result: { status: ok, usage: { turns: 95 }, output: '{\"summary\": \"done\"}' }\n" +
+		"  build-spec:\n    - result: { status: ok, report: [] }\n"
+	r := startWith(t, setup{mode: "unattended", pack: unitCheck, nodes: nodes, script: script})
+	if out, err := Advance(context.Background(), r); err != nil || out.Status != run.StatusDone {
+		t.Fatalf("Advance() = %+v, %v", out, err)
+	}
+	request, err := jormungandr.ReviewRequest("spec", nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 100 turns in the run, 95 spent by the implementer: the reviewer's own 12 are bounded to 5.
+	if got := promptOf(t, r, "build-spec-1"); !strings.HasSuffix(got, strings.TrimRight(request, "\n")+"\n\n"+jormungandr.TurnBudget(5)+"\n") {
+		t.Errorf("the reviewer's prompt does not end with its review request and its turn budget of 5:\n%s", got[max(0, len(got)-1500):])
+	}
+	if got := promptOf(t, r, "build-1"); strings.Contains(got, "turns; each model step is one") {
+		t.Errorf("the implementer, with no max_turns, was told a turn budget:\n%s", got)
+	}
+}
+
+// errCapper reports a turn limit as an error, as gungnir allows (a *gungnir.SessionError of kind turn-limit), and then
+// cancels the run, as an operator's interrupt that lands as the session ends.
+type errCapper struct {
+	gungnir.Agent
+	cancel context.CancelFunc
+}
+
+func (c errCapper) Run(context.Context, gungnir.Task) (gungnir.Result, error) {
+	c.cancel()
+	return gungnir.Result{}, &gungnir.SessionError{Kind: gungnir.FailureTurnLimit, Err: errors.New("the agent stopped at 20 turns"),
+		Usage: gungnir.Usage{InTok: 77, Turns: 20}}
+}
+
+// A capped session reported as an error and interrupted as it ends is logged with that error, not an empty report.
+func TestACappedSessionErrorInterruptedAsItEndsIsLoggedWithItsError(t *testing.T) {
+	nodes := "  - { id: a, kind: agent, role: planner, prompt: p.md, repo: repos/app, max_turns: 20, input: [rejection], output: ygg.implement/v1 }\n"
+	r := startWith(t, setup{nodes: nodes, script: "steps:\n  a:\n    - result: { status: ok, output: '{\"summary\": \"unused\"}' }\n"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.Setup.Agents["planner"] = errCapper{Agent: r.Setup.Agents["planner"], cancel: cancel}
+	if out, err := Advance(ctx, r); err != nil || out.Status != run.StatusFailed {
+		t.Fatalf("Advance() = %+v, %v; want a run failed by the interrupt", out, err)
+	}
+	text := ledgerText(t, r)
+	if n := strings.Count(text, `"event":"node_failed"`); n != 1 {
+		t.Fatalf("want one node_failed line (%d found):\n%s", n, text)
+	}
+	failed := text[strings.Index(text, `"event":"node_failed"`):]
+	failed = failed[:strings.Index(failed, "\n")]
+	if !strings.Contains(failed, `"ygg.result":"the agent stopped at 20 turns"`) || !strings.Contains(failed, `"gen_ai.usage.input_tokens":77`) {
+		t.Errorf("the node_failed line lacks the session's error or its usage:\n%s", failed)
 	}
 }
